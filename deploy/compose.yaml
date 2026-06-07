@@ -1,0 +1,53 @@
+# Runtime stack on the droplet: the Phoenix release + Caddy reverse proxy.
+# Shipped to the droplet at deploy time (story 5.2) alongside Caddyfile + .env.
+#
+# Interpolated values (${...}) come from .env, written over SSH at deploy time:
+#   IMAGE           full image ref incl tag, e.g. registry.../app:<sha> (SHA-pinned)
+#   DOMAIN          public FQDN (matches the DNSimple A record / cert)
+#   DATABASE_URL    ecto:// over the private VPC host (TF sensitive output)
+#   SECRET_KEY_BASE Phoenix secret
+#
+# No secrets live in this file — only references. (locked decision 12)
+
+services:
+  app:
+    image: ${IMAGE}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Endpoint serves only when this gate is set (runtime.exs).
+      PHX_SERVER: "true"
+      # URL host for generated links + the Endpoint :url config.
+      PHX_HOST: ${DOMAIN}
+      PORT: "4000"
+    expose:
+      # Internal only — never published to the host. Caddy reaches it by name.
+      - "4000"
+    networks:
+      - web
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist issued certs + ACME account across restarts/redeploys.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  web:
