@@ -33,3 +33,13 @@ output "domain" {
   description = "Fully-qualified domain the app serves on. Consumed by Caddy/bootstrap."
   value       = local.fqdn
 }
+
+output "region" {
+  description = "Region slug — infra-app pins the droplet to the same region as the reserved IP."
+  value       = var.region
+}
+
+output "project_name" {
+  description = "Project name — infra-app derives the droplet name from it."
+  value       = var.project_name
+}

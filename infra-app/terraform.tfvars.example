@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+do_token     = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ssh_key_name = "my-deploy-key" # name of an SSH key already in the DO account
+
+# Optional overrides:
+# droplet_size          = "s-1vcpu-1gb"
+# droplet_image         = "ubuntu-24-04-x64"
+# persistent_state_path = "../infra-persistent/terraform.tfstate"

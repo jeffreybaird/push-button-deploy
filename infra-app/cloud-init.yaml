@@ -1,0 +1,8 @@
+#cloud-config
+# Installs Docker Engine + the compose plugin ONLY. No secrets, no registry
+# login, no app env — those arrive over SSH at deploy time (locked decision).
+package_update: true
+package_upgrade: false
+runcmd:
+  - [sh, -c, "curl -fsSL https://get.docker.com | sh"]
+  - [systemctl, enable, --now, docker]
