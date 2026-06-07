@@ -26,3 +26,8 @@ variable "droplet_image" {
   type        = string
   default     = "ubuntu-24-04-x64"
 }
+
+variable "ssh_cidrs" {
+  description = "CIDR blocks allowed to reach SSH (port 22). Restrict to your own IP/range."
+  type        = list(string)
+}
