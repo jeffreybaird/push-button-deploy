@@ -7,3 +7,24 @@ output "vpc_id" {
   description = "VPC ID consumed by infra-app via terraform_remote_state."
   value       = digitalocean_vpc.this.id
 }
+
+# ecto:// URL over the PRIVATE host (VPC-internal). Password is urlencoded since
+# DO-generated passwords may contain URL-reserved characters.
+output "database_url" {
+  description = "Ecto connection URL for the app DB over the private VPC host."
+  value = format(
+    "ecto://%s:%s@%s:%d/%s",
+    digitalocean_database_user.app.name,
+    urlencode(digitalocean_database_user.app.password),
+    digitalocean_database_cluster.pg.private_host,
+    digitalocean_database_cluster.pg.port,
+    digitalocean_database_db.app.name,
+  )
+  sensitive = true
+}
+
+# The tag string infra-app must apply to the droplet so the DB firewall trusts it.
+output "db_trusted_tag" {
+  description = "Tag the droplet must wear to pass the managed-Postgres firewall."
+  value       = digitalocean_tag.app.name
+}

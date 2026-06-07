@@ -20,3 +20,15 @@ variable "vpc_ip_range" {
   type        = string
   default     = "10.10.10.0/24"
 }
+
+variable "pg_version" {
+  description = "Managed PostgreSQL major version."
+  type        = string
+  default     = "17"
+}
+
+variable "db_size" {
+  description = "Managed Postgres node size slug."
+  type        = string
+  default     = "db-s-1vcpu-1gb"
+}
