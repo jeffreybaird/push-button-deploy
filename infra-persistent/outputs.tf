@@ -28,3 +28,8 @@ output "db_trusted_tag" {
   description = "Tag the droplet must wear to pass the managed-Postgres firewall."
   value       = digitalocean_tag.app.name
 }
+
+output "domain" {
+  description = "Fully-qualified domain the app serves on. Consumed by Caddy/bootstrap."
+  value       = local.fqdn
+}

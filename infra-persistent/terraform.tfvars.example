@@ -3,3 +3,10 @@ do_token     = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 project_name = "myapp"
 region       = "nyc3"
 vpc_ip_range = "10.10.10.0/24"
+
+# DNS (DNSimple)
+dnsimple_token   = "dnsimple_xxxxxxxxxxxxxxxxxxxxxxxx"
+dnsimple_account = "123456"
+dns_zone         = "example.com"
+dns_record       = "app" # -> app.example.com ; use "@" for the apex
+dns_ttl          = 300
