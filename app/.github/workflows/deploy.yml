@@ -64,3 +64,49 @@ jobs:
             ${{ steps.meta.outputs.image }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Deliver the new image to the droplet and restart the stack. Runs only after
+  # build succeeds. (The migration gate before `up` is added in story 5.3.)
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ needs.build.outputs.image }}:${{ github.sha }}
+      HOST: ${{ vars.DROPLET_HOST }}
+      DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # .env carries the SHA-pinned image + runtime secrets. Built on the runner,
+      # shipped to the droplet, never committed. (locked decision: secrets arrive
+      # over SSH at deploy time, never in cloud-init/metadata.)
+      - name: Write .env
+        run: |
+          umask 077
+          cat > .env <<EOF
+          IMAGE=${IMAGE}
+          DOMAIN=${{ vars.DOMAIN }}
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
+          EOF
+
+      - name: Copy compose, Caddyfile, .env to droplet
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/compose.yaml deploy/Caddyfile .env \
+            root@"$HOST":/root/
+
+      - name: Registry login + pull + restart
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
+             && cd /root \
+             && docker compose pull \
+             && docker compose up -d"
