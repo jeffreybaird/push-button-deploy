@@ -1,0 +1,66 @@
+# Push-to-main deploy pipeline. Copied into the app repo by the bootstrap.
+# 5.1 build+push here; the deliver/migrate/restart job (5.2/5.3) is appended next.
+#
+# Runs on GitHub's native amd64 runners — no QEMU, unlike a local Apple-Silicon
+# cross-build.
+#
+# Required repo config (seeded by bootstrap, story 6.2):
+#   secret DIGITALOCEAN_ACCESS_TOKEN  - DO API token (registry + droplet)
+#   var    DOCR_REGISTRY              - DO Container Registry name
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time; never overlap. Queue rather than cancel so an in-flight
+# deploy (migrations!) is never interrupted.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.digitalocean.com
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # native amd64
+    outputs:
+      app_name: ${{ steps.meta.outputs.app_name }}
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # App-name-agnostic: parse the OTP app from mix.exs (no hardcoded name).
+      - name: Parse app name from mix.exs
+        id: meta
+        run: |
+          app_name=$(grep -Eo 'app:[[:space:]]*:[a-z][a-z0-9_]*' mix.exs | head -1 | sed -E 's/.*:([a-z0-9_]+)$/\1/')
+          if [ -z "$app_name" ]; then echo "::error::could not parse app name from mix.exs"; exit 1; fi
+          echo "app_name=$app_name" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${{ vars.DOCR_REGISTRY }}/${app_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DO Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            APP_NAME=${{ steps.meta.outputs.app_name }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
