@@ -7,6 +7,9 @@
 #
 # Runs `terraform plan -destroy` in the app module and fails if the plan would
 # destroy anything outside the allowlist. Requires DO creds + applied state.
+# Since story 7.4 state lives in Spaces: the module must be init'd against the
+# bucket (bootstrap does this) and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY must
+# carry the Spaces keypair.
 #
 # Usage: scripts/verify-isolation.sh [infra-app-dir]
 #

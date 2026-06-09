@@ -6,4 +6,3 @@ ssh_cidrs    = ["203.0.113.4/32"]   # your IP/range allowed to SSH (port 22)
 # Optional overrides:
 # droplet_size          = "s-1vcpu-1gb"
 # droplet_image         = "ubuntu-24-04-x64"
-# persistent_state_path = "../infra-persistent/terraform.tfstate"

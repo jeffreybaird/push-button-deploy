@@ -6,3 +6,6 @@ crash.log
 *.tfvars
 !*.tfvars.example
 .env
+
+# Backend pointer written by bootstrap (bucket name + endpoint)
+backend.hcl

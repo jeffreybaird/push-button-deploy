@@ -11,6 +11,8 @@
 #   DNS_RECORD     subdomain in DNS_ZONE. Default: the app name.
 #   SSH_CIDRS      JSON list for SSH allow, e.g. ["1.2.3.4/32"]. Default: auto-detected public IP /32.
 #   DOCR_REGISTRY  name for a new DO registry if none exists. Default: PROJECT_NAME.
+#   STATE_BUCKET   Spaces bucket for Terraform state. Default: <PROJECT_NAME>-tfstate.
+#   SPACES_REGION  region for the state bucket (must offer Spaces). Default: REGION.
 #
 # Idempotent: safe to re-run after fixing a gap — every step guards re-entry.
 #
@@ -21,6 +23,8 @@
 #   DNS_ZONE                   apex zone, e.g. lennonbaird.com
 #   SSH_KEY_NAME               name of an SSH key already uploaded to DO
 #   SSH_PRIVATE_KEY            path to the matching private key (becomes a gh secret)
+#   SPACES_ACCESS_KEY_ID       Spaces access key (Terraform state bucket, story 7.4)
+#   SPACES_SECRET_ACCESS_KEY   Spaces secret key
 #
 # Portable: BSD/macOS bash, grep, sed.
 set -euo pipefail
@@ -33,9 +37,10 @@ log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PERS_DIR="$SCRIPT_DIR/infra-persistent"
 APP_TF_DIR="$SCRIPT_DIR/infra-app"
+STATE_TF_DIR="$SCRIPT_DIR/infra-state"
 
 REQUIRED_BINS="git terraform doctl gh mix curl ssh scp dig"
-REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY"
+REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
 
 # ---- story 6.1: preflight ----------------------------------------------------
 # Checks run in order and fail fast, naming the FIRST gap (AC 6.1).
@@ -50,7 +55,7 @@ preflight() {
   # files silently OVERRIDE (terraform precedence: tfvars > env). A leftover
   # tfvars file means stale tokens/CIDRs/names win — fail loudly instead.
   local dir f
-  for dir in "$PERS_DIR" "$APP_TF_DIR"; do
+  for dir in "$PERS_DIR" "$APP_TF_DIR" "$STATE_TF_DIR"; do
     for f in "$dir"/terraform.tfvars "$dir"/terraform.tfvars.json "$dir"/*.auto.tfvars "$dir"/*.auto.tfvars.json; do
       [ -e "$f" ] && fail "$f would override bootstrap's variables (terraform precedence: tfvars beats TF_VAR_ env). Move it aside: mv '$f' '$f.bak'"
     done
@@ -92,6 +97,38 @@ parse_meta() {
   log "app: $APP_NAME ($APP_MODULE) | project: $PROJECT_NAME | region: $REGION"
 }
 
+# Ensure the Spaces state bucket exists (story 7.4). This tiny root keeps
+# LOCAL state on purpose — the bucket can't store the state that creates it.
+ensure_state_bucket() {
+  # The s3 backend + remote_state reads authenticate with the AWS env names.
+  export AWS_ACCESS_KEY_ID="$SPACES_ACCESS_KEY_ID"
+  export AWS_SECRET_ACCESS_KEY="$SPACES_SECRET_ACCESS_KEY"
+
+  STATE_REGION="${SPACES_REGION:-$REGION}"
+  STATE_BUCKET="${STATE_BUCKET:-${PROJECT_NAME}-tfstate}"
+  STATE_ENDPOINT="https://${STATE_REGION}.digitaloceanspaces.com"
+
+  export TF_VAR_do_token="$DIGITALOCEAN_ACCESS_TOKEN"
+  export TF_VAR_spaces_access_id="$SPACES_ACCESS_KEY_ID"
+  export TF_VAR_spaces_secret_key="$SPACES_SECRET_ACCESS_KEY"
+  export TF_VAR_bucket_name="$STATE_BUCKET"
+  export TF_VAR_region="$STATE_REGION"
+
+  log "terraform: infra-state (Spaces bucket '$STATE_BUCKET' in $STATE_REGION)"
+  terraform -chdir="$STATE_TF_DIR" init -input=false >/dev/null
+  terraform -chdir="$STATE_TF_DIR" apply -auto-approve -input=false
+}
+
+# Point a root at the Spaces backend and init. -force-copy migrates any
+# existing local state into the bucket on first contact (idempotent after).
+backend_init() {
+  cat > "$1/backend.hcl" <<EOF
+bucket    = "$STATE_BUCKET"
+endpoints = { s3 = "$STATE_ENDPOINT" }
+EOF
+  terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl >/dev/null
+}
+
 # Provision persistent infra. Guards project_name immutability against TF state.
 tf_persistent() {
   export TF_VAR_do_token="$DIGITALOCEAN_ACCESS_TOKEN"
@@ -103,7 +140,7 @@ tf_persistent() {
   export TF_VAR_dns_record="$DNS_RECORD"
 
   log "terraform: infra-persistent"
-  terraform -chdir="$PERS_DIR" init -input=false >/dev/null
+  backend_init "$PERS_DIR"
 
   # project_name is immutable: renaming forces DB-cluster replacement (blocked by
   # prevent_destroy). Compare against state and fail loud before applying.
@@ -147,9 +184,11 @@ tf_app() {
   export TF_VAR_do_token="$DIGITALOCEAN_ACCESS_TOKEN"
   export TF_VAR_ssh_key_name="$SSH_KEY_NAME"
   export TF_VAR_ssh_cidrs="$SSH_CIDRS_JSON"
+  export TF_VAR_state_bucket="$STATE_BUCKET"
+  export TF_VAR_state_endpoint="$STATE_ENDPOINT"
 
   log "terraform: infra-app"
-  terraform -chdir="$APP_TF_DIR" init -input=false >/dev/null
+  backend_init "$APP_TF_DIR"
   terraform -chdir="$APP_TF_DIR" apply -auto-approve -input=false
   APP_IP="$(terraform -chdir="$APP_TF_DIR" output -raw app_ip)"
   FW_ID="$(terraform -chdir="$APP_TF_DIR" output -raw firewall_id)"
@@ -298,6 +337,7 @@ confirm_live() {
 provision() {
   preflight
   parse_meta
+  ensure_state_bucket
   tf_persistent
   ensure_registry
   detect_cidr

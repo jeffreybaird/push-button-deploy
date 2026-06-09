@@ -4,10 +4,14 @@ variable "do_token" {
   sensitive   = true
 }
 
-variable "persistent_state_path" {
-  description = "Path to the infra-persistent local state file (read-only)."
+variable "state_bucket" {
+  description = "Spaces bucket holding both roots' Terraform state."
   type        = string
-  default     = "../infra-persistent/terraform.tfstate"
+}
+
+variable "state_endpoint" {
+  description = "S3-compatible Spaces endpoint, e.g. https://nyc3.digitaloceanspaces.com."
+  type        = string
 }
 
 variable "ssh_key_name" {

@@ -1,10 +1,24 @@
 # App infrastructure: the disposable droplet. Reads persistent outputs read-only.
 # Destroying this module must never touch the DB or reserved IP (story 2.3).
 
+# Reads infra-persistent's state from the shared Spaces bucket. Credentials
+# come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (the Spaces keypair),
+# exported by the bootstrap.
 data "terraform_remote_state" "persistent" {
-  backend = "local"
+  backend = "s3"
   config = {
-    path = var.persistent_state_path
+    bucket = var.state_bucket
+    key    = "infra-persistent/terraform.tfstate"
+    region = "us-east-1" # required, ignored by Spaces
+    endpoints = {
+      s3 = var.state_endpoint
+    }
+
+    skip_credentials_validation = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
+    skip_s3_checksum            = true
   }
 }
 
