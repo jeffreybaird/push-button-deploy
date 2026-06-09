@@ -120,10 +120,10 @@ jobs:
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           EOF
 
-      - name: Copy compose, Caddyfile, .env to droplet
+      - name: Copy compose, Caddyfile, swap.sh, .env to droplet
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/Caddyfile .env \
+            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh .env \
             root@"$HOST":/root/
 
       - name: Registry login + pull new image
@@ -133,18 +133,21 @@ jobs:
              && cd /root && docker compose pull"
 
       # Migration gate: runs the new image as a one-off BEFORE serving traffic.
-      # A non-zero exit fails this step -> the job fails -> 'Start new container'
-      # is skipped -> the previously-running container keeps serving. A bad
-      # migration can never serve a half-updated DB.
+      # A non-zero exit fails this step -> the job fails -> the swap is skipped
+      # -> the previously-running color keeps serving. A bad migration can
+      # never serve a half-updated DB.
       - name: Run migrations (gate before traffic)
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "cd /root && docker compose run --rm app bin/${{ needs.build.outputs.app_name }} eval '${{ needs.build.outputs.module }}.Release.migrate()'"
+            "cd /root && docker compose run --rm migrate bin/${{ needs.build.outputs.app_name }} eval '${{ needs.build.outputs.module }}.Release.migrate()'"
 
-      - name: Start new container
+      # Health-checked blue/green swap (story 7.2): start the idle color from
+      # the new image, wait for its healthcheck, only then stop the old color.
+      # Caddy holds requests through the window — no downtime.
+      - name: Swap to new release
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "cd /root && docker compose up -d"
+            "bash /root/swap.sh"
 
       # Close the hole no matter how the deploy ended.
       - name: Revoke runner IP

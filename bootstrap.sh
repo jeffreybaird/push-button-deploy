@@ -186,7 +186,7 @@ prep_app() {
   mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
   cp "$SCRIPT_DIR/app/.github/workflows/deploy.yml"   "$APP_DIR/.github/workflows/deploy.yml"
   cp "$SCRIPT_DIR/app/.github/workflows/rollback.yml" "$APP_DIR/.github/workflows/rollback.yml"
-  cp "$SCRIPT_DIR/deploy/compose.yaml" "$SCRIPT_DIR/deploy/Caddyfile" "$APP_DIR/deploy/"
+  cp "$SCRIPT_DIR/deploy/compose.yaml" "$SCRIPT_DIR/deploy/Caddyfile" "$SCRIPT_DIR/deploy/swap.sh" "$APP_DIR/deploy/"
   "$SCRIPT_DIR/scripts/ensure-db-tls.sh" "$APP_DIR"
   "$SCRIPT_DIR/scripts/ensure-release-task.sh" "$APP_DIR"
 }

@@ -1,5 +1,10 @@
-# Runtime stack on the droplet: the Phoenix release + Caddy reverse proxy.
+# Runtime stack on the droplet: blue/green Phoenix release pair + Caddy.
 # Shipped to the droplet at deploy time (story 5.2) alongside Caddyfile + .env.
+#
+# Zero-downtime swap (story 7.2): exactly one of app_blue/app_green serves at a
+# time. A deploy starts the idle color from the new image, waits for its
+# healthcheck (docker compose up --wait), then stops the old color — swap.sh
+# orchestrates. Caddy lists both names and fails over to whichever answers.
 #
 # Interpolated values (${...}) come from .env, written over SSH at deploy time:
 #   IMAGE           full image ref incl tag, e.g. registry.../app:<sha> (SHA-pinned)
@@ -9,23 +14,42 @@
 #
 # No secrets live in this file — only references. (locked decision 12)
 
+# Shared definition for both colors (and the one-off migrate runner).
+x-app: &app
+  image: ${IMAGE}
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    # Endpoint serves only when this gate is set (runtime.exs).
+    PHX_SERVER: "true"
+    # URL host for generated links + the Endpoint :url config.
+    PHX_HOST: ${DOMAIN}
+    PORT: "4000"
+  expose:
+    # Internal only — never published to the host. Caddy reaches it by name.
+    - "4000"
+  networks:
+    - web
+  healthcheck:
+    # Alive = the endpoint answers HTTP at all (any status — apps may redirect /).
+    # bash + /dev/tcp because the slim runtime image has no curl/wget.
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4000 && printf 'HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && grep -q 'HTTP/' <&3"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 10s
+
 services:
-  app:
-    image: ${IMAGE}
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Endpoint serves only when this gate is set (runtime.exs).
-      PHX_SERVER: "true"
-      # URL host for generated links + the Endpoint :url config.
-      PHX_HOST: ${DOMAIN}
-      PORT: "4000"
-    expose:
-      # Internal only — never published to the host. Caddy reaches it by name.
-      - "4000"
-    networks:
-      - web
+  app_blue: *app
+  app_green: *app
+
+  # One-off migration runner (profile keeps it out of `up -d`):
+  #   docker compose run --rm migrate bin/<app> eval '<Module>.Release.migrate()'
+  migrate:
+    <<: *app
+    restart: "no"
+    profiles: ["tools"]
 
   caddy:
     image: caddy:2.11.4-alpine
@@ -40,8 +64,6 @@ services:
       # Persist issued certs + ACME account across restarts/redeploys.
       - caddy_data:/data
       - caddy_config:/config
-    depends_on:
-      - app
     networks:
       - web
 

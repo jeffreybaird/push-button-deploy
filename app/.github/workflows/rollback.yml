@@ -92,19 +92,21 @@ jobs:
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           EOF
 
-      - name: Copy compose, Caddyfile, .env to droplet
+      - name: Copy compose, Caddyfile, swap.sh, .env to droplet
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/Caddyfile .env \
+            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh .env \
             root@"$HOST":/root/
 
       # No migration step: the pinned image is older than (or equal to) the
       # schema, so Ecto.Migrator would find nothing pending anyway.
-      - name: Pull pinned image and restart
+      # Same health-checked blue/green swap as deploy (story 7.2) — a rollback
+      # to a broken image fails the swap and leaves the current color serving.
+      - name: Pull pinned image and swap
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
             "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
-             && cd /root && docker compose pull && docker compose up -d"
+             && cd /root && docker compose pull && bash /root/swap.sh"
 
       - name: Revoke runner IP
         if: always() && env.RUNNER_IP != ''

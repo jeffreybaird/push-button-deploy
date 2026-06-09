@@ -6,6 +6,14 @@
 # the DNSimple A record (story 1.3) resolves to this droplet's IP and ports
 # 80/443 are reachable (firewall story 2.2). Certs persist in the caddy_data
 # volume.
+# Both blue/green colors are listed; only one runs at a time (story 7.2).
+# A dial to the stopped color's name fails instantly, fail_duration marks it
+# down, and lb_try_* retries the live one — so requests are held through the
+# swap window instead of dropped.
 {$DOMAIN} {
-	reverse_proxy app:4000
+	reverse_proxy app_blue:4000 app_green:4000 {
+		lb_try_duration 30s
+		lb_try_interval 250ms
+		fail_duration 10s
+	}
 }
