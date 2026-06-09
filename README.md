@@ -78,7 +78,14 @@ Docker is **not** required locally — images build in CI.
 
 ### Environment variables
 
-Required:
+The easiest way: copy `.env.example` to `.env` next to `bootstrap.sh` and fill it in. The script sources it automatically (values in the file override the calling shell). It's gitignored; still, `chmod 600 .env`.
+
+```bash
+cp .env.example .env && chmod 600 .env
+$EDITOR .env
+```
+
+Equivalently, export them in your shell. Required either way:
 
 ```bash
 export DIGITALOCEAN_ACCESS_TOKEN="dop_v1_..."   # DO API token

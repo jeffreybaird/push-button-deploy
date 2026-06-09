@@ -19,7 +19,9 @@
 #
 # Idempotent: safe to re-run after fixing a gap — every step guards re-entry.
 #
-# Required environment (the deploy's single source of truth):
+# Required environment (the deploy's single source of truth) — export in the
+# shell OR put in a gitignored .env beside this script (auto-sourced, see
+# .env.example):
 #   DIGITALOCEAN_ACCESS_TOKEN   DO API token (terraform, doctl, DOCR, gh secret)
 #   DNSIMPLE_TOKEN              DNSimple API token (terraform)
 #   DNSIMPLE_ACCOUNT           DNSimple account id (terraform)
@@ -38,6 +40,17 @@ have() { command -v "$1" >/dev/null 2>&1; }
 log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Local config: a gitignored .env beside this script (see .env.example).
+# Shell-sourced, so $HOME etc. expand; `set -a` exports plain KEY=value lines
+# (an `export ` prefix also works). File values override the calling shell's.
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/.env"
+  set +a
+fi
+
 PERS_DIR="$SCRIPT_DIR/infra-persistent"
 APP_TF_DIR="$SCRIPT_DIR/infra-app"
 STATE_TF_DIR="$SCRIPT_DIR/infra-state"
