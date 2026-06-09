@@ -8,6 +8,11 @@ output "app_ip" {
   value       = local.reserved_ip
 }
 
+output "firewall_id" {
+  description = "Droplet firewall ID — CI punches a temporary port-22 hole in it per deploy."
+  value       = digitalocean_firewall.app.id
+}
+
 output "trusted_tag" {
   description = "Tag the droplet wears — must equal the DB firewall's trusted tag."
   value       = data.digitalocean_tag.app.name

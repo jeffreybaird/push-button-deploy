@@ -65,6 +65,15 @@ jobs:
             exit 1
           fi
 
+      # Same temporary SSH hole-punch as deploy.yml — port 22 stays closed to
+      # the world; revoked in the always() step at the end.
+      - name: Authorize runner IP for SSH
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          echo "RUNNER_IP=$runner_ip" >> "$GITHUB_ENV"
+          doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -96,3 +105,9 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
             "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
              && cd /root && docker compose pull && docker compose up -d"
+
+      - name: Revoke runner IP
+        if: always() && env.RUNNER_IP != ''
+        run: |
+          doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${RUNNER_IP}/32"

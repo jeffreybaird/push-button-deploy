@@ -46,9 +46,15 @@ preflight() {
     have "$b" || fail "missing binary: $b"
   done
 
-  # phx_new archive (needed to generate the app in 6.2).
-  mix phx.new --version >/dev/null 2>&1 \
-    || fail "phx_new archive missing — run: mix archive.install hex phx_new"
+  # Bootstrap injects ALL terraform variables via TF_VAR_ env, which tfvars
+  # files silently OVERRIDE (terraform precedence: tfvars > env). A leftover
+  # tfvars file means stale tokens/CIDRs/names win — fail loudly instead.
+  local dir f
+  for dir in "$PERS_DIR" "$APP_TF_DIR"; do
+    for f in "$dir"/terraform.tfvars "$dir"/terraform.tfvars.json "$dir"/*.auto.tfvars "$dir"/*.auto.tfvars.json; do
+      [ -e "$f" ] && fail "$f would override bootstrap's variables (terraform precedence: tfvars beats TF_VAR_ env). Move it aside: mv '$f' '$f.bak'"
+    done
+  done
 
   for v in $REQUIRED_ENV; do
     eval "val=\${$v:-}"
@@ -145,11 +151,16 @@ tf_app() {
   terraform -chdir="$APP_TF_DIR" init -input=false >/dev/null
   terraform -chdir="$APP_TF_DIR" apply -auto-approve -input=false
   APP_IP="$(terraform -chdir="$APP_TF_DIR" output -raw app_ip)"
+  FW_ID="$(terraform -chdir="$APP_TF_DIR" output -raw firewall_id)"
 }
 
 # Block until cloud-init has installed Docker (the "docker: command not found" gap).
 wait_droplet_ready() {
   log "waiting for droplet Docker readiness ($APP_IP)..."
+  # The reserved IP survives droplet recreation but the host key doesn't;
+  # accept-new won't replace a changed key. Post-apply, the new key is the
+  # ground truth — drop any stale entry so the poll below can pin it.
+  ssh-keygen -R "$APP_IP" >/dev/null 2>&1 || true
   local i
   for i in $(seq 1 30); do
     if ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
@@ -204,6 +215,7 @@ seed_github() {
     gh variable set DOCR_REGISTRY -b "$REG"
     gh variable set DOMAIN        -b "$DOMAIN"
     gh variable set DROPLET_HOST  -b "$APP_IP"
+    gh variable set FIREWALL_ID   -b "$FW_ID"
   )
 }
 
