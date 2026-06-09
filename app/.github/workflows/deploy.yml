@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest # native amd64
     outputs:
       app_name: ${{ steps.meta.outputs.app_name }}
+      module: ${{ steps.meta.outputs.module }}
       image: ${{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v6
@@ -37,7 +38,12 @@ jobs:
         run: |
           app_name=$(grep -Eo 'app:[[:space:]]*:[a-z][a-z0-9_]*' mix.exs | head -1 | sed -E 's/.*:([a-z0-9_]+)$/\1/')
           if [ -z "$app_name" ]; then echo "::error::could not parse app name from mix.exs"; exit 1; fi
+          # Base module from defmodule X.MixProject — same source as app-meta.sh /
+          # release.ex, so the migrate eval target always matches the real module.
+          module=$(grep -Eo 'defmodule[[:space:]]+[A-Za-z0-9_.]+\.MixProject' mix.exs | head -1 | sed -E 's/defmodule[[:space:]]+([A-Za-z0-9_.]+)\.MixProject/\1/')
+          if [ -z "$module" ]; then echo "::error::could not parse base module from mix.exs"; exit 1; fi
           echo "app_name=$app_name" >> "$GITHUB_OUTPUT"
+          echo "module=$module" >> "$GITHUB_OUTPUT"
           echo "image=${REGISTRY}/${{ vars.DOCR_REGISTRY }}/${app_name}" >> "$GITHUB_OUTPUT"
 
       - name: Install doctl
@@ -103,10 +109,22 @@ jobs:
             deploy/compose.yaml deploy/Caddyfile .env \
             root@"$HOST":/root/
 
-      - name: Registry login + pull + restart
+      - name: Registry login + pull new image
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
             "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
-             && cd /root \
-             && docker compose pull \
-             && docker compose up -d"
+             && cd /root && docker compose pull"
+
+      # Migration gate: runs the new image as a one-off BEFORE serving traffic.
+      # A non-zero exit fails this step -> the job fails -> 'Start new container'
+      # is skipped -> the previously-running container keeps serving. A bad
+      # migration can never serve a half-updated DB.
+      - name: Run migrations (gate before traffic)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "cd /root && docker compose run --rm app bin/${{ needs.build.outputs.app_name }} eval '${{ needs.build.outputs.module }}.Release.migrate()'"
+
+      - name: Start new container
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "cd /root && docker compose up -d"
