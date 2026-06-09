@@ -19,7 +19,8 @@ If `~/src/myapp` doesn't exist (or is empty), a new Phoenix app is generated the
 | Database | DigitalOcean Managed Postgres, private-VPC only, TLS **verified** against the cluster CA (`verify_peer`) |
 | DNS | A record at DNSimple pointing at a reserved IP that survives droplet recreation |
 | Images | Built on GitHub's amd64 runners, pushed to DO Container Registry, SHA-pinned |
-| Deploys | Every push to `main`: build → migrate (gated) → health-checked blue/green swap (zero downtime) |
+| Deploys | Every push to `main`: test (gate) → build → migrate (gated) → health-checked blue/green swap (zero downtime) |
+| Tests | `mix test` against a Postgres 17 service container; red tests block the build and deploy |
 | Rollback | `gh workflow run rollback.yml -f tag=<previous sha>` — pins a prior image, no rebuild |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
 | Terraform state | Versioned DO Spaces bucket (S3-compatible backend) |
@@ -124,7 +125,7 @@ The app name is the directory basename (must be a valid Elixir app name: `lower_
 7. **Wait** until the droplet answers `docker --version` over SSH.
 8. **Prepare the app** — deps, `phx.gen.release`, release migration task, *verified* DB TLS config, Dockerfile, compose stack, deploy + rollback workflows.
 9. **GitHub** — create a private repo if needed; seed secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`).
-10. **Commit + push** — which triggers the first deploy through the exact pipeline every later push uses.
+10. **Commit + push** — which triggers the first deploy through the exact pipeline every later push uses: tests (Postgres service container) → image build → migration gate → blue/green swap.
 11. **Poll `https://<domain>`** until live. On failure it prints ordered diagnostics (Actions status, `dig`, Caddy logs) and tells you whether the deploy *failed* or just *isn't ready yet*.
 
 The script is **idempotent**: fix whatever it complained about and re-run; every step detects work already done. (One side effect of re-running: `SECRET_KEY_BASE` is regenerated, which invalidates existing user sessions.)

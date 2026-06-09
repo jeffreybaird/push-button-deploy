@@ -1,5 +1,5 @@
 # Push-to-main deploy pipeline. Copied into the app repo by the bootstrap.
-# 5.1 build+push here; the deliver/migrate/restart job (5.2/5.3) is appended next.
+# Jobs: test (gate) -> build+push -> deliver/migrate/swap.
 #
 # Runs on GitHub's native amd64 runners — no QEMU, unlike a local Apple-Silicon
 # cross-build.
@@ -24,7 +24,63 @@ env:
   REGISTRY: registry.digitalocean.com
 
 jobs:
+  # Red tests block the deploy entirely: build needs this job.
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # Single source of truth for toolchain pins: the Dockerfile's ARGs. The
+      # OTP_VERSION there is the full Erlang version (hexpm image scheme),
+      # which setup-beam accepts directly.
+      - name: Parse Elixir/OTP pins from Dockerfile
+        id: vers
+        run: |
+          elixir=$(grep -E '^ARG ELIXIR_VERSION=' Dockerfile | head -1 | cut -d= -f2)
+          otp=$(grep -E '^ARG OTP_VERSION=' Dockerfile | head -1 | cut -d= -f2)
+          if [ -z "$elixir" ] || [ -z "$otp" ]; then
+            echo "::error::could not parse ELIXIR_VERSION/OTP_VERSION ARGs from Dockerfile"; exit 1
+          fi
+          echo "elixir=$elixir" >> "$GITHUB_OUTPUT"
+          echo "otp=$otp" >> "$GITHUB_OUTPUT"
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ steps.vers.outputs.elixir }}
+          otp-version: ${{ steps.vers.outputs.otp }}
+
+      - name: Cache deps and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-${{ runner.os }}-${{ steps.vers.outputs.elixir }}-${{ steps.vers.outputs.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-test-${{ runner.os }}-${{ steps.vers.outputs.elixir }}-${{ steps.vers.outputs.otp }}-
+
+      # The generated `mix test` alias runs ecto.create + ecto.migrate first;
+      # config/test.exs expects postgres:postgres@localhost (the service above).
+      - name: Run tests
+        run: |
+          mix deps.get
+          mix test
+
   build:
+    needs: test
     runs-on: ubuntu-latest # native amd64
     outputs:
       app_name: ${{ steps.meta.outputs.app_name }}
