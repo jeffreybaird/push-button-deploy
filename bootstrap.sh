@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PERS_DIR="$SCRIPT_DIR/infra-persistent"
 APP_TF_DIR="$SCRIPT_DIR/infra-app"
 
-REQUIRED_BINS="git terraform doctl gh mix curl ssh scp"
+REQUIRED_BINS="git terraform doctl gh mix curl ssh scp dig"
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY"
 
 # ---- story 6.1: preflight ----------------------------------------------------
@@ -218,6 +218,66 @@ commit_push() {
     fi
     git push -u origin main
   )
+  HEAD_SHA="$(cd "$APP_DIR" && git rev-parse HEAD)"
+}
+
+# ---- story 6.3: confirm liveness ----------------------------------------------
+
+# Status of the deploy run for the commit we just pushed: "status conclusion".
+# Empty until GitHub registers the run.
+run_state() {
+  ( cd "$APP_DIR" \
+    && gh run list --workflow deploy.yml --commit "$HEAD_SHA" --limit 1 \
+         --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null
+  ) || true
+}
+
+# Ordered diagnostics (AC 6.3): Actions status, dig, Caddy logs. Always exits 1 —
+# the verdict line above the dump says whether this is "deploy failed" or merely
+# "not ready yet".
+diagnose() {
+  {
+    printf '\nbootstrap: NOT LIVE — %s\n' "$1"
+    printf '\n--- 1. GitHub Actions (deploy workflow) ---\n'
+    ( cd "$APP_DIR" && gh run list --workflow deploy.yml --limit 3 ) \
+      || echo "(gh run list failed)"
+    printf '\n--- 2. DNS: dig +short %s (expect %s) ---\n' "$DOMAIN" "$APP_IP"
+    dig +short "$DOMAIN" || true
+    printf '\n--- 3. Caddy logs (last 40 lines) ---\n'
+    ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+      root@"$APP_IP" 'cd /root && docker compose logs --tail 40 caddy' 2>&1 \
+      || echo "(caddy logs unavailable — stack may not be up yet)"
+    printf '\nnext: gh run watch (in %s); after a fix, re-run ./bootstrap.sh (idempotent)\n' "$APP_DIR"
+  } >&2
+  exit 1
+}
+
+# Poll https://<domain> until it answers or LIVE_TIMEOUT_SECS elapses. While
+# polling, watch the CI run: a concluded failure aborts immediately ("deploy
+# failed") instead of waiting out the clock. On timeout the verdict depends on
+# the run's state, distinguishing "not ready yet" from "deploy failed".
+confirm_live() {
+  local timeout="${LIVE_TIMEOUT_SECS:-900}" waited=0 state
+  log "polling https://$DOMAIN (timeout ${timeout}s)..."
+  while :; do
+    if curl -fsS -o /dev/null --max-time 10 "https://$DOMAIN"; then
+      log "LIVE: https://$DOMAIN"
+      return 0
+    fi
+    state="$(run_state)"
+    case "$state" in
+      "completed failure"|"completed cancelled"|"completed timed_out")
+        diagnose "deploy FAILED — CI run concluded '${state#completed }'. See run log: gh run view --log-failed" ;;
+    esac
+    [ "$waited" -lt "$timeout" ] \
+      || case "$state" in
+           "completed success")
+             diagnose "deploy succeeded but HTTPS not answering after ${timeout}s — likely DNS propagation or Let's Encrypt issuance; see dig/Caddy below" ;;
+           *)
+             diagnose "not ready yet (CI still running after ${timeout}s — NOT a failure). Keep watching: gh run watch" ;;
+         esac
+    sleep 10; waited=$((waited + 10))
+  done
 }
 
 provision() {
@@ -232,7 +292,8 @@ provision() {
   ensure_repo
   seed_github
   commit_push
-  log "done. domain: https://$DOMAIN | droplet: $APP_IP | watch: gh run watch (in $APP_DIR)"
+  confirm_live
+  log "done. app live at https://$DOMAIN | droplet: $APP_IP"
 }
 
 # ---- main --------------------------------------------------------------------
