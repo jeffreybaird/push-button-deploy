@@ -2,8 +2,11 @@
 #
 # bootstrap.sh — push-button stand-up for a Phoenix app on DigitalOcean.
 #
-#   ./bootstrap.sh --check [app_dir]   # story 6.1: verify prerequisites, exit non-zero on first gap
-#   ./bootstrap.sh [app_dir]           # story 6.2: provision + wire + first deploy (default app_dir: .)
+#   ./bootstrap.sh --check [app_dir]   # verify prerequisites, exit non-zero on first gap
+#   ./bootstrap.sh [app_dir]           # provision + wire + deploy (default app_dir: .)
+#
+# app_dir may be EMPTY or NOT EXIST YET: a fresh Phoenix app is generated there
+# (mix phx.new <basename>). An existing app is used as-is.
 #
 # Optional config (env, with defaults):
 #   PROJECT_NAME   infra naming (DB/tag/VPC). Default: the app name. IMMUTABLE after first apply.
@@ -68,6 +71,12 @@ preflight() {
 
   [ -r "$SSH_PRIVATE_KEY" ] || fail "SSH private key not readable: $SSH_PRIVATE_KEY"
 
+  # Generating the app (only when the target has none) needs the phx_new archive.
+  if [ ! -f "$APP_DIR/mix.exs" ]; then
+    mix phx.new --version >/dev/null 2>&1 \
+      || fail "no app at $APP_DIR, and the phx_new archive is missing — run: mix archive.install hex phx_new"
+  fi
+
   doctl account get >/dev/null 2>&1 \
     || fail "doctl not authenticated — run: doctl auth init"
 
@@ -84,9 +93,31 @@ preflight() {
 
 # ---- story 6.2: provision + wire + first deploy ------------------------------
 
+# Generate the Phoenix app when the target directory is empty or missing —
+# this is the "empty directory -> deployed app" entry point. An existing app
+# (e.g. from a custom generator) is used as-is; a non-empty non-app directory
+# is refused rather than generated over.
+ensure_app() {
+  if [ -f "$APP_DIR/mix.exs" ]; then
+    log "app: using existing $APP_DIR"
+    return 0
+  fi
+  if [ -d "$APP_DIR" ]; then
+    [ -z "$(ls -A "$APP_DIR")" ] \
+      || fail "$APP_DIR is not empty and has no mix.exs — refusing to generate over it"
+    # phx.new insists on creating the directory itself (prompts otherwise).
+    rmdir "$APP_DIR"
+  fi
+  local name parent
+  name="$(basename "$APP_DIR")"
+  parent="$(dirname "$APP_DIR")"
+  log "generating Phoenix app '$name' (mix phx.new --no-install)"
+  ( cd "$parent" && mix phx.new "$name" --no-install )
+}
+
 # Parse APP_NAME / APP_MODULE from the app's mix.exs (single source of truth).
 parse_meta() {
-  [ -f "$APP_DIR/mix.exs" ] || fail "no mix.exs in $APP_DIR — point me at a Phoenix app"
+  [ -f "$APP_DIR/mix.exs" ] || fail "no mix.exs in $APP_DIR — generation failed?"
   # shellcheck source=scripts/app-meta.sh
   . "$SCRIPT_DIR/scripts/app-meta.sh"
   APP_NAME="$(app_name "$APP_DIR")"
@@ -336,6 +367,7 @@ confirm_live() {
 
 provision() {
   preflight
+  ensure_app
   parse_meta
   ensure_state_bucket
   tf_persistent
@@ -352,16 +384,27 @@ provision() {
 }
 
 # ---- main --------------------------------------------------------------------
+
+# Absolute path for a directory that may not exist yet (it gets generated).
+abs_dir() {
+  if [ -d "$1" ]; then (cd "$1" && pwd); else
+    case "$1" in
+      /*) printf '%s\n' "$1" ;;
+      *)  printf '%s/%s\n' "$PWD" "$1" ;;
+    esac
+  fi
+}
+
 main() {
   if [ "${1:-}" = "--check" ]; then
-    APP_DIR="$(cd "${2:-.}" && pwd)"
+    APP_DIR="$(abs_dir "${2:-.}")"
     preflight
     exit 0
   fi
   case "${1:-}" in
     -*) fail "unknown argument: $1 (use --check or [app_dir])" ;;
   esac
-  APP_DIR="$(cd "${1:-.}" && pwd)"
+  APP_DIR="$(abs_dir "${1:-.}")"
   provision
 }
 
