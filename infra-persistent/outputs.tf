@@ -23,6 +23,12 @@ output "database_url" {
   sensitive = true
 }
 
+output "database_ca_cert" {
+  description = "Cluster CA certificate (PEM) — shipped to the droplet so the app verifies the DB server cert."
+  value       = data.digitalocean_database_ca.pg.certificate
+  sensitive   = true
+}
+
 # The tag string infra-app must apply to the droplet so the DB firewall trusts it.
 output "db_trusted_tag" {
   description = "Tag the droplet must wear to pass the managed-Postgres firewall."

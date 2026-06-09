@@ -33,6 +33,12 @@ resource "digitalocean_database_user" "app" {
   name       = var.project_name
 }
 
+# Cluster CA certificate — delivered to the droplet at deploy time so the app
+# can verify the server cert (verify_peer, story 7.3).
+data "digitalocean_database_ca" "pg" {
+  cluster_id = digitalocean_database_cluster.pg.id
+}
+
 # Private-only access: the sole trusted source is the app tag. No public CIDRs,
 # no droplet IDs.
 resource "digitalocean_database_firewall" "pg" {

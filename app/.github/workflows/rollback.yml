@@ -92,10 +92,15 @@ jobs:
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           EOF
 
-      - name: Copy compose, Caddyfile, swap.sh, .env to droplet
+      - name: Write db-ca.pem
+        run: |
+          printf '%s\n' "${{ secrets.DATABASE_CA_CERT }}" > db-ca.pem
+          chmod 644 db-ca.pem
+
+      - name: Copy compose, Caddyfile, swap.sh, db-ca.pem, .env to droplet
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh .env \
+            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh db-ca.pem .env \
             root@"$HOST":/root/
 
       # No migration step: the pinned image is older than (or equal to) the

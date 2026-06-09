@@ -26,6 +26,12 @@ x-app: &app
     # URL host for generated links + the Endpoint :url config.
     PHX_HOST: ${DOMAIN}
     PORT: "4000"
+    # Cluster CA (mounted below) — runtime.exs switches the Repo to
+    # verify_peer when this is set (story 7.3).
+    DATABASE_CA_FILE: /app/db-ca.pem
+  volumes:
+    # Public cert material, shipped next to compose.yaml at deploy time.
+    - ./db-ca.pem:/app/db-ca.pem:ro
   expose:
     # Internal only — never published to the host. Caddy reaches it by name.
     - "4000"

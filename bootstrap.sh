@@ -115,6 +115,7 @@ tf_persistent() {
 
   terraform -chdir="$PERS_DIR" apply -auto-approve -input=false
   DATABASE_URL="$(terraform -chdir="$PERS_DIR" output -raw database_url)"
+  DATABASE_CA_CERT="$(terraform -chdir="$PERS_DIR" output -raw database_ca_cert)"
   DOMAIN="$(terraform -chdir="$PERS_DIR" output -raw domain)"
 }
 
@@ -211,6 +212,7 @@ seed_github() {
     printf '%s' "$DIGITALOCEAN_ACCESS_TOKEN" | gh secret set DIGITALOCEAN_ACCESS_TOKEN
     gh secret set SSH_PRIVATE_KEY < "$SSH_PRIVATE_KEY"
     printf '%s' "$DATABASE_URL"               | gh secret set DATABASE_URL
+    printf '%s' "$DATABASE_CA_CERT"           | gh secret set DATABASE_CA_CERT
     mix phx.gen.secret                         | gh secret set SECRET_KEY_BASE
     gh variable set DOCR_REGISTRY -b "$REG"
     gh variable set DOMAIN        -b "$DOMAIN"
