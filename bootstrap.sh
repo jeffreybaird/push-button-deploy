@@ -135,9 +135,15 @@ parse_meta() {
   . "$SCRIPT_DIR/scripts/app-meta.sh"
   APP_NAME="$(app_name "$APP_DIR")"
   APP_MODULE="$(app_module "$APP_DIR")"
-  PROJECT_NAME="${PROJECT_NAME:-$APP_NAME}"
+  # Mix app names are snake_case, but DO buckets/DBs and DNS labels only allow
+  # hyphens — translate when deriving infra names from the app name.
+  local infra_name; infra_name="$(printf '%s' "$APP_NAME" | tr '_' '-')"
+  PROJECT_NAME="${PROJECT_NAME:-$infra_name}"
+  case "$PROJECT_NAME" in
+    *[!a-z0-9-]*|-*|*-) fail "PROJECT_NAME '$PROJECT_NAME' is invalid: lowercase letters, digits, and inner hyphens only (it names DO buckets/DBs/DNS)" ;;
+  esac
   REGION="${REGION:-nyc3}"
-  DNS_RECORD="${DNS_RECORD:-$APP_NAME}"
+  DNS_RECORD="${DNS_RECORD:-$infra_name}"
   log "app: $APP_NAME ($APP_MODULE) | project: $PROJECT_NAME | region: $REGION"
 }
 
@@ -188,10 +194,12 @@ tf_persistent() {
 
   # project_name is immutable: renaming forces DB-cluster replacement (blocked by
   # prevent_destroy). Compare against state and fail loud before applying.
-  if terraform -chdir="$PERS_DIR" output -raw project_name >/dev/null 2>&1; then
-    local existing; existing="$(terraform -chdir="$PERS_DIR" output -raw project_name)"
-    [ "$existing" = "$PROJECT_NAME" ] \
-      || fail "project_name is immutable: state has '$existing', requested '$PROJECT_NAME'. A rename forces DB replacement — keep '$existing' (set PROJECT_NAME=$existing)."
+  # Note: on an empty state, `output -raw` exits 0 with empty output, so test the
+  # value rather than the exit code.
+  local existing
+  existing="$(terraform -chdir="$PERS_DIR" output -raw project_name 2>/dev/null || true)"
+  if [ -n "$existing" ] && [ "$existing" != "$PROJECT_NAME" ]; then
+    fail "project_name is immutable: state has '$existing', requested '$PROJECT_NAME'. A rename forces DB replacement — keep '$existing' (set PROJECT_NAME=$existing)."
   fi
 
   terraform -chdir="$PERS_DIR" apply -auto-approve -input=false
