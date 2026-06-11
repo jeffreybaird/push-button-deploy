@@ -9,3 +9,6 @@ crash.log
 
 # Backend pointer written by bootstrap (bucket name + endpoint)
 backend.hcl
+
+infra-app/terraform.tfvars.bak
+infra-persistent/terraform.tfvars.bak

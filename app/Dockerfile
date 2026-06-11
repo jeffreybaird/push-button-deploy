@@ -6,11 +6,13 @@
 # Assumes the app has run `mix phx.gen.release` (provides config/runtime.exs +
 # rel/ overlays). The bootstrap (Epic 6) guarantees this.
 #
-# Image tags verified against Docker Hub (Phoenix 1.8 needs Elixir >= 1.15):
-#   builder hexpm/elixir:1.18.4-erlang-27.3.4.9-debian-bookworm-20260518-slim
+# Image tags verified against Docker Hub (Phoenix 1.8 needs Elixir >= 1.15).
+# Keep these >= the local toolchain that generated the app: phx_new emits
+# syntax (e.g. the ~r"..."E regex modifier) older Elixirs cannot compile.
+#   builder hexpm/elixir:1.19.5-erlang-28.5.0.2-debian-bookworm-20260518-slim
 #   runner  debian:bookworm-20260518-slim   (same debian build => glibc match)
-ARG ELIXIR_VERSION=1.18.4
-ARG OTP_VERSION=27.3.4.9
+ARG ELIXIR_VERSION=1.19.5
+ARG OTP_VERSION=28.5.0.2
 ARG DEBIAN_VERSION=bookworm-20260518-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"

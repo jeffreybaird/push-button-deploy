@@ -1,6 +1,6 @@
 #cloud-config
 # Installs Docker Engine + the compose plugin ONLY. No secrets, no registry
-# login, no app env — those arrive over SSH at deploy time (locked decision).
+# login, no app env - those arrive over SSH at deploy time (locked decision).
 package_update: true
 package_upgrade: false
 runcmd:

@@ -265,6 +265,61 @@ wait_droplet_ready() {
   fail "droplet not Docker-ready after ~5min — check cloud-init (cloud-init status --long)"
 }
 
+# Pin the app's Dockerfile ARGs (CI reads the same ARGs) to the local Elixir/OTP
+# that generated the app: phx_new can emit syntax older Elixirs cannot compile
+# (e.g. the ~r"..."E regex modifier), so the pipeline toolchain must not lag the
+# local one. Overridable via ELIXIR_VERSION / OTP_VERSION env.
+pin_toolchain() {
+  local df="$APP_DIR/Dockerfile" ex otp debian tag
+  ex="${ELIXIR_VERSION:-$(elixir --version 2>/dev/null | sed -nE 's/^Elixir ([0-9.]+).*/\1/p')}"
+  otp="${OTP_VERSION:-$(erl -noshell -eval \
+    '{ok,V}=file:read_file(filename:join([code:root_dir(),"releases",erlang:system_info(otp_release),"OTP_VERSION"])),io:fwrite(V),halt().' \
+    2>/dev/null | tr -d '[:space:]')}"
+  [ -n "$ex" ] && [ -n "$otp" ] || fail "could not detect local Elixir/OTP versions (set ELIXIR_VERSION/OTP_VERSION env)"
+
+  # The Dockerfile's DEBIAN_VERSION pins a snapshot like bookworm-YYYYMMDD-slim;
+  # only the flavor is authoritative — hexpm republishes on new snapshot dates
+  # and drops the old tags, so the date must float to what's published.
+  local flavor
+  flavor="$(sed -nE 's/^ARG DEBIAN_VERSION=([a-z]+)-.*$/\1/p' "$df" | head -1)"
+  [ -n "$flavor" ] || fail "no ARG DEBIAN_VERSION in $df"
+
+  # The combo must exist as a published hexpm builder image or the release
+  # build dies mid-pipeline. The repo has thousands of tags, so targeted
+  # queries only: first ask for the exact local OTP; if unpublished (hexpm lags
+  # new OTP releases), scan the first pages of a descending-by-name listing —
+  # that's where the newest OTP versions sit — and take the newest published
+  # stable OTP. What matters for compiling the generated app is the Elixir
+  # version; OTP only needs to be compatible. Either way pin the newest
+  # snapshot date published for the chosen OTP.
+  local hub="https://hub.docker.com/v2/repositories/hexpm/elixir/tags" pairs chosen date
+  hub_pairs() {
+    grep -Eo '"name":"[^"]*"' \
+      | sed -nE "s/^\"name\":\"${ex}-erlang-([0-9.]+)-debian-${flavor}-([0-9]+)-slim\"$/\1 \2/p"
+  }
+  pairs="$(curl -fsSL "${hub}/?page_size=100&name=${ex}-erlang-${otp}-debian-${flavor}-" 2>/dev/null | hub_pairs)"
+  if [ -n "$pairs" ]; then
+    chosen="$otp"
+  else
+    local page
+    pairs="$(for page in 1 2 3 4 5; do
+      curl -fsSL "${hub}/?page_size=100&ordering=name&page=${page}&name=${ex}-erlang-" 2>/dev/null
+    done | hub_pairs)"
+    [ -n "$pairs" ] \
+      || fail "no hexpm/elixir image published for Elixir $ex (debian ${flavor}-*-slim) — pick a combo from hub.docker.com/r/hexpm/elixir/tags and set ELIXIR_VERSION/OTP_VERSION"
+    chosen="$(printf '%s\n' "$pairs" | awk '{print $1}' | sort -u -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1)"
+    log "toolchain: local OTP $otp has no hexpm image; pinning newest published OTP $chosen"
+  fi
+  date="$(printf '%s\n' "$pairs" | awk -v o="$chosen" '$1==o {print $2}' | sort -n | tail -1)"
+
+  log "toolchain pins: elixir $ex / otp $chosen / debian ${flavor}-${date}-slim"
+  sed -E \
+    -e "s/^ARG ELIXIR_VERSION=.*/ARG ELIXIR_VERSION=${ex}/" \
+    -e "s/^ARG OTP_VERSION=.*/ARG OTP_VERSION=${chosen}/" \
+    -e "s/^ARG DEBIAN_VERSION=.*/ARG DEBIAN_VERSION=${flavor}-${date}-slim/" \
+    "$df" > "$df.tmp" && mv "$df.tmp" "$df"
+}
+
 # Generate release.ex (if missing), enforce DB TLS, drop in the pipeline files.
 # Order matters: gen.release BEFORE copying our Dockerfile (it writes its own).
 prep_app() {
@@ -274,6 +329,7 @@ prep_app() {
     [ -d rel ] || mix phx.gen.release
   )
   cp "$SCRIPT_DIR/app/Dockerfile"     "$APP_DIR/Dockerfile"
+  pin_toolchain
   cp "$SCRIPT_DIR/app/.dockerignore"  "$APP_DIR/.dockerignore"
   mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
   cp "$SCRIPT_DIR/app/.github/workflows/deploy.yml"   "$APP_DIR/.github/workflows/deploy.yml"
