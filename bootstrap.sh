@@ -64,7 +64,7 @@ step() {
 # replay the tail to the console and die loud. Secrets in the command line are
 # redacted in the transcript (URL userinfo).
 quiet() {
-  printf '\n$ %s\n' "$(printf '%s ' "$@" | sed -E 's|://[^@ ]*@|://<redacted>@|g')" >> "$LOG_FILE"
+  printf '\n$ %s\n' "$(printf '%s ' "$@" | sed -E 's|://[^@ ]*@|://<redacted>@|g; s|--user [^ ]+|--user <redacted>|g')" >> "$LOG_FILE"
   local rc=0
   "$@" >> "$LOG_FILE" 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -220,7 +220,46 @@ ensure_state_bucket() {
   log "init infra-state (output in $LOG_FILE)..."
   quiet terraform -chdir="$STATE_TF_DIR" init -input=false
   terraform -chdir="$STATE_TF_DIR" apply -auto-approve -input=false
+
+  # The bucket must answer the S3 API before any backend references it. An
+  # unsigned request to a private bucket returns 403 once it exists, 404 while
+  # it doesn't. Two failure modes feed this: plain propagation lag, and a DO
+  # provider bug observed in the wild where apply reports the bucket created
+  # (and refreshes cleanly!) while the S3 API keeps 404ing — for that one we
+  # fall back to creating the bucket via the S3 API directly.
+  if ! wait_bucket_visible 18; then
+    warn "terraform reports bucket '$STATE_BUCKET' but the S3 API 404s it — creating it via the S3 API directly"
+    quiet curl -fsS -o /dev/null --max-time 15 -X PUT \
+      --aws-sigv4 "aws:amz:${STATE_REGION}:s3" \
+      --user "${SPACES_ACCESS_KEY_ID}:${SPACES_SECRET_ACCESS_KEY}" \
+      "${STATE_ENDPOINT}/${STATE_BUCKET}/"
+    printf '<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>' \
+      | quiet curl -fsS -o /dev/null --max-time 15 -X PUT \
+          --aws-sigv4 "aws:amz:${STATE_REGION}:s3" \
+          --user "${SPACES_ACCESS_KEY_ID}:${SPACES_SECRET_ACCESS_KEY}" \
+          -T - "${STATE_ENDPOINT}/${STATE_BUCKET}/?versioning"
+    wait_bucket_visible 6 \
+      || fail "state bucket $STATE_BUCKET still not visible after direct creation — check Spaces status, then re-run"
+  fi
   log "state bucket ready: $STATE_BUCKET"
+}
+
+# True once the bucket answers the S3 API (200/403 = exists, 404 = not yet).
+bucket_visible() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    "https://${STATE_BUCKET}.${STATE_REGION}.digitaloceanspaces.com/" || true)"
+  [ "$code" = "200" ] || [ "$code" = "403" ]
+}
+
+wait_bucket_visible() { # $1: attempts, 5s apart
+  local i
+  for i in $(seq 1 "$1"); do
+    bucket_visible && return 0
+    log "  bucket not visible yet (attempt $i/$1)"
+    sleep 5
+  done
+  return 1
 }
 
 # Point a root at the Spaces backend and init. -force-copy migrates any
