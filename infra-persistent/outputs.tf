@@ -49,3 +49,20 @@ output "project_name" {
   description = "Project name — infra-app derives the droplet name from it."
   value       = var.project_name
 }
+
+# Admin (doadmin) URL for the APP database over the private host. PG15+ gives
+# the app user no CREATE on schema public (doadmin owns it via the DO API), so
+# bootstrap runs a one-time GRANT through the droplet — the only host the DB
+# firewall trusts.
+output "database_admin_url" {
+  description = "doadmin connection URL for the app DB (private host). Used to grant schema privileges."
+  value = format(
+    "postgresql://%s:%s@%s:%d/%s?sslmode=require",
+    digitalocean_database_cluster.pg.user,
+    urlencode(digitalocean_database_cluster.pg.password),
+    digitalocean_database_cluster.pg.private_host,
+    digitalocean_database_cluster.pg.port,
+    digitalocean_database_db.app.name,
+  )
+  sensitive = true
+}

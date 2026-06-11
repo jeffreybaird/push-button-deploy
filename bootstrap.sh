@@ -265,6 +265,18 @@ wait_droplet_ready() {
   fail "droplet not Docker-ready after ~5min — check cloud-init (cloud-init status --long)"
 }
 
+# PG15+: the app user gets no CREATE on schema public (doadmin owns the DB via
+# the DO API), so migrations would die with insufficient_privilege. Grant via
+# the droplet — the only host the DB firewall trusts. Idempotent.
+grant_db_schema() {
+  log "granting schema public privileges to DB user '$PROJECT_NAME'"
+  local admin_url
+  admin_url="$(terraform -chdir="$PERS_DIR" output -raw database_admin_url)"
+  ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new root@"$APP_IP" \
+    "docker run --rm postgres:17-alpine psql '$admin_url' -v ON_ERROR_STOP=1 \
+       -c 'GRANT ALL ON SCHEMA public TO \"$PROJECT_NAME\";'" >/dev/null
+}
+
 # Pin the app's Dockerfile ARGs (CI reads the same ARGs) to the local Elixir/OTP
 # that generated the app: phx_new can emit syntax older Elixirs cannot compile
 # (e.g. the ~r"..."E regex modifier), so the pipeline toolchain must not lag the
@@ -452,6 +464,7 @@ provision() {
   detect_cidr
   tf_app
   wait_droplet_ready
+  grant_db_schema
   prep_app
   ensure_repo
   seed_github
