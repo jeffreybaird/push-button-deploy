@@ -16,9 +16,9 @@ variable "region" {
 }
 
 variable "vpc_ip_range" {
-  description = "Private CIDR block for the VPC. Must not overlap other VPCs in the account."
+  description = "Private CIDR block for the VPC. Default null lets DigitalOcean pick a free range — a fixed default collides with any other project's VPC in the account."
   type        = string
-  default     = "10.10.10.0/24"
+  default     = null
 }
 
 variable "pg_version" {
