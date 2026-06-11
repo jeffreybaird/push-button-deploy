@@ -34,6 +34,12 @@
 # Portable: BSD/macOS bash, grep, sed.
 set -euo pipefail
 
+# set -e kills the script on any unguarded failure — without this trap it does
+# so SILENTLY, which reads as success. Name the line so the gap is findable.
+# (-E so the trap also fires for failures inside functions.)
+set -E
+trap 'printf "bootstrap: unexpected failure at line %s (running: %s)\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
+
 # ---- helpers -----------------------------------------------------------------
 fail() { printf 'bootstrap: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -330,14 +336,16 @@ pin_toolchain() {
     grep -Eo '"name":"[^"]*"' \
       | sed -nE "s/^\"name\":\"${ex}-erlang-([0-9.]+)-debian-${flavor}-([0-9]+)-slim\"$/\1 \2/p"
   }
-  pairs="$(curl -fsSL "${hub}/?page_size=100&name=${ex}-erlang-${otp}-debian-${flavor}-" 2>/dev/null | hub_pairs)"
+  # `|| true`: an empty result exits the grep inside hub_pairs nonzero, which
+  # under set -e -o pipefail would kill the script SILENTLY mid-assignment.
+  pairs="$(curl -fsSL "${hub}/?page_size=100&name=${ex}-erlang-${otp}-debian-${flavor}-" 2>/dev/null | hub_pairs || true)"
   if [ -n "$pairs" ]; then
     chosen="$otp"
   else
     local page
     pairs="$(for page in 1 2 3 4 5; do
       curl -fsSL "${hub}/?page_size=100&ordering=name&page=${page}&name=${ex}-erlang-" 2>/dev/null
-    done | hub_pairs)"
+    done | hub_pairs || true)"
     [ -n "$pairs" ] \
       || fail "no hexpm/elixir image published for Elixir $ex (debian ${flavor}-*-slim) — pick a combo from hub.docker.com/r/hexpm/elixir/tags and set ELIXIR_VERSION/OTP_VERSION"
     chosen="$(printf '%s\n' "$pairs" | awk '{print $1}' | sort -u -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1)"
