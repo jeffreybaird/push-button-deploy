@@ -225,6 +225,21 @@ ensure_state_bucket() {
   log "terraform: infra-state (Spaces bucket '$STATE_BUCKET' in $STATE_REGION)"
   log "init infra-state (output in $LOG_FILE)..."
   quiet terraform -chdir="$STATE_TF_DIR" init -input=false
+
+  # This root keeps LOCAL state (the bucket can't store the state that creates
+  # it) — per-project workspaces, or a second project silently inherits the
+  # first project's bucket in the shared state file.
+  quiet terraform -chdir="$STATE_TF_DIR" workspace select -or-create "$PROJECT_NAME"
+
+  # Adopt a bucket that exists but isn't in this workspace's state yet (e.g.
+  # created by the direct-API fallback below, or a previous half-run) — apply
+  # would otherwise die on BucketAlreadyExists.
+  if ! terraform -chdir="$STATE_TF_DIR" state list 2>/dev/null | grep -q . && bucket_visible; then
+    log "importing existing bucket '$STATE_BUCKET' into infra-state ($PROJECT_NAME workspace)"
+    quiet terraform -chdir="$STATE_TF_DIR" import -input=false \
+      digitalocean_spaces_bucket.tfstate "${STATE_REGION},${STATE_BUCKET}"
+  fi
+
   terraform -chdir="$STATE_TF_DIR" apply -auto-approve -input=false
 
   # The bucket must answer the S3 API before any backend references it. An
@@ -276,7 +291,7 @@ backend_init() {
   # die on the 404. If the cached bucket differs from the current one, drop
   # the cache and start clean.
   local cached
-  cached="$(sed -nE 's/.*"bucket": ?"([^"]+)".*/\1/p' "$1/.terraform/terraform.tfstate" 2>/dev/null | head -1)"
+  cached="$(sed -nE 's/.*"bucket": ?"([^"]+)".*/\1/p' "$1/.terraform/terraform.tfstate" 2>/dev/null | head -1 || true)"
   if [ -n "$cached" ] && [ "$cached" != "$STATE_BUCKET" ]; then
     log "backend: cached bucket '$cached' != '$STATE_BUCKET' — reinitializing $(basename "$1")"
     rm -rf "$1/.terraform"

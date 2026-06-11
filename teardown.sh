@@ -180,12 +180,26 @@ fi
 # ---- 4. state bucket (LAST: it held the state for steps 1-2) -------------------------
 log "destroy: infra-state (bucket $STATE_BUCKET)"
 terraform -chdir="$STATE_TF_DIR" init -input=false >/dev/null
+# infra-state keeps per-project LOCAL state in workspaces (see bootstrap).
+terraform -chdir="$STATE_TF_DIR" workspace select -or-create "$PROJECT_NAME" >/dev/null
+# Adopt the bucket if this workspace's state doesn't know it (half-run, or the
+# bucket was created by bootstrap's direct-API fallback) — destroy on an empty
+# state would otherwise silently leave the bucket alive.
+if ! terraform -chdir="$STATE_TF_DIR" state list 2>/dev/null | grep -q .; then
+  log "importing bucket '$STATE_BUCKET' into state before destroy"
+  terraform -chdir="$STATE_TF_DIR" import -input=false \
+    digitalocean_spaces_bucket.tfstate "${STATE_REGION},${STATE_BUCKET}" >/dev/null \
+    || fail "bucket '$STATE_BUCKET' could not be imported — if it does not exist, nothing to do; remove it from the plan by re-running without the state step"
+fi
 # force_destroy empties the bucket (incl. old state versions) on delete; it must
 # be APPLIED before the destroy so the API call carries the flag.
 lift_guard "$STATE_TF_DIR" digitalocean_spaces_bucket tfstate 'force_destroy = true'
 terraform -chdir="$STATE_TF_DIR" apply -auto-approve -input=false >/dev/null
 terraform -chdir="$STATE_TF_DIR" destroy -auto-approve -input=false
 rm -f "$STATE_TF_DIR/teardown_override.tf"
+# drop the emptied workspace
+terraform -chdir="$STATE_TF_DIR" workspace select default >/dev/null 2>&1 || true
+terraform -chdir="$STATE_TF_DIR" workspace delete "$PROJECT_NAME" >/dev/null 2>&1 || true
 
 # ---- 5. GitHub repo (opt-in) ----------------------------------------------------------
 if [ "$DELETE_REPO" = 1 ]; then
