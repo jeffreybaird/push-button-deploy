@@ -274,8 +274,10 @@ wait_droplet_ready() {
   ssh-keygen -R "$APP_IP" >/dev/null 2>&1 || true
   local i
   for i in $(seq 1 30); do
+    # `docker info` needs a RESPONSIVE DAEMON — `docker --version` only proves
+    # the binary landed, and cloud-init may still be mid-install at that point.
     if ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-         root@"$APP_IP" docker --version >/dev/null 2>&1; then
+         root@"$APP_IP" docker info >/dev/null 2>&1; then
       log "droplet ready."
       return 0
     fi
