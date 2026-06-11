@@ -125,15 +125,17 @@ The app name is the directory basename (must be a valid Elixir app name: `lower_
 
 1. **Preflight** — same checks as `--check`.
 2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude skill docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `./scripts/inject-skill-docs.sh <app_dir>`.
-3. **State bucket** — create the Spaces bucket; both real roots `init` against it (any pre-existing local state migrates in automatically).
-4. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), DNS record.
-5. **Registry** — reuse the account's DO Container Registry or create one (free starter tier).
-6. **App infra** — droplet (cloud-init installs Docker only — no secrets), reserved-IP assignment, firewall (22 restricted to your detected IP, 80/443 open).
-7. **Wait** until the droplet answers `docker --version` over SSH.
-8. **Prepare the app** — deps, `phx.gen.release`, release migration task, *verified* DB TLS config, Dockerfile, compose stack, deploy + rollback workflows.
-9. **GitHub** — create a private repo if needed; seed secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`).
-10. **Commit + push** — which triggers the first deploy through the exact pipeline every later push uses: tests (Postgres service container) → image build → migration gate → blue/green swap.
-11. **Poll `https://<domain>`** until live. On failure it prints ordered diagnostics (Actions status, `dig`, Caddy logs) and tells you whether the deploy *failed* or just *isn't ready yet*.
+3. **GitHub repo** — `git init` if needed, create a private repo, and push an `initial commit` of the app as generated. (No workflows exist yet, so this push triggers nothing.)
+4. **State bucket** — create the Spaces bucket; both real roots `init` against it (any pre-existing local state migrates in automatically).
+5. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), DNS record.
+6. **Registry** — reuse the account's DO Container Registry or create one (free starter tier).
+7. **App infra** — droplet (cloud-init installs Docker only — no secrets), reserved-IP assignment, firewall (22 restricted to your detected IP, 80/443 open).
+8. **Wait** until the droplet answers `docker info` over SSH (a responsive daemon, not just the binary).
+9. **Grant** the app DB user `CREATE`/`USAGE` on schema `public` (PG15+ default-deny), via the droplet — the only host the DB firewall trusts.
+10. **Prepare the app** — deps, `phx.gen.release`, release migration task, *verified* DB TLS config, Dockerfile, compose stack, deploy + rollback workflows.
+11. **Seed GitHub** — secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`).
+12. **Commit + push** the pipeline files — which triggers the first deploy through the exact pipeline every later push uses: tests (Postgres service container) → image build → migration gate → blue/green swap.
+13. **Poll `https://<domain>`** until live. On failure it prints ordered diagnostics (Actions status, `dig`, Caddy logs) and tells you whether the deploy *failed* or just *isn't ready yet*.
 
 The script is **idempotent**: fix whatever it complained about and re-run; every step detects work already done. (One side effect of re-running: `SECRET_KEY_BASE` is regenerated, which invalidates existing user sessions.)
 

@@ -372,7 +372,10 @@ prep_app() {
   "$SCRIPT_DIR/scripts/ensure-release-task.sh" "$APP_DIR"
 }
 
-# Ensure the app dir is a git repo with a GitHub origin (create private if absent).
+# Ensure the app dir is a git repo with a GitHub origin (create private if
+# absent), and push an initial commit of the app as-generated. The pipeline
+# files land in a SEPARATE commit later (commit_push), so history separates
+# "what the generator made" from "what the pipeline wired in".
 ensure_repo() {
   ( cd "$APP_DIR"
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 || git init -q -b main
@@ -382,6 +385,12 @@ ensure_repo() {
       log "creating private GitHub repo '$APP_NAME'"
       gh repo create "$APP_NAME" --source=. --private --remote=origin
     fi
+    if ! git rev-parse HEAD >/dev/null 2>&1; then
+      log "initial commit (app as generated)"
+      git add -A
+      git commit -q -m 'initial commit'
+    fi
+    git push -q -u origin main
   )
 }
 
@@ -479,6 +488,7 @@ provision() {
   preflight
   ensure_app
   parse_meta
+  ensure_repo
   ensure_state_bucket
   tf_persistent
   ensure_registry
@@ -487,7 +497,6 @@ provision() {
   wait_droplet_ready
   grant_db_schema
   prep_app
-  ensure_repo
   seed_github
   commit_push
   confirm_live
