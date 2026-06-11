@@ -190,6 +190,7 @@ backend_init() {
 bucket    = "$STATE_BUCKET"
 endpoints = { s3 = "$STATE_ENDPOINT" }
 EOF
+  log "backend: init $(basename "$1") against $STATE_BUCKET (silent; may download providers)..."
   terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl >/dev/null
 }
 
