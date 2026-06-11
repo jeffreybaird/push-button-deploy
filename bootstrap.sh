@@ -97,8 +97,12 @@ preflight() {
     || fail "gh not authenticated — run: gh auth login"
 
   # The SSH key the droplet will trust must already exist in the DO account.
-  doctl compute ssh-key list --no-header --format Name 2>/dev/null \
-    | grep -qx "$SSH_KEY_NAME" \
+  # Capture the listing first: a transient API failure must not masquerade as
+  # "key not found".
+  local ssh_keys
+  ssh_keys="$(doctl compute ssh-key list --no-header --format Name)" \
+    || fail "doctl compute ssh-key list failed (API error above) — retry"
+  printf '%s\n' "$ssh_keys" | grep -qx "$SSH_KEY_NAME" \
     || fail "SSH key '$SSH_KEY_NAME' not found in DO account (doctl compute ssh-key list)"
 
   echo "preflight: OK — all prerequisites present."
