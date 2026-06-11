@@ -124,7 +124,7 @@ Optional (defaults in parentheses):
 The app name is the directory basename (must be a valid Elixir app name: `lower_snake_case`). What the run does, in order:
 
 1. **Preflight** — same checks as `--check`.
-2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused.
+2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude skill docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `./scripts/inject-skill-docs.sh <app_dir>`.
 3. **State bucket** — create the Spaces bucket; both real roots `init` against it (any pre-existing local state migrates in automatically).
 4. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), DNS record.
 5. **Registry** — reuse the account's DO Container Registry or create one (free starter tier).

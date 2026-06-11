@@ -126,6 +126,10 @@ ensure_app() {
   parent="$(dirname "$APP_DIR")"
   log "generating Phoenix app '$name' (mix phx.new --no-install)"
   ( cd "$parent" && mix phx.new "$name" --no-install )
+  # Freshly generated apps get the Claude skill docs (app-template/) and the
+  # deps the docs assume. Existing apps are left alone — run the script by
+  # hand to retrofit: ./scripts/inject-skill-docs.sh <app_dir>
+  "$SCRIPT_DIR/scripts/inject-skill-docs.sh" "$APP_DIR"
 }
 
 # Parse APP_NAME / APP_MODULE from the app's mix.exs (single source of truth).
