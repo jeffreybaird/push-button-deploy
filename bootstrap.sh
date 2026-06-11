@@ -99,6 +99,12 @@ PERS_DIR="$SCRIPT_DIR/infra-persistent"
 APP_TF_DIR="$SCRIPT_DIR/infra-app"
 STATE_TF_DIR="$SCRIPT_DIR/infra-state"
 
+# Share provider binaries across projects: switching projects drops each root's
+# .terraform (backend cache mismatch), and without this every switch
+# re-downloads ~50MB of providers.
+export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$HOME/.terraform.d/plugin-cache}"
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
 REQUIRED_BINS="git terraform doctl gh mix curl ssh scp dig"
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
 
