@@ -131,16 +131,19 @@ EOF
 
 # Lift a prevent_destroy guard for the duration of a destroy. Override files
 # merge per-attribute, so only the lifecycle flag changes. Removed via trap.
+# Appends, so several guards in the same root share one override file.
 OVERRIDES=""
 trap 'for f in $OVERRIDES; do rm -f "$f"; done' EXIT
 lift_guard() { # $1 dir, $2 resource type, $3 resource name, $4 extra attrs (optional)
   local f="$1/teardown_override.tf"
+  # First touch this run: clear any leftover from an earlier crashed run.
+  case " $OVERRIDES " in *" $f "*) ;; *) rm -f "$f" ;; esac
   {
     printf 'resource "%s" "%s" {\n' "$2" "$3"
     if [ -n "${4:-}" ]; then printf '  %s\n' "$4"; fi
     printf '  lifecycle { prevent_destroy = false }\n}\n'
-  } > "$f"
-  OVERRIDES="$OVERRIDES $f"
+  } >> "$f"
+  case " $OVERRIDES " in *" $f "*) ;; *) OVERRIDES="$OVERRIDES $f" ;; esac
 }
 
 # ---- 1. app infra ------------------------------------------------------------------
@@ -152,6 +155,7 @@ terraform -chdir="$APP_TF_DIR" destroy -auto-approve -input=false
 log "destroy: infra-persistent (DB cluster, VPC, reserved IP, DNS)"
 backend_init "$PERS_DIR"
 lift_guard "$PERS_DIR" digitalocean_database_cluster pg
+lift_guard "$PERS_DIR" digitalocean_reserved_ip this
 terraform -chdir="$PERS_DIR" destroy -auto-approve -input=false
 rm -f "$PERS_DIR/teardown_override.tf"
 
