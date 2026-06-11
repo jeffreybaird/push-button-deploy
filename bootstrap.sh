@@ -34,18 +34,56 @@
 # Portable: BSD/macOS bash, grep, sed.
 set -euo pipefail
 
+# ---- logging & failure visibility ----------------------------------------------
+# Nothing fails silently:
+#  - every run writes a full transcript to bootstrap.log (gitignored)
+#  - quiet commands log there; on failure their output is replayed to the console
+#  - an ERR trap names the exact line/command of any unguarded failure
+#  - an EXIT trap stamps the run FAILED/OK so a half-run can't read as success
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$SCRIPT_DIR/bootstrap.log"
+: > "$LOG_FILE"
+
+ts()    { date +%H:%M:%S; }
+# log to console AND transcript
+log()   { printf '\033[32m==>\033[0m [%s] %s\n' "$(ts)" "$*"; printf '==> [%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; }
+warn()  { printf '\033[33m==> WARN\033[0m [%s] %s\n' "$(ts)" "$*" >&2; printf 'WARN [%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; }
+fail()  { printf '\033[31mbootstrap: %s\033[0m\n' "$*" >&2; printf 'FAIL [%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; exit 1; }
+have()  { command -v "$1" >/dev/null 2>&1; }
+
+# Numbered step banner — the heartbeat of a run. If output stops after a step
+# banner, THAT step is where it stopped.
+STEP=0; TOTAL_STEPS=15
+step() {
+  STEP=$((STEP + 1))
+  printf '\033[36m==> [%s] step %s/%s:\033[0m %s\n' "$(ts)" "$STEP" "$TOTAL_STEPS" "$*"
+  printf '==> [%s] step %s/%s: %s\n' "$(ts)" "$STEP" "$TOTAL_STEPS" "$*" >> "$LOG_FILE"
+}
+
+# Run a command console-quiet: full output goes to the transcript. On failure,
+# replay the tail to the console and die loud. Secrets in the command line are
+# redacted in the transcript (URL userinfo).
+quiet() {
+  printf '\n$ %s\n' "$(printf '%s ' "$@" | sed -E 's|://[^@ ]*@|://<redacted>@|g')" >> "$LOG_FILE"
+  local rc=0
+  "$@" >> "$LOG_FILE" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '\033[31m==> command failed (exit %s)\033[0m — last output:\n' "$rc" >&2
+    tail -25 "$LOG_FILE" | sed 's/^/    /' >&2
+    fail "step ${STEP}/${TOTAL_STEPS} died (full transcript: $LOG_FILE)"
+  fi
+}
+
 # set -e kills the script on any unguarded failure — without this trap it does
 # so SILENTLY, which reads as success. Name the line so the gap is findable.
 # (-E so the trap also fires for failures inside functions.)
 set -E
-trap 'printf "bootstrap: unexpected failure at line %s (running: %s)\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
-
-# ---- helpers -----------------------------------------------------------------
-fail() { printf 'bootstrap: %s\n' "$*" >&2; exit 1; }
-have() { command -v "$1" >/dev/null 2>&1; }
-log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+trap 'printf "\033[31mbootstrap: unexpected failure at line %s (running: %s)\033[0m\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then
+        printf "\033[31m==> bootstrap FAILED (exit %s) at step %s/%s\033[0m — transcript: %s\n" "$rc" "$STEP" "$TOTAL_STEPS" "$LOG_FILE" >&2
+      else
+        printf "==> run OK\n" >> "$LOG_FILE"
+      fi' EXIT
 
 # Local config: a gitignored .env beside this script (see .env.example).
 # Shell-sourced, so $HOME etc. expand; `set -a` exports plain KEY=value lines
@@ -179,8 +217,10 @@ ensure_state_bucket() {
   export TF_VAR_region="$STATE_REGION"
 
   log "terraform: infra-state (Spaces bucket '$STATE_BUCKET' in $STATE_REGION)"
-  terraform -chdir="$STATE_TF_DIR" init -input=false >/dev/null
+  log "init infra-state (output in $LOG_FILE)..."
+  quiet terraform -chdir="$STATE_TF_DIR" init -input=false
   terraform -chdir="$STATE_TF_DIR" apply -auto-approve -input=false
+  log "state bucket ready: $STATE_BUCKET"
 }
 
 # Point a root at the Spaces backend and init. -force-copy migrates any
@@ -200,8 +240,9 @@ backend_init() {
 bucket    = "$STATE_BUCKET"
 endpoints = { s3 = "$STATE_ENDPOINT" }
 EOF
-  log "backend: init $(basename "$1") against $STATE_BUCKET (silent; may download providers)..."
-  terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl >/dev/null
+  log "backend: init $(basename "$1") against $STATE_BUCKET (may download providers; output in $LOG_FILE)..."
+  quiet terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl
+  log "backend: $(basename "$1") initialized"
 }
 
 # Provision persistent infra. Guards project_name immutability against TF state.
@@ -241,7 +282,8 @@ ensure_registry() {
   else
     REG="${DOCR_REGISTRY:-$PROJECT_NAME}"
     log "registry: creating '$REG' (starter tier)"
-    doctl registry create "$REG" --subscription-tier starter >/dev/null
+    quiet doctl registry create "$REG" --subscription-tier starter
+    log "registry: created '$REG'"
   fi
 }
 
@@ -284,9 +326,10 @@ wait_droplet_ready() {
     # the binary landed, and cloud-init may still be mid-install at that point.
     if ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
          root@"$APP_IP" docker info >/dev/null 2>&1; then
-      log "droplet ready."
+      log "droplet ready (Docker daemon answering)."
       return 0
     fi
+    log "  not ready yet (attempt $i/30, ~$((i * 10))s) — cloud-init still installing Docker"
     sleep 10
   done
   fail "droplet not Docker-ready after ~5min — check cloud-init (cloud-init status --long)"
@@ -296,12 +339,14 @@ wait_droplet_ready() {
 # the DO API), so migrations would die with insufficient_privilege. Grant via
 # the droplet — the only host the DB firewall trusts. Idempotent.
 grant_db_schema() {
-  log "granting schema public privileges to DB user '$PROJECT_NAME'"
+  log "granting schema public privileges to DB user '$PROJECT_NAME' (via droplet)"
   local admin_url
-  admin_url="$(terraform -chdir="$PERS_DIR" output -raw database_admin_url)"
-  ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new root@"$APP_IP" \
+  admin_url="$(terraform -chdir="$PERS_DIR" output -raw database_admin_url)" \
+    || fail "could not read database_admin_url output — re-run terraform apply in $PERS_DIR"
+  quiet ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new root@"$APP_IP" \
     "docker run --rm postgres:17-alpine psql '$admin_url' -v ON_ERROR_STOP=1 \
-       -c 'GRANT ALL ON SCHEMA public TO \"$PROJECT_NAME\";'" >/dev/null
+       -c 'GRANT ALL ON SCHEMA public TO \"$PROJECT_NAME\";'"
+  log "schema grant applied"
 }
 
 # Pin the app's Dockerfile ARGs (CI reads the same ARGs) to the local Elixir/OTP
@@ -488,26 +533,31 @@ confirm_live() {
            *)
              diagnose "not ready yet (CI still running after ${timeout}s — NOT a failure). Keep watching: gh run watch" ;;
          esac
+    # heartbeat every 60s so a long CI build never reads as a hang
+    if [ $((waited % 60)) -eq 0 ] && [ "$waited" -gt 0 ]; then
+      log "  still waiting (${waited}s) — CI state: ${state:-no run registered yet}"
+    fi
     sleep 10; waited=$((waited + 10))
   done
 }
 
 provision() {
-  preflight
-  ensure_app
-  parse_meta
-  ensure_repo
-  ensure_state_bucket
-  tf_persistent
-  ensure_registry
-  detect_cidr
-  tf_app
-  wait_droplet_ready
-  grant_db_schema
-  prep_app
-  seed_github
-  commit_push
-  confirm_live
+  log "transcript of this run: $LOG_FILE"
+  step "preflight checks";                          preflight
+  step "ensure app exists (generate if missing)";   ensure_app
+  step "parse app metadata from mix.exs";           parse_meta
+  step "GitHub repo + initial commit";              ensure_repo
+  step "Terraform state bucket (infra-state)";      ensure_state_bucket
+  step "persistent infra: VPC/DB/DNS (infra-persistent)"; tf_persistent
+  step "container registry";                        ensure_registry
+  step "detect SSH allow CIDR";                     detect_cidr
+  step "app infra: droplet/firewall (infra-app)";   tf_app
+  step "wait for droplet Docker daemon";            wait_droplet_ready
+  step "grant DB schema privileges";                grant_db_schema
+  step "prepare app: release/TLS/pipeline files";   prep_app
+  step "seed GitHub secrets + variables";           seed_github
+  step "commit + push pipeline (first deploy)";     commit_push
+  step "poll until live";                           confirm_live
   log "done. app live at https://$DOMAIN | droplet: $APP_IP"
 }
 

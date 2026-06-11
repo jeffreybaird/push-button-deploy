@@ -27,10 +27,14 @@
 # Portable: BSD/macOS bash, grep, sed.
 set -euo pipefail
 
+# Never die silently: name the failing line/command, and stamp failed exits.
+set -E
+trap 'printf "\033[31mteardown: unexpected failure at line %s (running: %s)\033[0m\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
+
 # ---- helpers (mirror bootstrap.sh) ---------------------------------------------
 fail() { printf 'teardown: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
-log()  { printf '\033[31m==>\033[0m %s\n' "$*"; }
+log()  { printf '\033[31m==>\033[0m [%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -133,7 +137,9 @@ EOF
 # merge per-attribute, so only the lifecycle flag changes. Removed via trap.
 # Appends, so several guards in the same root share one override file.
 OVERRIDES=""
-trap 'for f in $OVERRIDES; do rm -f "$f"; done' EXIT
+trap 'rc=$?; for f in $OVERRIDES; do rm -f "$f"; done
+      [ "$rc" -ne 0 ] && printf "\033[31m==> teardown FAILED (exit %s) — fix and re-run; already-destroyed resources are skipped\033[0m\n" "$rc" >&2
+      exit "$rc"' EXIT
 lift_guard() { # $1 dir, $2 resource type, $3 resource name, $4 extra attrs (optional)
   local f="$1/teardown_override.tf"
   # First touch this run: clear any leftover from an earlier crashed run.
