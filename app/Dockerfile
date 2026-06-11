@@ -45,9 +45,12 @@ COPY priv priv
 COPY lib lib
 COPY assets assets
 
+# Compile BEFORE building assets: Phoenix 1.8 colocated hooks are extracted
+# into _build during compile, and esbuild resolves them from there.
+RUN mix compile
+
 # Build + digest static assets.
 RUN mix assets.deploy
-RUN mix compile
 
 COPY config/runtime.exs config/
 COPY rel rel
