@@ -176,6 +176,16 @@ ensure_state_bucket() {
 # Point a root at the Spaces backend and init. -force-copy migrates any
 # existing local state into the bucket on first contact (idempotent after).
 backend_init() {
+  # A cached backend from a previous project may point at a bucket that no
+  # longer exists (torn down) — init would try to migrate state OUT of it and
+  # die on the 404. If the cached bucket differs from the current one, drop
+  # the cache and start clean.
+  local cached
+  cached="$(sed -nE 's/.*"bucket": ?"([^"]+)".*/\1/p' "$1/.terraform/terraform.tfstate" 2>/dev/null | head -1)"
+  if [ -n "$cached" ] && [ "$cached" != "$STATE_BUCKET" ]; then
+    log "backend: cached bucket '$cached' != '$STATE_BUCKET' — reinitializing $(basename "$1")"
+    rm -rf "$1/.terraform"
+  fi
   cat > "$1/backend.hcl" <<EOF
 bucket    = "$STATE_BUCKET"
 endpoints = { s3 = "$STATE_ENDPOINT" }

@@ -189,5 +189,10 @@ if [ "$DELETE_REPO" = 1 ]; then
 fi
 
 # ---- local leftovers -------------------------------------------------------------------
+# Drop the backend pointers AND the cached backend configs — a later bootstrap
+# with a new project would otherwise try to migrate state out of the (now
+# deleted) bucket and die. infra-state's local state is empty post-destroy.
 rm -f "$PERS_DIR/backend.hcl" "$APP_TF_DIR/backend.hcl"
+rm -rf "$PERS_DIR/.terraform" "$APP_TF_DIR/.terraform" "$STATE_TF_DIR/.terraform"
+rm -f "$STATE_TF_DIR/terraform.tfstate" "$STATE_TF_DIR/terraform.tfstate.backup"
 log "done. NOT touched: DO registry, DO SSH key, DNSimple zone, local app dir$( [ "$DELETE_REPO" = 1 ] || printf ', GitHub repo (use --delete-repo)' )"
