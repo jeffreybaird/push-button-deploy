@@ -15,22 +15,34 @@ packages are especially volatile, so exact-pin them too (e.g. `== 0.3.0`).
 
 ## Platform
 
-MyApp can deploy to any hosting provider that supports Elixir releases. Common
-choices include Fly.io, Render, Gigalixir, or a self-managed server. Configuration
-for your chosen host typically lives in a root-level config file (e.g. `fly.toml`
-for Fly.io, a `render.yaml` for Render, etc.).
+MyApp deploys to a **single Ubuntu droplet on DigitalOcean** running the release
+as a Docker Compose stack. The pieces, all provisioned by the bootstrap:
 
-### Why a PaaS
+| Concern | Implementation |
+|---|---|
+| Compute | One Ubuntu droplet running Docker Compose (cloud-init installs Docker only — no secrets) |
+| TLS | **Caddy** terminates TLS, auto-issues + renews a Let's Encrypt cert (HTTP-01/TLS-ALPN), reverse-proxies to the app container |
+| Database | DigitalOcean Managed Postgres, **private-VPC only**, TLS **verified** against the cluster CA (`verify_peer`) |
+| DNS | An A record at DNSimple → a **reserved IP** that survives droplet recreation |
+| Images | Built on GitHub's amd64 runners, pushed to **DO Container Registry (DOCR)**, **SHA-pinned** |
+| Releases | An `app_blue`/`app_green` pair behind Caddy — exactly one live at a time (zero-downtime swap) |
 
-- Managed Postgres with automatic failover
-- Native Elixir clustering support (e.g. DNS-based node discovery via `dns_cluster` on Fly.io)
-- Low-latency edge routing benefits LiveView WebSocket connections
-- Simple multi-region deployment
+There is **no `fly.toml`/`render.yaml`-style host config file**. The runtime shape
+lives in `deploy/compose.yaml` (the blue/green + Caddy stack) and `deploy/Caddyfile`
+(TLS + reverse proxy), both shipped to the droplet at deploy time. Per-deploy values
+(image ref, domain, secrets) arrive in a `.env` written over SSH — never committed.
 
-> **Fly.io note:** Fly.io supports Erlang clustering via its internal DNS.
-> Instances discover each other via `<app-name>.internal`. Other providers
-> may require alternative clustering strategies (e.g. libcluster with an
-> Epmd or Kubernetes strategy).
+### Why this setup
+
+- Cheap and predictable: one droplet + one managed DB cluster, no per-request edge pricing.
+- Caddy gives automatic HTTPS with zero cert plumbing.
+- Blue/green on a single host gives zero-downtime deploys without an orchestrator.
+- The DB lives in a managed cluster, so destroying/recreating the droplet never risks data.
+
+> **Single-node by design.** This is one droplet — no Erlang clustering. `dns_cluster`
+> is wired in the supervision tree but resolves to `:ignore` (no `DNS_CLUSTER_QUERY`
+> set). If you later run multiple nodes, see *Clustering* below — but most small apps
+> never need it.
 
 ---
 
@@ -38,19 +50,29 @@ for Fly.io, a `render.yaml` for Render, etc.).
 
 ### Never commit secrets
 
-All production secrets must be injected at runtime via your host's secret
-management (e.g. `fly secrets set KEY=VALUE` on Fly.io, environment variables
-on Render/Gigalixir). They must never appear in source code, `config/` files,
-or be logged.
+Production secrets live as **GitHub Actions repository secrets**. The deploy
+workflow writes them into a **mode-600 `.env`** on the droplet over SSH at deploy
+time, and Docker Compose loads that file into the container (`env_file: .env`).
+Nothing secret is ever in cloud-init, droplet metadata, the image, source code,
+`config/` files, or logs. `runtime.exs` reads them at boot.
+
+The public DB cluster CA travels the same path but is **not** secret — it ships as
+`db-ca.pem` (mode 644) next to `compose.yaml` and is mounted read-only so the app
+can verify the Postgres server cert.
 
 ### Example environment variables
 
+These reach the container via `.env` (secrets) or the compose `environment:` block
+(non-secret runtime config):
+
 | Variable                          | Purpose                                                        |
 |-----------------------------------|----------------------------------------------------------------|
-| `DATABASE_URL`                    | Postgres connection string                                     |
+| `DATABASE_URL`                    | Postgres connection string (private-VPC host; a TF sensitive output) |
 | `SECRET_KEY_BASE`                 | Phoenix secret key                                             |
-| `PHX_HOST`                        | Primary hostname                                               |
-| `RELEASE_COOKIE`                  | Erlang distribution cookie (required for clustering)           |
+| `PHX_HOST` / `DOMAIN`             | Public FQDN — URL host + the cert/Caddy site name             |
+| `PHX_SERVER`                      | `"true"` so the endpoint actually serves (set in compose)     |
+| `PORT`                            | App listen port (`4000`, internal-only; Caddy proxies to it)  |
+| `DATABASE_CA_FILE`                | Path to the mounted cluster CA (`/app/db-ca.pem`) — triggers `verify_peer` |
 | `VIDEO_PROVIDER_TOKEN_ID`         | API credential for your media/video provider                   |
 | `VIDEO_PROVIDER_TOKEN_SECRET`     | API credential for your media/video provider                   |
 | `VIDEO_PROVIDER_WEBHOOK_SECRET`   | Webhook signing secret for your media/video provider           |
@@ -102,9 +124,15 @@ treat it as the reference shape, not something to author from scratch.
 
 ### The Release module is required
 
-`MyApp.Release.migrate/0` must exist and work correctly. It is called by
-the host's deployment process (or your own deploy script) before the service
-starts accepting traffic.
+`MyApp.Release.migrate/0` must exist and work correctly. The deploy workflow runs
+it as a **one-off container before the blue/green swap** — a gate, so traffic never
+hits a half-migrated DB:
+
+```shell
+docker compose run --rm migrate bin/my_app eval 'MyApp.Release.migrate()'
+```
+
+A non-zero exit fails the deploy and the old release keeps serving.
 
 ```elixir
 defmodule MyApp.Release do
@@ -174,38 +202,63 @@ The full bootstrap (deps list, `start/2` wiring, exporter config) lives in
 
 ---
 
-## Host Configuration (Fly.io example)
+## Host Configuration (the droplet stack)
 
-The patterns below use Fly.io as a concrete example. Adapt env var names and
-deployment commands to your chosen host.
+Runtime config lives in two files shipped to the droplet at deploy time, plus a
+per-deploy `.env`. No PaaS config file.
 
-### `fly.toml` essentials
+### `deploy/compose.yaml` essentials
 
-```toml
-[env]
-  PHX_HOST = "myapp.com"
-  ECTO_IPV6 = "true"
-  ERL_AFLAGS = "-proto_dist inet6_tcp"
-  DNS_CLUSTER_QUERY = "myapp.internal"
-  RELEASE_DISTRIBUTION = "name"
+The blue/green pair share one definition. Non-secret runtime config is set in the
+`environment:` block; secrets come from `.env`:
 
-[deploy]
-  release_command = "/app/bin/my_app eval MyApp.Release.migrate"
+```yaml
+x-app: &app
+  image: ${IMAGE}              # SHA-pinned, from .env
+  restart: unless-stopped
+  env_file: [.env]             # DATABASE_URL, SECRET_KEY_BASE, ...
+  environment:
+    PHX_SERVER: "true"         # endpoint serves only when set (runtime.exs)
+    PHX_HOST: ${DOMAIN}        # URL host + Endpoint :url
+    PORT: "4000"               # internal only — never published to the host
+    DATABASE_CA_FILE: /app/db-ca.pem   # presence flips the Repo to verify_peer
+  volumes:
+    - ./db-ca.pem:/app/db-ca.pem:ro
+  expose: ["4000"]             # Caddy reaches it by service name on the compose net
+
+services:
+  app_blue: *app
+  app_green: *app
+  migrate: { <<: *app, restart: "no", profiles: ["tools"] }   # one-off migration runner
+  caddy: # ports 80/443, mounts ./Caddyfile, persists certs in a volume
 ```
 
-> **These vars are host-specific rationale, not universal.** Fly.io's private
-> network (`*.internal`) is IPv6-only, so `ECTO_IPV6 = "true"` makes Ecto
-> connect over IPv6 and `ERL_AFLAGS = "-proto_dist inet6_tcp"` makes Erlang
-> distribution (clustering) speak IPv6. On an IPv4-only host, drop both. Either
-> way, each node needs a **unique** `RELEASE_NODE` (Fly derives it per-machine;
-> set it yourself on hosts that don't) — duplicate node names break clustering.
->
-> Source: [Fly clustering basics](https://fly.io/docs/elixir/the-basics/clustering/).
+> **No `ECTO_IPV6`/`ERL_AFLAGS` here.** Those exist for IPv6-only private networks
+> (a Fly-ism). This setup talks to Postgres over the droplet's **IPv4 private VPC**
+> and runs a **single node**, so there's no IPv6 distribution and no `RELEASE_NODE`
+> to make unique. Don't copy those vars in.
 
-### Clustering (optional)
+### `deploy/Caddyfile` essentials
 
-Erlang clustering via `dns_cluster` works natively on Fly.io. Enable it in
-your application supervision tree:
+Naming the site by its public domain triggers Caddy's automatic HTTPS (Let's
+Encrypt over HTTP-01/TLS-ALPN). Both colors are listed; a dial to the stopped
+color fails fast and Caddy retries the live one, holding requests through the swap:
+
+```caddyfile
+{$DOMAIN} {
+	reverse_proxy app_blue:4000 app_green:4000 {
+		lb_try_duration 30s
+		lb_try_interval 250ms
+		fail_duration 10s
+	}
+}
+```
+
+### Clustering (optional — not used here)
+
+This is a single droplet, so clustering is off: `DNSCluster` is in the tree but
+its query resolves to `:ignore`. If you later scale to multiple nodes behind DNS,
+re-enable it:
 
 ```elixir
 # In application.ex
@@ -219,9 +272,9 @@ children = [
 **Decision tree — start simple, escalate only when DNS isn't enough:**
 
 1. **Default: `dns_cluster`.** It ships with Phoenix 1.8 and resolves a query
-   (`DNS_CLUSTER_QUERY`, e.g. `myapp.internal`) to peer IPs, connecting to each.
-   This covers any host that exposes peer nodes via DNS — Fly.io, Render private
-   networking, Kubernetes headless services, etc. Reach for nothing else first.
+   (`DNS_CLUSTER_QUERY`) to peer IPs, connecting to each. Covers any host that
+   exposes peer nodes via DNS (Kubernetes headless services, multi-droplet behind
+   a private DNS name, etc.). Reach for nothing else first.
 2. **Escalate to `libcluster`** only when DNS discovery is insufficient or you
    need a topology DNS can't express:
    - **`Cluster.Strategy.Kubernetes`** — query the k8s API directly (pods not
@@ -229,54 +282,47 @@ children = [
    - **`Cluster.Strategy.Gossip`** — UDP multicast on networks without stable DNS.
    - **`Cluster.Strategy.Epmd`** — a fixed, statically-known node list.
 
-> Sources: [BEAM clustering made easy](https://fly.io/phoenix-files/beam-clustering-made-easy/),
-> [Fly clustering](https://fly.io/docs/elixir/the-basics/clustering/).
+> Source: [BEAM clustering made easy](https://fly.io/phoenix-files/beam-clustering-made-easy/).
 
 ### Health checks
 
-Health checks should hit a lightweight, dedicated `/health` endpoint that
-confirms the app is running and the database is reachable. **Use `/health`, not
-`/`** — `/` is often a LiveView or a heavy page, and a LiveView route returns a
-WebSocket-upgrade-oriented response that is a poor liveness signal. Never point a
-health check at a LiveView route.
+The deploy's correctness hinges on a **container healthcheck**, not a platform
+health probe.
 
-```elixir
-# A simple plug-based health check
-get "/health", HealthController, :check
-```
+**How the swap uses health here.** The new color's container has a Docker
+`healthcheck`; the deploy runs `docker compose up -d --wait <new color>`, which
+**blocks until that healthcheck passes** before `swap.sh` stops the old color. If
+it never turns healthy the deploy fails and the old color keeps serving — that's
+the zero-downtime guarantee. So get the container healthcheck right:
 
-Two deploy-time pitfalls cause zombie machines (the platform kills a node that
-was actually healthy, then restarts it in a loop):
+- **`start_period` must exceed BEAM startup time.** The BEAM, Ecto pool, and
+  endpoint take a few seconds to come up; failures during `start_period` don't
+  count against `retries`. The stack ships `start_period: 10s` — raise it for big
+  release boots.
+- **The shipped check is a bare liveness probe** (the endpoint answers HTTP at
+  all, any status — apps often redirect `/`), via `bash`+`/dev/tcp` because the
+  slim runtime image has no curl/wget:
 
-- **`grace_period` must exceed BEAM startup time.** The BEAM, Ecto pool, and
-  endpoint take a few seconds to come up. If the platform starts probing before
-  the app is listening, the first checks fail and the machine is killed. Set
-  `grace_period` generously (≥ 10s; longer for big release boots).
-- **Exempt `/health` from `force_ssl` HSTS redirects.** Internal health probes
-  hit the node over plain HTTP on the private network. If `force_ssl` 301-redirects
-  `/health` to `https://`, the probe sees a 3xx (not 2xx) and fails. Scope the
-  redirect so `/health` is excluded:
-
-  ```elixir
-  # config/runtime.exs — exclude the health path from the HSTS/redirect plug
-  config :my_app, MyAppWeb.Endpoint,
-    force_ssl: [rewrite_on: [:x_forwarded_proto], exclude: ["/health"]]
+  ```yaml
+  # deploy/compose.yaml
+  healthcheck:
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4000 && printf 'HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && grep -q 'HTTP/' <&3"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 10s
   ```
 
-A concrete Fly.io check block (adapt field values to your host):
+If you want a **deeper** readiness signal (DB reachable, not just listening), add a
+dedicated `/health` endpoint and point the check at it. **Use `/health`, not `/`**
+— `/` is often a heavy page or a LiveView (a poor liveness signal). If you do, also
+exempt `/health` from `force_ssl` HSTS redirects, or the probe sees a 3xx and fails:
 
-```toml
-# fly.toml
-[[http_service.checks]]
-  grace_period = "10s"   # wait for the BEAM/endpoint to boot before probing
-  interval     = "30s"   # time between checks
-  timeout      = "5s"    # max time a check may take before it's failing
-  method       = "GET"
-  path         = "/health"
+```elixir
+# config/runtime.exs — exclude the health path from the HSTS/redirect plug
+config :my_app, MyAppWeb.Endpoint,
+  force_ssl: [rewrite_on: [:x_forwarded_proto], exclude: ["/health"]]
 ```
-
-> Sources: [Fly health checks](https://fly.io/docs/reference/health-checks/),
-> [zombie machines from a failing Phoenix health check](https://community.fly.io/t/custom-health-check-on-phoenix-fails-and-creates-zombie-machines/18932).
 
 ---
 
@@ -304,69 +350,77 @@ than inventing your own:
 
 ### Workflow structure
 
-```yaml
-# .github/workflows/deploy.yml
-name: CI & Deploy
+The shipped `.github/workflows/deploy.yml` is a **three-job pipeline** — every push
+to `main` runs it, and the first push (from the bootstrap) is just the first run:
 
-on:
-  push:
-    branches: [main]
+```yaml
+# .github/workflows/deploy.yml  (shape — see the real file for full steps)
+name: deploy
+on: { push: { branches: [main] } }
+concurrency: { group: deploy-${{ github.ref }}, cancel-in-progress: false }  # never overlap
+env: { REGISTRY: registry.digitalocean.com }
 
 jobs:
+  # 1. GATE — red tests block everything downstream.
   test:
     runs-on: ubuntu-latest
     services:
-      postgres:
-        image: postgres:16
-        # ...
+      postgres: { image: postgres:17-alpine, ... }   # mix test runs against this
     steps:
-      - uses: actions/checkout@v4
-      - uses: erlef/setup-beam@v1
+      - uses: actions/checkout@v6
+      - uses: erlef/setup-beam@v1          # Elixir/OTP pins parsed from the Dockerfile ARGs
       - run: mix deps.get
-      - run: mix compile --warnings-as-errors
-      - run: mix format --check-formatted
-      - run: mix credo --strict
-      - run: mix dialyzer
-      - run: mix deps.audit          # mix_audit — fails on deps with known CVEs
-      - run: mix hex.audit           # built-in Hex — fails on retired packages
-      - run: mix sobelow --exit      # static security scan; --exit fails on findings
-      - run: npx tsc --noEmit --project assets/tsconfig.json
       - run: mix test
-      - run: mix assets.deploy
 
-  deploy:
+  # 2. BUILD — native amd64 image (no QEMU), SHA-pinned, pushed to DOCR.
+  build:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
-      # Example: Fly.io deploy step
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      # For other hosts, replace the two steps above with your host's deploy action or CLI
+      - uses: digitalocean/action-doctl@v2     # token: secrets.DIGITALOCEAN_ACCESS_TOKEN
+      - run: doctl registry login --expiry-seconds 1200
+      - uses: docker/build-push-action@v7      # tags: <registry>/<DOCR_REGISTRY>/<app>:${{ github.sha }}
+
+  # 3. DEPLOY — deliver over SSH, migrate (gated), blue/green swap.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Port 22 is closed to the world; punch a /32 hole for THIS runner...
+      - run: doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} --inbound-rules "...address:${runner_ip}/32"
+      # write a mode-600 .env (IMAGE, DOMAIN, DATABASE_URL, SECRET_KEY_BASE) + db-ca.pem
+      # scp deploy/{compose.yaml,Caddyfile,swap.sh} + .env + db-ca.pem to root@droplet
+      - run: ssh root@$HOST "cd /root && docker compose pull"
+      - run: ssh root@$HOST "docker compose run --rm migrate bin/<app> eval '<Module>.Release.migrate()'"  # gate
+      - run: ssh root@$HOST "bash /root/swap.sh"          # health-checked blue/green swap
+      - if: always()                                       # ...revoked no matter how the deploy ended
+        run: doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} --inbound-rules "...address:${RUNNER_IP}/32"
 ```
+
+Rollback is a separate `rollback.yml`: `gh workflow run rollback.yml -f tag=<prev sha>`
+re-points `.env` at a prior SHA-pinned image and re-swaps — **no rebuild**.
+
+Required repo config (seeded by the bootstrap):
+- secrets: `DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, `SECRET_KEY_BASE`
+- variables: `DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`
 
 ### Rules
 
-- The `deploy` job must declare `needs: test` — deploys never run if tests fail
-- `mix compile --warnings-as-errors` treats warnings as failures
-- `mix credo --strict` enforces code quality
-- Security audits gate alongside tests/format/credo/dialyzer:
-  `mix deps.audit` (the `mix_audit` package — scans the lockfile for dependencies
-  with known CVEs), `mix hex.audit` (built-in Hex command — flags retired/deprecated
-  packages), and `mix sobelow --exit` (static analysis for common Phoenix security
-  flaws; `--exit` makes findings fail the build). These are distinct tools — keep
-  all three. Sources:
-  [Fly Elixir CI/CD](https://fly.io/docs/elixir/advanced-guides/github-actions-elixir-ci-cd/),
-  [Sobelow](https://github.com/nccgroup/sobelow).
-- `npx tsc --noEmit` type-checks TypeScript hooks without emitting files
-- `mix assets.deploy` compiles assets in CI, not on the server
-- Migrations run via the host's release command hook, before the new version
-  starts serving traffic
-- On Fly.io, use `--remote-only` to use Fly's remote builder and avoid
-  architecture mismatches (especially on Apple Silicon)
+- The `build` job declares `needs: test` and `deploy` declares `needs: build` —
+  **a red test blocks the build, which blocks the deploy.** Non-negotiable.
+- **The migration step is a gate**: it runs the new image as a one-off *before* the
+  swap. A failed migration fails the job, the swap is skipped, and the old release
+  keeps serving — a bad migration can never front a half-updated DB.
+- **Images are SHA-pinned** (`:${{ github.sha }}`), built on **native amd64 runners**
+  — no QEMU, no Apple-Silicon cross-build architecture mismatch.
+- **The SSH hole-punch is revoked in an `always()` step** — even on failure. The
+  `deploy` concurrency group (`cancel-in-progress: false`) means at most one hole
+  exists at a time and an in-flight deploy is never interrupted.
+- **Recommended additions to the `test` job** (not in the generated baseline — add
+  them as the app matures): `mix compile --warnings-as-errors`, `mix format --check-formatted`,
+  `mix credo --strict`, `mix dialyzer`, `mix deps.audit` (lockfile CVEs), `mix hex.audit`
+  (retired packages), `mix sobelow --exit` (Phoenix security scan), `npx tsc --noEmit`
+  (TS hooks), `mix assets.deploy`. Source: [Sobelow](https://github.com/nccgroup/sobelow).
 
 ---
 
@@ -382,13 +436,14 @@ jobs:
 
 - **No `mix` commands on the server** — use release commands only
 - **No secrets in `config/config.exs` or `config/prod.exs`** — runtime only
-- **No deploys that skip tests** — the `needs: test` gate is not optional
+- **No deploys that skip tests** — the `test → build → deploy` gate chain is not optional
 - **No direct pushes that bypass the workflow** — always push to `main` and
-  let the workflow run
-- **No hardcoded hostnames** — `PHX_HOST` comes from the environment
-- **No ignoring host-specific network settings** — `ECTO_IPV6` and `ERL_AFLAGS`
-  exist specifically for Fly.io's IPv6 private network; required there, dropped on
-  IPv4-only hosts. Don't copy them blindly, and don't omit a unique `RELEASE_NODE`
-  per node
-- **No health check on `/` or a LiveView route, and no `force_ssl` redirect on
-  `/health`** — use a dedicated `/health` endpoint with an adequate `grace_period`
+  let the workflow run; never `scp`/`ssh` a build onto the droplet by hand
+- **No hardcoded hostnames** — `PHX_HOST`/`DOMAIN` come from the environment
+- **No `ECTO_IPV6`/`ERL_AFLAGS`/`RELEASE_NODE`** — those are for IPv6-only private
+  networks and multi-node clustering. This is a single node on an IPv4 private VPC;
+  copying them in just breaks things
+- **No committing secrets or the `.env`** — secrets are GitHub Actions secrets,
+  delivered to a mode-600 `.env` over SSH at deploy time
+- **No `force_ssl` redirect on the health path** if you add a `/health` endpoint,
+  and never point a health check at `/` or a LiveView route

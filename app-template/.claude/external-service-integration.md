@@ -404,8 +404,10 @@ config :my_app, :media_provider,
   webhook_secret: System.fetch_env!("MEDIA_WEBHOOK_SECRET")
 ```
 
-Store secrets in your deployment platform's secret store (e.g. Fly secrets,
-GitHub Actions secrets). Never in source code.
+Store secrets as GitHub Actions repository secrets. The deploy workflow writes
+them into a mode-600 `.env` on the droplet over SSH at deploy time (never in the
+image, cloud-init, or droplet metadata); `runtime.exs` reads them. Never in source
+code.
 
 ---
 

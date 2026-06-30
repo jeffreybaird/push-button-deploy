@@ -214,7 +214,7 @@ end
 | `BILLING_SECRET_KEY`      | Yes      | Payment provider API secret key  |
 | `BILLING_WEBHOOK_SECRET`  | Yes      | Webhook signature verification   |
 
-Set via your deployment secrets manager (e.g. Fly secrets, AWS Secrets Manager). Never in source code or committed config files. Read at runtime only in `config/runtime.exs`.
+Set as GitHub Actions repository secrets; the deploy workflow writes them into a mode-600 `.env` on the droplet over SSH at deploy time. Never in source code or committed config files. Read at runtime only in `config/runtime.exs`.
 
 ```elixir
 # config/runtime.exs

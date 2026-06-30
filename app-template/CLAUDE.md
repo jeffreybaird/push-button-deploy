@@ -23,7 +23,7 @@ bounded paginated lists may stay in assigns), **colocated hooks** + **keyed comp
 - `.claude/observability.md` — OpenTelemetry spans, metrics, structured logging
 - `.claude/scalability.md` — write buffers, caching, connection management, PubSub, rate limiting
 - `.claude/typescript-hooks.md` — LiveView JS hook conventions, file structure, events
-- `.claude/deployment.md` — releases, CI/CD, secrets, migrations (host-agnostic, Fly.io as example)
+- `.claude/deployment.md` — releases, CI/CD, secrets, migrations (DigitalOcean droplet + Docker Compose + Caddy, blue/green via GitHub Actions)
 - `.claude/theming.md` — CSS-variable tokens (universal) + optional per-tenant theme loading
 - `.claude/design-system.md` — **template**: document your visual design tokens and tone
 - `.claude/frontend-map.md` — **template**: map your routes, LiveViews, components, hooks
