@@ -102,6 +102,7 @@ Optional (defaults in parentheses):
 
 | Variable | Purpose |
 |---|---|
+| `DATABASE_BACKEND` | `postgres` (default) or `sqlite`. See [Database backend](#database-backend). Chosen once per project at first apply; don't flip it on an existing deploy. |
 | `PROJECT_NAME` | infra naming: DB, VPC, tag (app name). **Immutable after first apply** — renaming would force DB replacement; the script guards this. |
 | `REGION` | DO region slug (`nyc3`) |
 | `DNS_RECORD` | subdomain inside `DNS_ZONE` (app name); `@` for the apex |
@@ -110,6 +111,30 @@ Optional (defaults in parentheses):
 | `STATE_BUCKET` | Spaces bucket for TF state (`<PROJECT_NAME>-tfstate`) — names are globally unique per region; override on collision |
 | `SPACES_REGION` | bucket region (`REGION`) — must be a region that offers Spaces |
 | `LIVE_TIMEOUT_SECS` | HTTPS liveness poll timeout (`900`) |
+
+## Database backend
+
+`DATABASE_BACKEND` picks where the app's data lives. Set it once, before the first
+`./bootstrap.sh`, in `.env` or the environment.
+
+| | `postgres` (default) | `sqlite` |
+|---|---|---|
+| Where | DigitalOcean Managed Postgres, private-VPC, TLS-verified | A SQLite file on the **droplet's local disk** (a named Docker volume) |
+| Backups | DO's managed-DB backups | **Litestream** streams the WAL to DO Spaces continuously |
+| Recreate the droplet | data is untouched (it lives in the managed cluster) | a one-shot `litestream restore` on boot pulls the latest replica back |
+| Cost | + ~$15/mo for the cluster | $0 beyond the droplet + a few cents of Spaces storage |
+| App generation | `mix phx.new` default (Postgrex) | `mix phx.new --database sqlite3` |
+
+On `sqlite`, bootstrap provisions **no** managed Postgres (the `database.tf`
+resources are gated to zero), skips the TLS-config patch and the schema grant,
+and seeds the app repo with Litestream config + the Spaces keypair instead of a
+`DATABASE_URL`/CA. The Litestream replica target reuses the Terraform state
+bucket under a `litestream/<project>/` prefix — no extra bucket to manage.
+
+Tradeoff you accept on `sqlite`: a single droplet, no read replicas, and a small
+window of un-replicated writes if the droplet dies between WAL pushes. For most
+small apps that's fine and a lot cheaper. The flag only affects **newly
+generated** apps — it does not convert an existing Postgres app.
 
 ## Usage
 

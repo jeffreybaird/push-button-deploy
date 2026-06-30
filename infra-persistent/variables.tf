@@ -21,6 +21,17 @@ variable "vpc_ip_range" {
   default     = null
 }
 
+variable "database_backend" {
+  description = "Which database the app uses: 'postgres' provisions a managed Postgres cluster here; 'sqlite' provisions no DB at all (the app keeps a SQLite file on the droplet's local disk, replicated to Spaces by Litestream — see deploy/compose.sqlite.yaml)."
+  type        = string
+  default     = "postgres"
+
+  validation {
+    condition     = contains(["postgres", "sqlite"], var.database_backend)
+    error_message = "database_backend must be 'postgres' or 'sqlite'."
+  }
+}
+
 variable "pg_version" {
   description = "Managed PostgreSQL major version."
   type        = string

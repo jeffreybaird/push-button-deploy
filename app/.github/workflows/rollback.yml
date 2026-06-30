@@ -82,7 +82,9 @@ jobs:
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
       # Identical .env contract to deploy.yml, IMAGE pinned to the chosen tag.
-      - name: Write .env (pinned image)
+      # DB-specific lines branch on vars.DATABASE_BACKEND (empty = postgres).
+      - name: Write .env (Postgres, pinned image)
+        if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
         run: |
           umask 077
           cat > .env <<EOF
@@ -92,15 +94,41 @@ jobs:
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           EOF
 
+      - name: Write .env (SQLite, pinned image)
+        if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
+        run: |
+          umask 077
+          cat > .env <<EOF
+          IMAGE=${{ steps.meta.outputs.image }}:${TAG}
+          DOMAIN=${{ vars.DOMAIN }}
+          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
+          DATABASE_PATH=${{ vars.DATABASE_PATH }}
+          LITESTREAM_ACCESS_KEY_ID=${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
+          LITESTREAM_SECRET_ACCESS_KEY=${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
+          BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
+          BACKUP_ENDPOINT=${{ vars.BACKUP_ENDPOINT }}
+          BACKUP_REGION=${{ vars.BACKUP_REGION }}
+          BACKUP_PATH=${{ vars.BACKUP_PATH }}
+          EOF
+
       - name: Write db-ca.pem
+        if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
         run: |
           printf '%s\n' "${{ secrets.DATABASE_CA_CERT }}" > db-ca.pem
           chmod 644 db-ca.pem
 
-      - name: Copy compose, Caddyfile, swap.sh, db-ca.pem, .env to droplet
+      - name: Copy stack files + .env to droplet (Postgres)
+        if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
             deploy/compose.yaml deploy/Caddyfile deploy/swap.sh db-ca.pem .env \
+            root@"$HOST":/root/
+
+      - name: Copy stack files + .env to droplet (SQLite)
+        if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh deploy/litestream.yml .env \
             root@"$HOST":/root/
 
       # No migration step: the pinned image is older than (or equal to) the

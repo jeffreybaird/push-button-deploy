@@ -1,0 +1,17 @@
+# Litestream config — continuous SQLite replication to DO Spaces (S3-compatible).
+# Shipped next to compose.yaml on the SQLite backend; read by both the
+# `litestream replicate` sidecar and the boot-time `litestream restore`.
+#
+# Litestream expands ${...} from the environment (env_file: .env in compose).
+# The Spaces keypair is read from the native LITESTREAM_ACCESS_KEY_ID /
+# LITESTREAM_SECRET_ACCESS_KEY env vars, so no credentials live in this file.
+dbs:
+  - path: ${DATABASE_PATH}
+    replicas:
+      - type: s3
+        bucket: ${BACKUP_BUCKET}
+        path: ${BACKUP_PATH}
+        endpoint: ${BACKUP_ENDPOINT}
+        region: ${BACKUP_REGION}
+        # DO Spaces is addressed path-style against the regional endpoint.
+        force-path-style: true

@@ -9,24 +9,31 @@ output "vpc_id" {
 }
 
 # ecto:// URL over the PRIVATE host (VPC-internal). Password is urlencoded since
-# DO-generated passwords may contain URL-reserved characters.
+# DO-generated passwords may contain URL-reserved characters. Empty when the
+# backend is SQLite (no managed cluster exists); try() turns the index-out-of-
+# range on the count=0 resources into that empty string.
 output "database_url" {
-  description = "Ecto connection URL for the app DB over the private VPC host."
-  value = format(
+  description = "Ecto connection URL for the app DB over the private VPC host. Empty on the SQLite backend."
+  value = try(format(
     "ecto://%s:%s@%s:%d/%s",
-    digitalocean_database_user.app.name,
-    urlencode(digitalocean_database_user.app.password),
-    digitalocean_database_cluster.pg.private_host,
-    digitalocean_database_cluster.pg.port,
-    digitalocean_database_db.app.name,
-  )
+    digitalocean_database_user.app[0].name,
+    urlencode(digitalocean_database_user.app[0].password),
+    digitalocean_database_cluster.pg[0].private_host,
+    digitalocean_database_cluster.pg[0].port,
+    digitalocean_database_db.app[0].name,
+  ), "")
   sensitive = true
 }
 
 output "database_ca_cert" {
-  description = "Cluster CA certificate (PEM) — shipped to the droplet so the app verifies the DB server cert."
-  value       = data.digitalocean_database_ca.pg.certificate
+  description = "Cluster CA certificate (PEM) — shipped to the droplet so the app verifies the DB server cert. Empty on the SQLite backend."
+  value       = try(data.digitalocean_database_ca.pg[0].certificate, "")
   sensitive   = true
+}
+
+output "database_backend" {
+  description = "Which database backend this project was provisioned with ('postgres' or 'sqlite')."
+  value       = var.database_backend
 }
 
 # The tag string infra-app must apply to the droplet so the DB firewall trusts it.
@@ -55,14 +62,14 @@ output "project_name" {
 # bootstrap runs a one-time GRANT through the droplet — the only host the DB
 # firewall trusts.
 output "database_admin_url" {
-  description = "doadmin connection URL for the app DB (private host). Used to grant schema privileges."
-  value = format(
+  description = "doadmin connection URL for the app DB (private host). Used to grant schema privileges. Empty on the SQLite backend."
+  value = try(format(
     "postgresql://%s:%s@%s:%d/%s?sslmode=require",
-    digitalocean_database_cluster.pg.user,
-    urlencode(digitalocean_database_cluster.pg.password),
-    digitalocean_database_cluster.pg.private_host,
-    digitalocean_database_cluster.pg.port,
-    digitalocean_database_db.app.name,
-  )
+    digitalocean_database_cluster.pg[0].user,
+    urlencode(digitalocean_database_cluster.pg[0].password),
+    digitalocean_database_cluster.pg[0].private_host,
+    digitalocean_database_cluster.pg[0].port,
+    digitalocean_database_db.app[0].name,
+  ), "")
   sensitive = true
 }

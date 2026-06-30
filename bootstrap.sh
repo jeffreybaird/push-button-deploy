@@ -9,6 +9,11 @@
 # (mix phx.new <basename>). An existing app is used as-is.
 #
 # Optional config (env, with defaults):
+#   DATABASE_BACKEND  'postgres' (default) provisions managed Postgres; 'sqlite'
+#                     provisions no DB — the app keeps a SQLite file on the
+#                     droplet's local disk, replicated to Spaces by Litestream.
+#                     Chosen once per project at first apply (it drives app
+#                     generation + infra); don't flip it on an existing deploy.
 #   PROJECT_NAME   infra naming (DB/tag/VPC). Default: the app name. IMMUTABLE after first apply.
 #   REGION         DO region slug. Default: nyc3.
 #   DNS_RECORD     subdomain in DNS_ZONE. Default: the app name.
@@ -50,6 +55,12 @@ log()   { printf '\033[32m==>\033[0m [%s] %s\n' "$(ts)" "$*"; printf '==> [%s] %
 warn()  { printf '\033[33m==> WARN\033[0m [%s] %s\n' "$(ts)" "$*" >&2; printf 'WARN [%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; }
 fail()  { printf '\033[31mbootstrap: %s\033[0m\n' "$*" >&2; printf 'FAIL [%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; exit 1; }
 have()  { command -v "$1" >/dev/null 2>&1; }
+
+# Database backend selector. 'postgres' (default) = managed cluster; 'sqlite' =
+# on-droplet SQLite file replicated to Spaces by Litestream. is_sqlite gates
+# every backend-specific branch below.
+DATABASE_BACKEND="${DATABASE_BACKEND:-postgres}"
+is_sqlite() { [ "$DATABASE_BACKEND" = "sqlite" ]; }
 
 # Numbered step banner — the heartbeat of a run. If output stops after a step
 # banner, THAT step is where it stopped.
@@ -112,6 +123,11 @@ REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE
 # Checks run in order and fail fast, naming the FIRST gap (AC 6.1).
 preflight() {
   local b v val
+
+  case "$DATABASE_BACKEND" in
+    postgres|sqlite) ;;
+    *) fail "DATABASE_BACKEND must be 'postgres' or 'sqlite' (got '$DATABASE_BACKEND')" ;;
+  esac
 
   for b in $REQUIRED_BINS; do
     have "$b" || fail "missing binary: $b"
@@ -178,8 +194,12 @@ ensure_app() {
   local name parent
   name="$(basename "$APP_DIR")"
   parent="$(dirname "$APP_DIR")"
-  log "generating Phoenix app '$name' (mix phx.new --no-install)"
-  ( cd "$parent" && mix phx.new "$name" --no-install )
+  # On the SQLite backend, generate an Ecto.Adapters.SQLite3 app (DATABASE_PATH
+  # config, no Postgrex) instead of the phx.new Postgres default.
+  local db_flag=""
+  is_sqlite && db_flag="--database sqlite3"
+  log "generating Phoenix app '$name' (mix phx.new --no-install ${db_flag:-postgres})"
+  ( cd "$parent" && mix phx.new "$name" --no-install $db_flag )
   # Freshly generated apps get the Claude skill docs (app-template/) and the
   # deps the docs assume. Existing apps are left alone — run the script by
   # hand to retrofit: ./scripts/inject-skill-docs.sh <app_dir>
@@ -314,8 +334,9 @@ tf_persistent() {
   export TF_VAR_dnsimple_account="$DNSIMPLE_ACCOUNT"
   export TF_VAR_dns_zone="$DNS_ZONE"
   export TF_VAR_dns_record="$DNS_RECORD"
+  export TF_VAR_database_backend="$DATABASE_BACKEND"
 
-  log "terraform: infra-persistent"
+  log "terraform: infra-persistent (database backend: $DATABASE_BACKEND)"
   backend_init "$PERS_DIR"
 
   # project_name is immutable: renaming forces DB-cluster replacement (blocked by
@@ -329,9 +350,20 @@ tf_persistent() {
   fi
 
   terraform -chdir="$PERS_DIR" apply -auto-approve -input=false
-  DATABASE_URL="$(terraform -chdir="$PERS_DIR" output -raw database_url)"
-  DATABASE_CA_CERT="$(terraform -chdir="$PERS_DIR" output -raw database_ca_cert)"
   DOMAIN="$(terraform -chdir="$PERS_DIR" output -raw domain)"
+  if is_sqlite; then
+    # No managed DB: the SQLite file lives on the droplet. Define the on-volume
+    # path + the Spaces replica target (reuses the Terraform state bucket under a
+    # per-app prefix). DATABASE_PATH must match deploy/compose.sqlite.yaml.
+    DATABASE_PATH="/data/${APP_NAME}.sqlite3"
+    BACKUP_BUCKET="$STATE_BUCKET"
+    BACKUP_REGION="$STATE_REGION"
+    BACKUP_ENDPOINT="$STATE_ENDPOINT"
+    BACKUP_PATH="litestream/${PROJECT_NAME}/${APP_NAME}.sqlite3"
+  else
+    DATABASE_URL="$(terraform -chdir="$PERS_DIR" output -raw database_url)"
+    DATABASE_CA_CERT="$(terraform -chdir="$PERS_DIR" output -raw database_ca_cert)"
+  fi
 }
 
 # Ensure a DO Container Registry exists; capture its name.
@@ -399,6 +431,7 @@ wait_droplet_ready() {
 # the DO API), so migrations would die with insufficient_privilege. Grant via
 # the droplet — the only host the DB firewall trusts. Idempotent.
 grant_db_schema() {
+  is_sqlite && { log "sqlite backend: no managed DB schema grant"; return 0; }
   log "granting schema public privileges to DB user '$PROJECT_NAME' (via droplet)"
   local admin_url
   admin_url="$(terraform -chdir="$PERS_DIR" output -raw database_admin_url)" \
@@ -480,8 +513,16 @@ prep_app() {
   mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
   cp "$SCRIPT_DIR/app/.github/workflows/deploy.yml"   "$APP_DIR/.github/workflows/deploy.yml"
   cp "$SCRIPT_DIR/app/.github/workflows/rollback.yml" "$APP_DIR/.github/workflows/rollback.yml"
-  cp "$SCRIPT_DIR/deploy/compose.yaml" "$SCRIPT_DIR/deploy/Caddyfile" "$SCRIPT_DIR/deploy/swap.sh" "$APP_DIR/deploy/"
-  "$SCRIPT_DIR/scripts/ensure-db-tls.sh" "$APP_DIR"
+  cp "$SCRIPT_DIR/deploy/Caddyfile" "$SCRIPT_DIR/deploy/swap.sh" "$APP_DIR/deploy/"
+  if is_sqlite; then
+    # SQLite compose carries the Litestream sidecar + restore; no managed DB
+    # means no TLS config to patch into runtime.exs.
+    cp "$SCRIPT_DIR/deploy/compose.sqlite.yaml" "$APP_DIR/deploy/compose.yaml"
+    cp "$SCRIPT_DIR/deploy/litestream.yml"      "$APP_DIR/deploy/litestream.yml"
+  else
+    cp "$SCRIPT_DIR/deploy/compose.yaml" "$APP_DIR/deploy/"
+    "$SCRIPT_DIR/scripts/ensure-db-tls.sh" "$APP_DIR"
+  fi
   "$SCRIPT_DIR/scripts/ensure-release-task.sh" "$APP_DIR"
 }
 
@@ -513,13 +554,28 @@ seed_github() {
   ( cd "$APP_DIR"
     printf '%s' "$DIGITALOCEAN_ACCESS_TOKEN" | gh secret set DIGITALOCEAN_ACCESS_TOKEN
     gh secret set SSH_PRIVATE_KEY < "$SSH_PRIVATE_KEY"
-    printf '%s' "$DATABASE_URL"               | gh secret set DATABASE_URL
-    printf '%s' "$DATABASE_CA_CERT"           | gh secret set DATABASE_CA_CERT
     mix phx.gen.secret                         | gh secret set SECRET_KEY_BASE
     gh variable set DOCR_REGISTRY -b "$REG"
     gh variable set DOMAIN        -b "$DOMAIN"
     gh variable set DROPLET_HOST  -b "$APP_IP"
     gh variable set FIREWALL_ID   -b "$FW_ID"
+    # deploy.yml branches its .env / file delivery on this.
+    gh variable set DATABASE_BACKEND -b "$DATABASE_BACKEND"
+
+    if is_sqlite; then
+      # SQLite: no DB URL/CA. The Spaces keypair (Litestream replica auth) and the
+      # replica target travel as secrets/vars; deploy.yml writes them into .env.
+      gh variable set DATABASE_PATH   -b "$DATABASE_PATH"
+      printf '%s' "$SPACES_ACCESS_KEY_ID"     | gh secret set LITESTREAM_ACCESS_KEY_ID
+      printf '%s' "$SPACES_SECRET_ACCESS_KEY" | gh secret set LITESTREAM_SECRET_ACCESS_KEY
+      gh variable set BACKUP_BUCKET   -b "$BACKUP_BUCKET"
+      gh variable set BACKUP_ENDPOINT -b "$BACKUP_ENDPOINT"
+      gh variable set BACKUP_REGION   -b "$BACKUP_REGION"
+      gh variable set BACKUP_PATH     -b "$BACKUP_PATH"
+    else
+      printf '%s' "$DATABASE_URL"               | gh secret set DATABASE_URL
+      printf '%s' "$DATABASE_CA_CERT"           | gh secret set DATABASE_CA_CERT
+    fi
   )
 }
 
