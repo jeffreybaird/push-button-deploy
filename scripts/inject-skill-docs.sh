@@ -14,6 +14,9 @@
 #      app-template/.claude/*.md -> <app_dir>/.claude/, rewriting the MyApp /
 #      my_app placeholders to the app's real module/app names (compounds like
 #      MyAppWeb and :my_app are covered by plain global replace).
+#   3. Copies the Claude Code cloud-environment bootstrap
+#      (.claude/cloud-setup.sh + the .claude/settings.json SessionStart hook
+#      that runs it), same placeholder rewrite applied to the script.
 #
 # Idempotent-ish: re-running overwrites the docs (template wins) and skips
 # already-present deps. Existing files the app owns are never touched.
@@ -81,8 +84,14 @@ for src in "$TEMPLATE_DIR"/.claude/*.md; do
   count=$((count + 1))
 done
 
-find "$APP_DIR/CLAUDE.md" "$APP_DIR/.claude" -name '*.md' -type f -print0 \
+# ---- 3. cloud-environment bootstrap (SessionStart hook + setup script) ----------
+cp "$TEMPLATE_DIR/.claude/cloud-setup.sh" "$APP_DIR/.claude/cloud-setup.sh"
+chmod +x "$APP_DIR/.claude/cloud-setup.sh"
+cp "$TEMPLATE_DIR/.claude/settings.json" "$APP_DIR/.claude/settings.json"
+
+find "$APP_DIR/CLAUDE.md" "$APP_DIR/.claude" \
+  \( -name '*.md' -o -name 'cloud-setup.sh' \) -type f -print0 \
   | MODULE="$APP_MODULE" APP="$APP_NAME" xargs -0 perl -pi -e \
       's/\QMyApp\E/$ENV{MODULE}/g; s/\Qmy_app\E/$ENV{APP}/g;'
 
-log "skill docs: placed CLAUDE.md + $count docs, names rewritten to $APP_MODULE/$APP_NAME"
+log "skill docs: placed CLAUDE.md + $count docs + cloud setup hook, names rewritten to $APP_MODULE/$APP_NAME"
