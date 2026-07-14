@@ -3,13 +3,21 @@
 Load this file when writing tests, setting up test infrastructure, or reviewing
 test coverage.
 
-> **Baseline:** Phoenix 1.8 · LiveView 1.1 (LazyHTML test engine) · ExUnit · Scopes default. Test progression: unit+mocks → LiveViewTest → PhoenixTest (cross-page) → Wallaby/Playwright (JS).
+> **Baseline:** Phoenix 1.8 · LiveView 1.1 (LazyHTML test engine) · ExUnit · Scopes default. Test progression: unit+mocks → LiveViewTest → PhoenixTest (cross-page) → Wallaby/Playwright (JS). Major user-facing features additionally get Cucumberex acceptance features (Gherkin `.feature` files run via `mix cucumber`).
 
 ---
 
 ## Test Structure
 
 ```
+features/                             # Cucumberex acceptance tests (major features)
+├── signup.feature
+├── checkout.feature
+├── step_definitions/
+│   ├── signup_steps.ex
+│   └── checkout_steps.ex
+└── support/
+    └── env.ex                        # world factory, sandbox hooks
 test/
 ├── my_app/                           # Unit & context tests
 │   ├── accounts/
@@ -150,6 +158,161 @@ mix test --only e2e         # Requires Chrome + ChromeDriver
 
 # CI runs both as separate jobs
 ```
+
+---
+
+## Acceptance Tests: Cucumberex for Major User-Facing Features
+
+[Cucumberex](https://hexdocs.pm/cucumberex) (`{:cucumberex, "~> 0.2"}`, injected
+as a default dep) runs Gherkin `.feature` files via `mix cucumber`. It sits
+**above** the ExUnit progression ladder: LiveViewTest/PhoenixTest still carry
+exhaustive pathway coverage; Cucumberex documents and verifies the
+**business-level behavior** of major features in language a non-developer can
+read.
+
+### When to write a feature file
+
+Write a `.feature` file for every **major user-facing feature** — a flow a user
+would name when describing what the app does: sign-up, checkout, publishing a
+post, inviting a teammate. Each feature file covers:
+
+- The happy path
+- The significant failure paths (validation rejection, denied authorization,
+  plan limit reached)
+- Tenant isolation, where applicable
+
+Do **not** write feature files for minor UI details (a tooltip, a sort order,
+an empty-state message) — those belong in LiveViewTest. If a scenario reads
+like a test script ("click the third button") rather than a behavior
+("subscriber saves a resource"), it is too low-level for Gherkin.
+
+### Setup
+
+The dep is injected at bootstrap. One-time project setup:
+
+```bash
+mix cucumber.init        # scaffolds features/ with step_definitions/ and support/
+```
+
+Add the formatter import to `.formatter.exs` so `mix format` doesn't mangle the
+DSL:
+
+```elixir
+[
+  import_deps: [:cucumberex],
+  inputs: ["features/**/*.{ex,exs}", ...]
+]
+```
+
+And make `mix cucumber` run in the test environment (`mix.exs`):
+
+```elixir
+def cli do
+  [preferred_envs: [cucumber: :test]]
+end
+```
+
+### Structure
+
+```gherkin
+# features/save_resource.feature
+Feature: Saving resources
+  Subscribers keep a personal list of saved resources.
+
+  Scenario: Subscriber saves a resource
+    Given a subscriber signed in
+    And a published resource "Intro to OTP"
+    When they save "Intro to OTP"
+    Then "Intro to OTP" appears in their saved list
+
+  Scenario: Visitor is sent to sign in
+    Given a published resource "Intro to OTP"
+    When a visitor tries to save "Intro to OTP"
+    Then they are asked to sign in
+```
+
+Step definitions live in `features/step_definitions/` and drive the app the
+same way your ExUnit tests do — context functions for setup, PhoenixTest for
+the user-visible flow, `data-test` selectors for assertions. The `world` map
+threads scenario state (current session, created records) between steps:
+
+```elixir
+# features/step_definitions/save_resource_steps.ex
+defmodule SaveResourceSteps do
+  use Cucumberex.DSL
+  use MyAppWeb, :verified_routes
+  import Phoenix.ConnTest, only: [build_conn: 0]
+  import PhoenixTest
+  import MyApp.Factory
+
+  @endpoint MyAppWeb.Endpoint
+
+  given_ "a subscriber signed in", fn world ->
+    user = insert(:user)
+    insert(:subscription, user: user, status: :active)
+    session = build_conn() |> MyAppWeb.ConnCase.authenticate(user) |> visit(~p"/")
+    Map.merge(world, %{user: user, session: session})
+  end
+
+  given_ "a published resource {string}", fn world, title ->
+    Map.put(world, :resource, insert(:post, title: title, status: :published))
+  end
+
+  when_ "they save {string}", fn world, _title ->
+    session =
+      world.session
+      |> visit(~p"/resources/#{world.resource}")
+      |> click_button("[data-test=\"save-resource-#{world.resource.id}\"]", "Save")
+
+    %{world | session: session}
+  end
+
+  then_ "{string} appears in their saved list", fn world, title ->
+    world.session
+    |> visit(~p"/saved")
+    |> assert_has("[data-test=\"saved-items\"]", text: title)
+
+    world
+  end
+end
+```
+
+### Database sandbox
+
+Scenarios hit the real test database. Check out an Ecto sandbox connection per
+scenario in `features/support/env.ex` hooks so scenarios stay isolated:
+
+```elixir
+# features/support/env.ex
+defmodule CucumberEnv do
+  use Cucumberex.Hooks.DSL
+
+  before_ fn world ->
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(MyApp.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(MyApp.Repo, {:shared, self()})
+    world
+  end
+
+  after_ fn world ->
+    Ecto.Adapters.SQL.Sandbox.checkin(MyApp.Repo)
+    world
+  end
+end
+```
+
+### Running
+
+```bash
+mix cucumber                          # full acceptance suite
+mix cucumber features/checkout.feature
+mix cucumber --tags "@smoke and not @slow"
+mix cucumber --strict                 # fail on undefined/pending steps (use in CI)
+mix cucumber --format junit --out cucumber-report.xml   # CI report
+```
+
+Like the rest of the suite, feature scenarios do not execute JavaScript —
+scenarios that genuinely require JS stay in Wallaby/Playwright; tag any
+browser-backed scenarios `@e2e` and exclude them from the default run.
 
 ---
 
@@ -715,6 +878,12 @@ feature is considered complete:
 - Idempotency (running twice produces same result)
 - Error handling (malformed payload, missing records)
 
+### 7. Cucumberex feature file (for MAJOR user-facing features)
+- Gherkin `.feature` file covering the happy path and significant failure paths
+- Authorization/plan-gating scenarios where applicable
+- Tenant isolation scenario (if multi-tenant)
+- See "Acceptance Tests: Cucumberex" above for when a feature qualifies as major
+
 ---
 
 ## Running Tests
@@ -737,6 +906,9 @@ mix test --only e2e
 
 # Run everything including E2E
 mix test --include e2e
+
+# Run the Cucumberex acceptance suite
+mix cucumber
 ```
 
 ### CI requirements
@@ -744,6 +916,7 @@ mix test --include e2e
 All of the following must pass before deploy:
 - `mix test --exclude e2e` — all unit and integration tests green
 - `mix test --only e2e` — all Wallaby E2E tests green (separate CI job)
+- `mix cucumber --strict` — all acceptance scenarios green, none undefined/pending
 - `mix compile --warnings-as-errors` — no compiler warnings
 - `mix format --check-formatted` — code is formatted
 - `mix credo --strict` — no credo violations

@@ -230,11 +230,14 @@ Every create, update, and delete is logged via the event system + an `AuditSubsc
 audit log records who, when, what changed, and from which IP — including impersonation
 context where applicable.
 
-### Feature Files for User-Facing Features (if you use Cucumber/Gherkin)
+### Feature Files for Major User-Facing Features (Cucumberex)
 
-If your project uses acceptance tests, every user-facing feature gets a scenario covering the
-happy path and failure paths, empty/error/success states, and — where applicable —
-authorization and tenant isolation. Adapt to your test stack; see `.claude/testing.md`.
+Cucumberex (`mix cucumber`) is a default dependency. Every **major** user-facing feature —
+a flow a user would name when describing the app (sign-up, checkout, publishing, inviting) —
+gets a Gherkin `.feature` file under `features/` covering the happy path, significant
+failure paths, and — where applicable — authorization and tenant isolation. Minor UI
+details stay in LiveViewTest. See `.claude/testing.md` ("Acceptance Tests: Cucumberex")
+for setup, step-definition patterns, and the sandbox hooks.
 
 ---
 
