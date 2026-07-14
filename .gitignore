@@ -13,3 +13,5 @@ backend.hcl
 infra-app/terraform.tfvars.bak
 infra-persistent/terraform.tfvars.bakbootstrap.log
 teardown.log
+terraform.tfvars.bak
+bootstrap.log
