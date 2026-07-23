@@ -1,0 +1,177 @@
+# Push-to-main deploy pipeline for a SINATRA app (FRAMEWORK=sinatra).
+# Copied into the app repo as .github/workflows/deploy.yml by the bootstrap.
+# Jobs: test (gate) -> build+push -> deliver/migrate/swap.
+#
+# The Sinatra path is SQLite-only, so this workflow has no Postgres branch: the
+# .env it writes over SSH always carries the Litestream/Spaces replica config.
+#
+# Required repo config (seeded by bootstrap):
+#   secret DIGITALOCEAN_ACCESS_TOKEN  - DO API token (registry + droplet)
+#   var    DOCR_REGISTRY              - DO Container Registry name
+#   var    FIREWALL_ID                - droplet firewall (temporary SSH hole-punch)
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time; never overlap. Queue rather than cancel so an in-flight
+# deploy (migrations!) is never interrupted.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.digitalocean.com
+
+jobs:
+  # Red tests block the deploy entirely: build needs this job.
+  test:
+    runs-on: ubuntu-latest
+    env:
+      RACK_ENV: test
+    steps:
+      - uses: actions/checkout@v6
+
+      # Ruby version comes from .ruby-version (single source of truth, same file
+      # the Dockerfile's RUBY_VERSION is kept in sync with).
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version-file: .ruby-version
+          bundler-cache: true
+
+      # spec_helper migrates a fresh SQLite test DB before the suite runs, so no
+      # service container is needed. Red tests fail the job -> block the deploy.
+      - name: Run tests
+        run: bundle exec rspec
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest # native amd64
+    outputs:
+      app_name: ${{ steps.meta.outputs.app_name }}
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # App-name-agnostic: the registry repository is named after the app, read
+      # from the committed .app-name marker (a Rack app has no mix.exs to parse).
+      - name: Read app name
+        id: meta
+        run: |
+          app_name=$(tr -d '[:space:]' < .app-name)
+          if [ -z "$app_name" ]; then echo "::error::.app-name is empty or missing"; exit 1; fi
+          echo "app_name=$app_name" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${{ vars.DOCR_REGISTRY }}/${app_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DO Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Deliver the new image to the droplet and restart the stack.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ needs.build.outputs.image }}:${{ github.sha }}
+      HOST: ${{ vars.DROPLET_HOST }}
+      DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      # The droplet firewall keeps port 22 closed to the world; runners have no
+      # fixed IPs. Punch a /32 hole for THIS runner, revoked in the always()
+      # step below. The deploy concurrency group means at most one hole exists
+      # at a time, and a Terraform apply wipes any leaked rule as drift.
+      - name: Authorize runner IP for SSH
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          echo "RUNNER_IP=$runner_ip" >> "$GITHUB_ENV"
+          doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # .env carries the SHA-pinned image + runtime secrets/config. Built on the
+      # runner, shipped to the droplet, never committed. (locked decision:
+      # secrets arrive over SSH at deploy time, never in cloud-init/metadata.)
+      - name: Write .env
+        run: |
+          umask 077
+          cat > .env <<EOF
+          IMAGE=${IMAGE}
+          DOMAIN=${{ vars.DOMAIN }}
+          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
+          DATABASE_PATH=${{ vars.DATABASE_PATH }}
+          LITESTREAM_ACCESS_KEY_ID=${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
+          LITESTREAM_SECRET_ACCESS_KEY=${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
+          BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
+          BACKUP_ENDPOINT=${{ vars.BACKUP_ENDPOINT }}
+          BACKUP_REGION=${{ vars.BACKUP_REGION }}
+          BACKUP_PATH=${{ vars.BACKUP_PATH }}
+          EOF
+
+      - name: Copy stack files + .env to droplet
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh deploy/litestream.yml .env \
+            root@"$HOST":/root/
+
+      - name: Registry login + pull new image
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
+             && cd /root && docker compose pull"
+
+      # Migration gate: runs the new image as a one-off BEFORE serving traffic.
+      # A non-zero exit fails this step -> the job fails -> the swap is skipped
+      # -> the previously-running color keeps serving. A bad migration can never
+      # serve a half-updated DB.
+      - name: Run migrations (gate before traffic)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "cd /root && docker compose run --rm migrate bundle exec rake db:migrate"
+
+      # Health-checked blue/green swap: start the idle color from the new image,
+      # wait for its healthcheck, only then stop the old color. Caddy holds
+      # requests through the window — no downtime.
+      - name: Swap to new release
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "bash /root/swap.sh"
+
+      # Close the hole no matter how the deploy ended.
+      - name: Revoke runner IP
+        if: always() && env.RUNNER_IP != ''
+        run: |
+          doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${RUNNER_IP}/32"

@@ -1,0 +1,132 @@
+# Runtime stack on the droplet for a SINATRA app (FRAMEWORK=sinatra, which
+# always implies the SQLite backend). Copied to the app repo as
+# deploy/compose.yaml by the bootstrap. It mirrors compose.sqlite.yaml (the
+# Phoenix+SQLite stack) — same Litestream sidecar + restore, same blue/green
+# swap, same Caddy — but boots a Rack/Puma app instead of an OTP release:
+#
+#   * The app service runs `puma` (image CMD), not `bin/<app> start`. There is
+#     no PHX_SERVER gate and no APP_NAME — a Rack app serves unconditionally on
+#     $PORT.
+#   * Migrations run `rake db:migrate` (Sequel::Migrator) in the one-off migrate
+#     runner, not `bin/<app> eval '<Module>.Release.migrate()'`.
+#   * The DB is a SQLite file on a NAMED DOCKER VOLUME (app_data -> /data),
+#     shared by both colors + the migrate runner. Litestream streams its WAL to
+#     Spaces continuously and restores it on a recreated droplet.
+#
+# Interpolated values (${...}) come from .env, written over SSH at deploy time:
+#   IMAGE            full image ref incl tag, e.g. registry.../app:<sha> (SHA-pinned)
+#   DOMAIN           public FQDN (matches the DNSimple A record / cert)
+#   DATABASE_PATH    on-volume path to the SQLite file, e.g. /data/app.sqlite3
+#   SECRET_KEY_BASE  Rack session secret (Sinatra `set :sessions`)
+#   LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY   Spaces keypair
+#   BACKUP_BUCKET / BACKUP_ENDPOINT / BACKUP_REGION / BACKUP_PATH   replica target
+#
+# No secrets live in this file — only references. (locked decision 12)
+
+# Shared definition for both colors (and the one-off migrate runner).
+x-app: &app
+  image: ${IMAGE}
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    RACK_ENV: "production"
+    # URL host for generated links; Sinatra reads APP_HOST where it builds URLs.
+    APP_HOST: ${DOMAIN}
+    PORT: "4000"
+    # SQLite file path (config/database.rb reads DATABASE_PATH).
+    DATABASE_PATH: ${DATABASE_PATH}
+  volumes:
+    # The SQLite file lives here, shared with the migrate runner + Litestream.
+    - app_data:/data
+  depends_on:
+    # Restore + permission fix must finish before the app opens the DB...
+    db_init:
+      condition: service_completed_successfully
+    # ...and the replicator must be running so writes are streamed off-box.
+    litestream:
+      condition: service_started
+  expose:
+    # Internal only — never published to the host. Caddy reaches it by name.
+    - "4000"
+  networks:
+    - web
+  healthcheck:
+    # Alive = the endpoint answers HTTP at all (any status — apps may redirect /).
+    # bash + /dev/tcp because the slim runtime image has no curl/wget.
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4000 && printf 'HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && grep -q 'HTTP/' <&3"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 10s
+
+# Shared Litestream config: both the restore and replicate services read the
+# same /etc/litestream.yml (env-expanded against .env).
+x-litestream: &litestream
+  image: litestream/litestream:0.3.14
+  env_file:
+    - .env
+  volumes:
+    - app_data:/data
+    - ./litestream.yml:/etc/litestream.yml:ro
+  networks:
+    - web
+
+services:
+  # One-shot, runs as root before anything opens the DB. Two jobs:
+  #   1. Restore the SQLite file from Spaces IFF /data has no DB yet and a replica
+  #      exists (first-ever deploy: both false -> no-op; recreated droplet: empty
+  #      volume + existing replica -> full restore).
+  #   2. chown /data to the app's runtime uid (Debian 'nobody' = 65534) so the
+  #      app, which runs unprivileged, can create the DB + its -wal/-shm files.
+  # $$DATABASE_PATH is escaped so the container shell (not compose) expands it.
+  db_init:
+    <<: *litestream
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - litestream restore -if-db-not-exists -if-replica-exists "$$DATABASE_PATH" && chown -R 65534:65534 /data
+
+  # Long-running: continuously replicate the WAL to Spaces. Runs as root (it can
+  # still read the nobody-owned DB and write its own shadow files under /data).
+  litestream:
+    <<: *litestream
+    restart: unless-stopped
+    command: ["replicate"]
+    depends_on:
+      db_init:
+        condition: service_completed_successfully
+
+  app_blue: *app
+  app_green: *app
+
+  # One-off migration runner (profile keeps it out of `up -d`):
+  #   docker compose run --rm migrate bundle exec rake db:migrate
+  migrate:
+    <<: *app
+    restart: "no"
+    profiles: ["tools"]
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist issued certs + ACME account across restarts/redeploys.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  web:

@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 #
-# bootstrap.sh — push-button stand-up for a Phoenix app on DigitalOcean.
+# bootstrap.sh — push-button stand-up for a Phoenix or Sinatra app on DigitalOcean.
 #
 #   ./bootstrap.sh --check [app_dir]   # verify prerequisites, exit non-zero on first gap
 #   ./bootstrap.sh [app_dir]           # provision + wire + deploy (default app_dir: .)
 #
-# app_dir may be EMPTY or NOT EXIST YET: a fresh Phoenix app is generated there
-# (mix phx.new <basename>). An existing app is used as-is.
+# app_dir may be EMPTY or NOT EXIST YET: a fresh app is generated there
+# (Phoenix: mix phx.new <basename>; Sinatra: scripts/new-sinatra-app.sh). An
+# existing app is used as-is.
 #
 # Optional config (env, with defaults):
+#   FRAMEWORK         'phoenix' (default) or 'sinatra'. Selects the app stack the
+#                     bootstrap generates + deploys. 'sinatra' is SQLite-only and
+#                     forces DATABASE_BACKEND=sqlite. Chosen once per project.
 #   DATABASE_BACKEND  'postgres' (default) provisions managed Postgres; 'sqlite'
 #                     provisions no DB — the app keeps a SQLite file on the
 #                     droplet's local disk, replicated to Spaces by Litestream.
@@ -61,6 +65,15 @@ have()  { command -v "$1" >/dev/null 2>&1; }
 # every backend-specific branch below.
 DATABASE_BACKEND="${DATABASE_BACKEND:-postgres}"
 is_sqlite() { [ "$DATABASE_BACKEND" = "sqlite" ]; }
+
+# Application framework selector. 'phoenix' (default) generates + deploys a
+# Phoenix/Elixir app; 'sinatra' a Sinatra/Ruby app (Sequel + Puma). is_sinatra /
+# is_phoenix gate every framework-specific branch. The Sinatra path is
+# SQLite-only (Sequel + Litestream), so choosing it forces the sqlite backend.
+FRAMEWORK="${FRAMEWORK:-phoenix}"
+is_sinatra() { [ "$FRAMEWORK" = "sinatra" ]; }
+is_phoenix() { [ "$FRAMEWORK" = "phoenix" ]; }
+if is_sinatra; then DATABASE_BACKEND="sqlite"; fi
 
 # Numbered step banner — the heartbeat of a run. If output stops after a step
 # banner, THAT step is where it stopped.
@@ -116,7 +129,11 @@ STATE_TF_DIR="$SCRIPT_DIR/infra-state"
 export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$HOME/.terraform.d/plugin-cache}"
 mkdir -p "$TF_PLUGIN_CACHE_DIR"
 
-REQUIRED_BINS="git terraform doctl gh mix curl ssh scp dig"
+# Framework-specific local tooling: Phoenix generates + prepares the app with
+# `mix`; Sinatra scaffolds with bash and only needs `openssl` (fresh session
+# secret) — the Ruby build itself happens in Docker/CI, not locally.
+REQUIRED_BINS="git terraform doctl gh curl ssh scp dig"
+if is_sinatra; then REQUIRED_BINS="$REQUIRED_BINS openssl"; else REQUIRED_BINS="$REQUIRED_BINS mix"; fi
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
 
 # ---- story 6.1: preflight ----------------------------------------------------
@@ -150,8 +167,9 @@ preflight() {
 
   [ -r "$SSH_PRIVATE_KEY" ] || fail "SSH private key not readable: $SSH_PRIVATE_KEY"
 
-  # Generating the app (only when the target has none) needs the phx_new archive.
-  if [ ! -f "$APP_DIR/mix.exs" ]; then
+  # Generating a Phoenix app (only when the target has none) needs the phx_new
+  # archive. The Sinatra scaffold is pure bash — nothing extra to check.
+  if is_phoenix && [ ! -f "$APP_DIR/mix.exs" ]; then
     mix phx.new --version >/dev/null 2>&1 \
       || fail "no app at $APP_DIR, and the phx_new archive is missing — run: mix archive.install hex phx_new"
   fi
@@ -176,21 +194,29 @@ preflight() {
 
 # ---- story 6.2: provision + wire + first deploy ------------------------------
 
-# Generate the Phoenix app when the target directory is empty or missing —
-# this is the "empty directory -> deployed app" entry point. An existing app
-# (e.g. from a custom generator) is used as-is; a non-empty non-app directory
-# is refused rather than generated over.
+# Generate the app when the target directory is empty or missing — this is the
+# "empty directory -> deployed app" entry point. An existing app (detected by its
+# framework signature file) is used as-is; a non-empty non-app directory is
+# refused rather than generated over.
 ensure_app() {
-  if [ -f "$APP_DIR/mix.exs" ]; then
+  local sig; if is_sinatra; then sig="Gemfile"; else sig="mix.exs"; fi
+  if [ -f "$APP_DIR/$sig" ]; then
     log "app: using existing $APP_DIR"
     return 0
   fi
-  if [ -d "$APP_DIR" ]; then
-    [ -z "$(ls -A "$APP_DIR")" ] \
-      || fail "$APP_DIR is not empty and has no mix.exs — refusing to generate over it"
-    # phx.new insists on creating the directory itself (prompts otherwise).
-    rmdir "$APP_DIR"
+  if [ -d "$APP_DIR" ] && [ -n "$(ls -A "$APP_DIR")" ]; then
+    fail "$APP_DIR is not empty and has no $sig — refusing to generate over it"
   fi
+
+  if is_sinatra; then
+    # Scaffolds a Sinatra+Sequel+SQLite app and injects the app-template-ruby
+    # skill docs. Existing apps are retrofitted by hand with the same script.
+    "$SCRIPT_DIR/scripts/new-sinatra-app.sh" "$APP_DIR"
+    return 0
+  fi
+
+  # Phoenix: phx.new insists on creating the directory itself (prompts otherwise).
+  [ -d "$APP_DIR" ] && rmdir "$APP_DIR"
   local name parent
   name="$(basename "$APP_DIR")"
   parent="$(dirname "$APP_DIR")"
@@ -206,14 +232,25 @@ ensure_app() {
   "$SCRIPT_DIR/scripts/inject-skill-docs.sh" "$APP_DIR"
 }
 
-# Parse APP_NAME / APP_MODULE from the app's mix.exs (single source of truth).
+# Parse APP_NAME / APP_MODULE (single source of truth). Phoenix reads mix.exs;
+# Sinatra has no mix.exs, so the app name is the dir basename (also written to
+# .app-name for the CI workflows) and the module is its camelized form.
 parse_meta() {
-  [ -f "$APP_DIR/mix.exs" ] || fail "no mix.exs in $APP_DIR — generation failed?"
-  # shellcheck source=scripts/app-meta.sh
-  . "$SCRIPT_DIR/scripts/app-meta.sh"
-  APP_NAME="$(app_name "$APP_DIR")"
-  APP_MODULE="$(app_module "$APP_DIR")"
-  # Mix app names are snake_case, but DO buckets/DBs and DNS labels only allow
+  if is_sinatra; then
+    [ -f "$APP_DIR/Gemfile" ] || fail "no Gemfile in $APP_DIR — scaffold failed?"
+    APP_NAME="$(basename "$APP_DIR")"
+    case "$APP_NAME" in
+      [a-z]*[!a-z0-9_]*|*[!a-z0-9_]*|[!a-z]*) fail "Sinatra app name '$APP_NAME' must be lower_snake_case (it names the app + infra)" ;;
+    esac
+    APP_MODULE="$(printf '%s' "$APP_NAME" | awk -F_ '{o=""; for(i=1;i<=NF;i++){o=o toupper(substr($i,1,1)) substr($i,2)} print o}')"
+  else
+    [ -f "$APP_DIR/mix.exs" ] || fail "no mix.exs in $APP_DIR — generation failed?"
+    # shellcheck source=scripts/app-meta.sh
+    . "$SCRIPT_DIR/scripts/app-meta.sh"
+    APP_NAME="$(app_name "$APP_DIR")"
+    APP_MODULE="$(app_module "$APP_DIR")"
+  fi
+  # App names are snake_case, but DO buckets/DBs and DNS labels only allow
   # hyphens — translate when deriving infra names from the app name.
   local infra_name; infra_name="$(printf '%s' "$APP_NAME" | tr '_' '-')"
   PROJECT_NAME="${PROJECT_NAME:-$infra_name}"
@@ -222,7 +259,7 @@ parse_meta() {
   esac
   REGION="${REGION:-nyc3}"
   DNS_RECORD="${DNS_RECORD:-$infra_name}"
-  log "app: $APP_NAME ($APP_MODULE) | project: $PROJECT_NAME | region: $REGION"
+  log "app: $APP_NAME ($APP_MODULE) [$FRAMEWORK] | project: $PROJECT_NAME | region: $REGION"
 }
 
 # Ensure the Spaces state bucket exists (story 7.4). This tiny root keeps
@@ -499,9 +536,34 @@ pin_toolchain() {
     "$df" > "$df.tmp" && mv "$df.tmp" "$df"
 }
 
-# Generate release.ex (if missing), enforce DB TLS, drop in the pipeline files.
+# Pin the Sinatra app's Dockerfile RUBY_VERSION ARG to .ruby-version (single
+# source of truth; CI reads the same file). Overridable via RUBY_VERSION env.
+pin_ruby() {
+  local df="$APP_DIR/Dockerfile" rv
+  rv="${RUBY_VERSION:-$(tr -d '[:space:]' < "$APP_DIR/.ruby-version" 2>/dev/null)}"
+  [ -n "$rv" ] || { warn "no .ruby-version and no RUBY_VERSION — leaving Dockerfile default"; return 0; }
+  sed -E "s/^ARG RUBY_VERSION=.*/ARG RUBY_VERSION=${rv}/" "$df" > "$df.tmp" && mv "$df.tmp" "$df"
+  log "toolchain: pinned Dockerfile RUBY_VERSION=$rv"
+}
+
+# Generate release files (Phoenix), enforce DB TLS, drop in the pipeline files.
 # Order matters: gen.release BEFORE copying our Dockerfile (it writes its own).
 prep_app() {
+  if is_sinatra; then
+    log "preparing app: pipeline files (Sinatra)"
+    cp "$SCRIPT_DIR/app/Dockerfile.ruby"    "$APP_DIR/Dockerfile"
+    cp "$SCRIPT_DIR/app/.dockerignore.ruby" "$APP_DIR/.dockerignore"
+    pin_ruby
+    mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
+    cp "$SCRIPT_DIR/app/.github/workflows/deploy.ruby.yml"   "$APP_DIR/.github/workflows/deploy.yml"
+    cp "$SCRIPT_DIR/app/.github/workflows/rollback.ruby.yml" "$APP_DIR/.github/workflows/rollback.yml"
+    cp "$SCRIPT_DIR/deploy/Caddyfile" "$SCRIPT_DIR/deploy/swap.sh" "$APP_DIR/deploy/"
+    # Sinatra is SQLite-only: Litestream sidecar + restore, no TLS to patch.
+    cp "$SCRIPT_DIR/deploy/compose.sinatra.yaml" "$APP_DIR/deploy/compose.yaml"
+    cp "$SCRIPT_DIR/deploy/litestream.yml"       "$APP_DIR/deploy/litestream.yml"
+    return 0
+  fi
+
   log "preparing app: deps, release files, TLS, pipeline files"
   ( cd "$APP_DIR"
     mix deps.get
@@ -554,7 +616,13 @@ seed_github() {
   ( cd "$APP_DIR"
     printf '%s' "$DIGITALOCEAN_ACCESS_TOKEN" | gh secret set DIGITALOCEAN_ACCESS_TOKEN
     gh secret set SSH_PRIVATE_KEY < "$SSH_PRIVATE_KEY"
-    mix phx.gen.secret                         | gh secret set SECRET_KEY_BASE
+    # Session/signing secret. Phoenix ships a generator; Sinatra reads it as the
+    # Rack session secret, so any 64-byte hex works (openssl).
+    if is_sinatra; then
+      openssl rand -hex 64                     | gh secret set SECRET_KEY_BASE
+    else
+      mix phx.gen.secret                       | gh secret set SECRET_KEY_BASE
+    fi
     gh variable set DOCR_REGISTRY -b "$REG"
     gh variable set DOMAIN        -b "$DOMAIN"
     gh variable set DROPLET_HOST  -b "$APP_IP"
@@ -661,7 +729,7 @@ provision() {
   log "transcript of this run: $LOG_FILE"
   step "preflight checks";                          preflight
   step "ensure app exists (generate if missing)";   ensure_app
-  step "parse app metadata from mix.exs";           parse_meta
+  step "parse app metadata";                        parse_meta
   step "GitHub repo + initial commit";              ensure_repo
   step "Terraform state bucket (infra-state)";      ensure_state_bucket
   step "persistent infra: VPC/DB/DNS (infra-persistent)"; tf_persistent

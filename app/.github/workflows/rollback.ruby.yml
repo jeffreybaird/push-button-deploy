@@ -1,0 +1,122 @@
+# Manual rollback for a SINATRA app: pin a previously-built image tag and
+# restart — no rebuild. Copied into the app repo as
+# .github/workflows/rollback.yml by the bootstrap.
+#
+# Trigger:  gh workflow run rollback.yml -f tag=<prior commit SHA>
+#           (any tag already in the registry works; deploys push :<sha> + :latest)
+#
+# What it does NOT do: roll back database migrations. The schema stays at
+# whatever the newest deploy migrated to; the older code must tolerate it
+# (additive migrations make this safe). For a schema rollback run
+# `rake db:rollback` by hand — deliberately not automated.
+#
+# Shares the deploy workflow's concurrency group, so a rollback can never
+# overlap an in-flight push deploy (and vice versa).
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to pin (a prior commit SHA)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.digitalocean.com
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.DROPLET_HOST }}
+      DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same app-name source as deploy.yml — the registry repository is named
+      # after the app (the committed .app-name marker), never hardcoded.
+      - name: Read app name
+        id: meta
+        run: |
+          app_name=$(tr -d '[:space:]' < .app-name)
+          if [ -z "$app_name" ]; then echo "::error::.app-name is empty or missing"; exit 1; fi
+          echo "app_name=$app_name" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${{ vars.DOCR_REGISTRY }}/${app_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      # Fail here — before touching the droplet — if the requested tag was
+      # never built. Typos can't take the site down.
+      - name: Verify tag exists in registry
+        run: |
+          if ! doctl registry repository list-tags "${{ steps.meta.outputs.app_name }}" \
+               --format Tag --no-header | grep -qx "$TAG"; then
+            echo "::error::tag '$TAG' not found in registry repository '${{ steps.meta.outputs.app_name }}'"
+            echo "Available tags:"
+            doctl registry repository list-tags "${{ steps.meta.outputs.app_name }}" --format Tag,UpdatedAt
+            exit 1
+          fi
+
+      # Same temporary SSH hole-punch as deploy.yml — port 22 stays closed to
+      # the world; revoked in the always() step at the end.
+      - name: Authorize runner IP for SSH
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          echo "RUNNER_IP=$runner_ip" >> "$GITHUB_ENV"
+          doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Identical .env contract to deploy.yml, IMAGE pinned to the chosen tag.
+      - name: Write .env (pinned image)
+        run: |
+          umask 077
+          cat > .env <<EOF
+          IMAGE=${{ steps.meta.outputs.image }}:${TAG}
+          DOMAIN=${{ vars.DOMAIN }}
+          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
+          DATABASE_PATH=${{ vars.DATABASE_PATH }}
+          LITESTREAM_ACCESS_KEY_ID=${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
+          LITESTREAM_SECRET_ACCESS_KEY=${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
+          BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
+          BACKUP_ENDPOINT=${{ vars.BACKUP_ENDPOINT }}
+          BACKUP_REGION=${{ vars.BACKUP_REGION }}
+          BACKUP_PATH=${{ vars.BACKUP_PATH }}
+          EOF
+
+      - name: Copy stack files + .env to droplet
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh deploy/litestream.yml .env \
+            root@"$HOST":/root/
+
+      # No migration step: the pinned image is older than (or equal to) the
+      # schema, so Sequel::Migrator would find nothing pending anyway. Same
+      # health-checked blue/green swap as deploy — a rollback to a broken image
+      # fails the swap and leaves the current color serving.
+      - name: Pull pinned image and swap
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
+             && cd /root && docker compose pull && bash /root/swap.sh"
+
+      - name: Revoke runner IP
+        if: always() && env.RUNNER_IP != ''
+        run: |
+          doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${RUNNER_IP}/32"

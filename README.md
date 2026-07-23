@@ -1,6 +1,6 @@
 # push-button-deploy
 
-One command takes you from an **empty directory** to a **freshly generated Phoenix app serving HTTPS on a production DigitalOcean droplet**, with a CI/CD pipeline that deploys every push to `main` from that moment on.
+One command takes you from an **empty directory** to a **freshly generated Phoenix (or Sinatra) app serving HTTPS on a production DigitalOcean droplet**, with a CI/CD pipeline that deploys every push to `main` from that moment on. Pick the stack with `FRAMEWORK` (default `phoenix`; see [Application framework](#application-framework)).
 
 ```bash
 ./bootstrap.sh ~/src/myapp
@@ -8,7 +8,7 @@ One command takes you from an **empty directory** to a **freshly generated Phoen
 # ==> LIVE: https://myapp.example.com
 ```
 
-If `~/src/myapp` doesn't exist (or is empty), a new Phoenix app is generated there. If it already contains a Phoenix app, that app is used as-is — so you can point it at output from your own generator instead.
+If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. If it already contains an app (a `mix.exs` for Phoenix, a `Gemfile` for Sinatra), that app is used as-is — so you can point it at output from your own generator instead.
 
 ## What you get
 
@@ -58,8 +58,9 @@ Port 22 is closed to the world. CI punches a temporary `/32` hole for its own ru
 | `terraform` >= 1.6 | provisioning | `brew install terraform` |
 | `doctl` | DO registry + firewall ops | `brew install doctl` |
 | `gh` | repo creation, secrets, run status | `brew install gh` |
-| Elixir + `mix` | app generation, deps, secret generation | `brew install elixir` |
-| `phx_new` archive | generating the app (only needed when the target dir is empty) | `mix archive.install hex phx_new` |
+| Elixir + `mix` | **Phoenix only** — app generation, deps, secret generation | `brew install elixir` |
+| `phx_new` archive | **Phoenix only** — generating the app (needed when the target dir is empty) | `mix archive.install hex phx_new` |
+| `openssl` | **Sinatra only** — session-secret generation (the Ruby build runs in Docker/CI, so no local Ruby is required) | preinstalled on macOS |
 | `curl`, `ssh`, `scp`, `dig` | plumbing + diagnostics | preinstalled on macOS |
 
 Docker is **not** required locally — images build in CI.
@@ -102,7 +103,8 @@ Optional (defaults in parentheses):
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_BACKEND` | `postgres` (default) or `sqlite`. See [Database backend](#database-backend). Chosen once per project at first apply; don't flip it on an existing deploy. |
+| `FRAMEWORK` | `phoenix` (default) or `sinatra`. See [Application framework](#application-framework). `sinatra` is SQLite-only. Chosen once per project. |
+| `DATABASE_BACKEND` | `postgres` (default) or `sqlite`. See [Database backend](#database-backend). Chosen once per project at first apply; don't flip it on an existing deploy. (`sinatra` forces `sqlite`.) |
 | `PROJECT_NAME` | infra naming: DB, VPC, tag (app name). **Immutable after first apply** — renaming would force DB replacement; the script guards this. |
 | `REGION` | DO region slug (`nyc3`) |
 | `DNS_RECORD` | subdomain inside `DNS_ZONE` (app name); `@` for the apex |
@@ -111,6 +113,33 @@ Optional (defaults in parentheses):
 | `STATE_BUCKET` | Spaces bucket for TF state (`<PROJECT_NAME>-tfstate`) — names are globally unique per region; override on collision |
 | `SPACES_REGION` | bucket region (`REGION`) — must be a region that offers Spaces |
 | `LIVE_TIMEOUT_SECS` | HTTPS liveness poll timeout (`900`) |
+
+## Application framework
+
+`FRAMEWORK` picks the app stack the bootstrap generates and deploys. Set it once, before the
+first `./bootstrap.sh`, in `.env` or the environment.
+
+| | `phoenix` (default) | `sinatra` |
+|---|---|---|
+| Language | Elixir | Ruby 3.3+ |
+| App | `mix phx.new` (Phoenix 1.8) | `scripts/new-sinatra-app.sh` (modular Sinatra + Sequel) |
+| Server | `mix release` (OTP) | Puma (Rack) |
+| Skill docs | `app-template/` | `app-template-ruby/` |
+| Database | `postgres` or `sqlite` | `sqlite` only (forced) |
+| Local tools | `mix` (+ `phx_new` archive to generate) | none required — `openssl` for the secret; the Ruby build runs in Docker/CI |
+| Tests (CI gate) | `mix test` (Postgres service) | `bundle exec rspec` (SQLite) |
+| Migrations | release task (`Release.migrate()`) | `rake db:migrate` (Sequel) |
+
+Both frameworks share the same infra, TLS, blue/green swap, registry, and rollback path — only
+the app-runtime pieces differ (Dockerfile, compose command, CI test/build/migrate, secret
+generation). On `sinatra` the bootstrap scaffolds a runnable Sinatra app (an example `Note`
+resource with a service object, a Sequel migration, ERB views, and an RSpec suite), injects the
+Sinatra skill docs, and wires the Ruby pipeline. Because Sinatra is SQLite-only it reuses the
+whole SQLite path below (Litestream replication, no managed Postgres).
+
+An existing app in the target dir is used as-is: a `Gemfile` marks it a Sinatra app, a `mix.exs`
+a Phoenix app. Retrofit an existing Sinatra app's skill docs with
+`./scripts/new-sinatra-app.sh <app_dir>`.
 
 ## Database backend
 
