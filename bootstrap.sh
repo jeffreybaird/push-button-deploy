@@ -13,11 +13,14 @@
 #   FRAMEWORK         'phoenix' (default) or 'sinatra'. Selects the app stack the
 #                     bootstrap generates + deploys. 'sinatra' is SQLite-only and
 #                     forces DATABASE_BACKEND=sqlite. Chosen once per project.
-#   DATABASE_BACKEND  'postgres' (default) provisions managed Postgres; 'sqlite'
-#                     provisions no DB — the app keeps a SQLite file on the
-#                     droplet's local disk, replicated to Spaces by Litestream.
-#                     Chosen once per project at first apply (it drives app
-#                     generation + infra); don't flip it on an existing deploy.
+#   DATABASE_BACKEND  'sqlite' (default) provisions no DB — the app keeps a
+#                     SQLite file on the droplet's local disk, replicated to
+#                     Spaces by Litestream. 'postgres' provisions a managed
+#                     cluster instead (~$15/mo). Chosen once per project at
+#                     first apply (it drives app generation + infra); don't flip
+#                     it on an existing deploy. Bootstrapping an existing
+#                     Postgres project without setting this is refused, not
+#                     silently acted on.
 #   PROJECT_NAME   infra naming (DB/tag/VPC). Default: the app name. IMMUTABLE after first apply.
 #   REGION         DO region slug. Default: nyc3.
 #   DNS_RECORD     subdomain in DNS_ZONE. Default: the app name.
@@ -65,10 +68,18 @@ warn()  { printf '\033[33m==> WARN\033[0m [%s] %s\n' "$(ts)" "$*" >&2; printf 'W
 fail()  { printf '\033[31mbootstrap: %s\033[0m\n' "$*" >&2; printf 'FAIL [%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; exit 1; }
 have()  { command -v "$1" >/dev/null 2>&1; }
 
-# Database backend selector. 'postgres' (default) = managed cluster; 'sqlite' =
-# on-droplet SQLite file replicated to Spaces by Litestream. is_sqlite gates
-# every backend-specific branch below.
-DATABASE_BACKEND="${DATABASE_BACKEND:-postgres}"
+# Database backend selector. 'sqlite' (default) = a file on the droplet,
+# replicated to Spaces by Litestream; 'postgres' = a managed cluster (~$15/mo).
+# is_sqlite gates every backend-specific branch below.
+#
+# SQLite is the default because it is the right answer for the apps this tool
+# builds: one small droplet, one writer, traffic that fits in a file. Reach for
+# postgres when you actually need concurrent writers, or SQL that SQLite lacks.
+#
+# The choice is per-project and effectively permanent. Running an existing
+# Postgres project WITHOUT setting DATABASE_BACKEND=postgres would ask Terraform
+# to tear its cluster down — tf_persistent refuses rather than let that happen.
+DATABASE_BACKEND="${DATABASE_BACKEND:-sqlite}"
 is_sqlite() { [ "$DATABASE_BACKEND" = "sqlite" ]; }
 
 # Application framework selector. 'phoenix' (default) generates + deploys a
@@ -415,6 +426,21 @@ tf_persistent() {
   existing="$(terraform -chdir="$PERS_DIR" output -raw project_name 2>/dev/null || true)"
   if [ -n "$existing" ] && [ "$existing" != "$PROJECT_NAME" ]; then
     fail "project_name is immutable: state has '$existing', requested '$PROJECT_NAME'. A rename forces DB replacement — keep '$existing' (set PROJECT_NAME=$existing)."
+  fi
+
+  # The backend default is sqlite, so an existing POSTGRES project bootstrapped
+  # without DATABASE_BACKEND=postgres would plan to destroy its cluster. The
+  # cluster's prevent_destroy would abort the apply, but the database and user
+  # carry no such guard — Terraform would delete them first and take the data
+  # with them. Detect the mismatch from state and refuse before applying.
+  # Reads `state list` rather than an output: states created before the sqlite
+  # backend existed have no database_backend output to compare against.
+  if is_sqlite && terraform -chdir="$PERS_DIR" state list 2>/dev/null \
+       | grep -q '^digitalocean_database_cluster\.pg'; then
+    fail "project '$PROJECT_NAME' has a managed Postgres cluster in state, but DATABASE_BACKEND is 'sqlite'.
+       Applying would DESTROY that cluster's database and user. If this project still uses Postgres,
+       re-run with DATABASE_BACKEND=postgres. To decommission it deliberately, lift the cluster's
+       prevent_destroy guard and apply by hand (see README, Teardown)."
   fi
 
   terraform -chdir="$PERS_DIR" apply -auto-approve -input=false

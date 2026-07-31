@@ -113,7 +113,7 @@ Optional (defaults in parentheses):
 | Variable | Purpose |
 |---|---|
 | `FRAMEWORK` | `phoenix` (default) or `sinatra`. See [Application framework](#application-framework). `sinatra` is SQLite-only. Chosen once per project. |
-| `DATABASE_BACKEND` | `postgres` (default) or `sqlite`. See [Database backend](#database-backend). Chosen once per project at first apply; don't flip it on an existing deploy. (`sinatra` forces `sqlite`.) |
+| `DATABASE_BACKEND` | `sqlite` (default) or `postgres`. See [Database backend](#database-backend). Chosen once per project at first apply; don't flip it on an existing deploy. (`sinatra` forces `sqlite`.) |
 | `PROJECT_NAME` | infra naming: DB, VPC, tag (app name). **Immutable after first apply** — renaming would force DB replacement; the script guards this. |
 | `REGION` | DO region slug (`nyc3`) |
 | `DNS_RECORD` | subdomain inside `DNS_ZONE` (app name); `@` for the apex |
@@ -155,13 +155,14 @@ a Phoenix app. Retrofit an existing Sinatra app's skill docs with
 `DATABASE_BACKEND` picks where the app's data lives. Set it once, before the first
 `./bootstrap.sh`, in `.env` or the environment.
 
-| | `postgres` (default) | `sqlite` |
+| | `sqlite` (default) | `postgres` |
 |---|---|---|
-| Where | DigitalOcean Managed Postgres, private-VPC, TLS-verified | A SQLite file on the **droplet's local disk** (a named Docker volume) |
-| Backups | DO's managed-DB backups | **Litestream** streams the WAL to DO Spaces continuously |
-| Recreate the droplet | data is untouched (it lives in the managed cluster) | a one-shot `litestream restore` on boot pulls the latest replica back |
-| Cost | + ~$15/mo for the cluster | $0 beyond the droplet + a few cents of Spaces storage |
-| App generation | `mix phx.new` default (Postgrex) | `mix phx.new --database sqlite3` |
+| Where | A SQLite file on the **droplet's local disk** (a named Docker volume) | DigitalOcean Managed Postgres, private-VPC, TLS-verified |
+| Backups | **Litestream** streams the WAL to DO Spaces continuously | DO's managed-DB backups |
+| Recreate the droplet | a one-shot `litestream restore` on boot pulls the latest replica back | data is untouched (it lives in the managed cluster) |
+| Cost | $0 beyond the droplet + a few cents of Spaces storage | + ~$15/mo for the cluster |
+| App generation | `mix phx.new --database sqlite3` | `mix phx.new` default (Postgrex) |
+| Concurrent writers | one at a time | many |
 
 On `sqlite`, bootstrap provisions **no** managed Postgres (the `database.tf`
 resources are gated to zero), skips the TLS-config patch and the schema grant,
@@ -169,10 +170,22 @@ and seeds the app repo with Litestream config + the Spaces keypair instead of a
 `DATABASE_URL`/CA. The Litestream replica target reuses the Terraform state
 bucket under a `litestream/<project>/` prefix — no extra bucket to manage.
 
-Tradeoff you accept on `sqlite`: a single droplet, no read replicas, and a small
-window of un-replicated writes if the droplet dies between WAL pushes. For most
-small apps that's fine and a lot cheaper. The flag only affects **newly
-generated** apps — it does not convert an existing Postgres app.
+Tradeoff you accept on `sqlite`: a single droplet, no read replicas, one writer
+at a time, and a small window of un-replicated writes if the droplet dies
+between WAL pushes. For the apps this tool builds that's usually fine, and it's
+the reason `sqlite` is the default — reach for `postgres` when you actually need
+concurrent writers or SQL that SQLite lacks, not by habit.
+
+The flag only affects **newly generated** apps — it does not convert an existing
+Postgres app. Because the default is `sqlite`, re-running the bootstrap against
+an existing **Postgres** project without setting `DATABASE_BACKEND=postgres`
+would ask Terraform to tear that cluster down. The cluster's `prevent_destroy`
+would abort the apply, but its database and user carry no such guard and would
+be deleted first — so bootstrap detects a cluster in state and **refuses to
+apply** instead. Converting a live Postgres app to SQLite is a data migration,
+not a flag flip: move the rows through Ecto (both adapters encode their own
+types), place the file on the droplet's volume *before* the first SQLite deploy,
+and keep the cluster alive until you've verified the new one serves.
 
 ## Usage
 
