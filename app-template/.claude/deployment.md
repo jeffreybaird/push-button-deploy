@@ -22,10 +22,40 @@ as a Docker Compose stack. The pieces, all provisioned by the bootstrap:
 |---|---|
 | Compute | One Ubuntu droplet running Docker Compose (cloud-init installs Docker only — no secrets) |
 | TLS | **Caddy** terminates TLS, auto-issues + renews a Let's Encrypt cert (HTTP-01/TLS-ALPN), reverse-proxies to the app container |
-| Database | DigitalOcean Managed Postgres, **private-VPC only**, TLS **verified** against the cluster CA (`verify_peer`) |
+| Database | **SQLite** by default — a file on a named Docker volume, replicated to DO Spaces by a **Litestream** sidecar. With `DATABASE_BACKEND=postgres`, DigitalOcean Managed Postgres instead: **private-VPC only**, TLS **verified** against the cluster CA (`verify_peer`) |
 | DNS | An A record at DNSimple → a **reserved IP** that survives droplet recreation |
 | Images | Built on GitHub's amd64 runners, pushed to **DO Container Registry (DOCR)**, **SHA-pinned** |
 | Releases | An `app_blue`/`app_green` pair behind Caddy — exactly one live at a time (zero-downtime swap) |
+
+### If this app is on SQLite (the default)
+
+The database is a single file at `DATABASE_PATH` on the `app_data` volume, shared
+by both colors and the migrate runner. A Litestream sidecar streams the WAL to DO
+Spaces continuously; a one-shot `litestream restore` repopulates the volume on
+boot when it is empty, so a recreated droplet recovers rather than starting
+blank. There is no `DATABASE_URL`, no `db-ca.pem` and no DB TLS — SQLite has no
+network. Anything below describing those is the Postgres path.
+
+Constraints that follow, and that a change to this app has to respect:
+
+- **One writer at a time.** Reads are unaffected (WAL). Long write transactions
+  block every other write, so keep them short.
+- **`ALTER TABLE` can only add, drop or rename.** A column's type or constraints
+  cannot be changed in place: add a new column, backfill, drop the old one.
+- **`unique_constraint` must not pass `name:`.** SQLite reports the violated
+  *columns*, not the index, so `ecto_sqlite3` reconstructs Ecto's default name —
+  a custom one never matches and Ecto raises instead of returning a changeset.
+  The index itself may keep a descriptive name and a partial `WHERE` clause.
+- **A foreign-key violation raises rather than validating.** SQLite does not name
+  the violated constraint, so `assoc_constraint/2` and `foreign_key_constraint/2`
+  cannot map it to a field. Where a foreign key comes from user input, check the
+  row exists first (see the app's changeset helpers) and keep the constraint as
+  the guarantee against a delete-in-between race.
+- **`LIKE` and `COLLATE NOCASE` are case-insensitive over ASCII only**, and `LIKE`
+  has no default escape character — spell out `ESCAPE '\'`. For text that may
+  carry diacritics, search a folded (lowercased, accent-stripped) column instead.
+- No `ILIKE`, no `extract(… from …)` (use `strftime`), no alias on an `UPDATE`
+  target, and bound parameters are `?1`/`?2` rather than `$1`/`$2`.
 
 There is **no `fly.toml`/`render.yaml`-style host config file**. The runtime shape
 lives in `deploy/compose.yaml` (the blue/green + Caddy stack) and `deploy/Caddyfile`
@@ -34,10 +64,13 @@ lives in `deploy/compose.yaml` (the blue/green + Caddy stack) and `deploy/Caddyf
 
 ### Why this setup
 
-- Cheap and predictable: one droplet + one managed DB cluster, no per-request edge pricing.
+- Cheap and predictable: one droplet, no per-request edge pricing, and on the
+  SQLite default no database bill at all.
 - Caddy gives automatic HTTPS with zero cert plumbing.
 - Blue/green on a single host gives zero-downtime deploys without an orchestrator.
-- The DB lives in a managed cluster, so destroying/recreating the droplet never risks data.
+- Destroying/recreating the droplet never risks data: on Postgres the data lives
+  in a managed cluster; on SQLite the Litestream replica in Spaces is the real
+  copy, and an empty volume restores from it on boot.
 
 > **Single-node by design.** This is one droplet — no Erlang clustering. `dns_cluster`
 > is wired in the supervision tree but resolves to `:ignore` (no `DNS_CLUSTER_QUERY`
@@ -67,12 +100,15 @@ These reach the container via `.env` (secrets) or the compose `environment:` blo
 
 | Variable                          | Purpose                                                        |
 |-----------------------------------|----------------------------------------------------------------|
-| `DATABASE_URL`                    | Postgres connection string (private-VPC host; a TF sensitive output) |
+| `DATABASE_PATH`                   | **SQLite:** file on the `app_data` volume, e.g. `/data/my_app.sqlite3` |
+| `LITESTREAM_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | **SQLite:** Spaces keypair for the replica |
+| `BACKUP_BUCKET` / `_ENDPOINT` / `_REGION` / `_PATH` | **SQLite:** where the replica lives |
+| `DATABASE_URL`                    | **Postgres:** connection string (private-VPC host; a TF sensitive output) |
+| `DATABASE_CA_FILE`                | **Postgres:** path to the mounted cluster CA (`/app/db-ca.pem`) — triggers `verify_peer` |
 | `SECRET_KEY_BASE`                 | Phoenix secret key                                             |
 | `PHX_HOST` / `DOMAIN`             | Public FQDN — URL host + the cert/Caddy site name             |
 | `PHX_SERVER`                      | `"true"` so the endpoint actually serves (set in compose)     |
 | `PORT`                            | App listen port (`4000`, internal-only; Caddy proxies to it)  |
-| `DATABASE_CA_FILE`                | Path to the mounted cluster CA (`/app/db-ca.pem`) — triggers `verify_peer` |
 | `VIDEO_PROVIDER_TOKEN_ID`         | API credential for your media/video provider                   |
 | `VIDEO_PROVIDER_TOKEN_SECRET`     | API credential for your media/video provider                   |
 | `VIDEO_PROVIDER_WEBHOOK_SECRET`   | Webhook signing secret for your media/video provider           |
@@ -388,8 +424,10 @@ jobs:
     steps:
       # Port 22 is closed to the world; punch a /32 hole for THIS runner...
       - run: doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} --inbound-rules "...address:${runner_ip}/32"
-      # write a mode-600 .env (IMAGE, DOMAIN, DATABASE_URL, SECRET_KEY_BASE) + db-ca.pem
-      # scp deploy/{compose.yaml,Caddyfile,swap.sh} + .env + db-ca.pem to root@droplet
+      # write a mode-600 .env (IMAGE, DOMAIN, SECRET_KEY_BASE + the backend's own
+      # vars); on Postgres also db-ca.pem. The .env and copy steps branch on
+      # vars.DATABASE_BACKEND — SQLite ships litestream.yml where PG ships db-ca.pem.
+      # scp deploy/{compose.yaml,Caddyfile,swap.sh} + .env to root@droplet
       - run: ssh root@$HOST "cd /root && docker compose pull"
       - run: ssh root@$HOST "docker compose run --rm migrate bin/<app> eval '<Module>.Release.migrate()'"  # gate
       - run: ssh root@$HOST "bash /root/swap.sh"          # health-checked blue/green swap
@@ -401,7 +439,9 @@ Rollback is a separate `rollback.yml`: `gh workflow run rollback.yml -f tag=<pre
 re-points `.env` at a prior SHA-pinned image and re-swaps — **no rebuild**.
 
 Required repo config (seeded by the bootstrap):
-- secrets: `DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, `SECRET_KEY_BASE`
+- secrets: `DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `SECRET_KEY_BASE`; on SQLite
+  `LITESTREAM_ACCESS_KEY_ID`/`LITESTREAM_SECRET_ACCESS_KEY`, on Postgres
+  `DATABASE_URL`/`DATABASE_CA_CERT`
 - variables: `DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`
 
 ### Rules
