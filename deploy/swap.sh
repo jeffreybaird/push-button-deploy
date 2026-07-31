@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # swap.sh — health-checked blue/green swap on the droplet (story 7.2).
-# Run by the deploy/rollback workflows over SSH: bash /root/swap.sh
+# Run by the deploy/rollback workflows over SSH, from THIS app's stack directory
+# (/root/apps/<slug>): bash /root/apps/<slug>/swap.sh
 #
 # Whichever color is running stays up and serving while the OTHER color starts
 # from the image pinned in .env. `up --wait` blocks until that container's
@@ -16,24 +17,38 @@ echo "swap: active=${active:-none} -> starting $new"
 
 # Fails loudly (non-zero) if the new color never turns healthy; the old color
 # is still running and serving in that case.
-docker compose up -d --wait "$new"
+#
+# --remove-orphans clears containers this project no longer defines — the
+# pre-blue/green 'app' container, and the per-app `caddy` that this stack carried
+# before the droplet moved to a single shared edge proxy. The other color is
+# still declared in compose.yaml, so it is never an orphan.
+docker compose up -d --remove-orphans --wait "$new"
 
 # Ensure the color-independent services are up (first deploy, or a service added
-# to compose.yaml since the last one) and clear any orphaned pre-blue/green 'app'
-# container — safe to do only now, after the new color is healthy.
+# to compose.yaml since the last one) — safe to do only now, after the new color
+# is healthy.
 #
-# litestream needs no mention: the app colors depend_on it, so `up` starts it.
-# `backup` has no dependent, so nothing would ever start it otherwise — and it
-# exists only on the SQLite stack, hence the check. This script is shared by both
-# backends, and naming a service the Postgres stack lacks would fail the deploy.
-extra="caddy"
-if docker compose config --services 2>/dev/null | grep -qx backup; then
-  extra="$extra backup"
-fi
+# Named explicitly rather than running a bare `up -d`, which would start BOTH
+# colors and defeat the swap. Every non-color service qualifies: some are pulled
+# in by the colors' depends_on (litestream, db_init) and starting them again is a
+# no-op, but `backup` has no dependent and would otherwise never start — that bug
+# shipped once already, and enumerating the services means it can't come back for
+# a service that doesn't exist yet either.
+#
+# Caddy is NOT among them: it is the droplet's shared edge proxy, one per host
+# rather than one per app, and edge.sh brought it up before this ran. Services
+# behind a profile (migrate) are already absent from `config --services`.
+#
+# The guard matters: an EMPTY list would make `up -d` mean "every service",
+# starting the idle color and defeating the swap. The Postgres stack has no
+# non-color services at all.
+extra="$(docker compose config --services | grep -vxE 'app_(blue|green)' | tr '\n' ' ')"
 
-# Unquoted on purpose: $extra is a word list of service names, not one argument.
-# shellcheck disable=SC2086
-docker compose up -d --remove-orphans $extra
+if [ -n "$(printf '%s' "$extra" | tr -d ' ')" ]; then
+  # Unquoted on purpose: $extra is a word list of service names, not one argument.
+  # shellcheck disable=SC2086
+  docker compose up -d $extra
+fi
 
 if [ -n "$active" ] && [ "$active" != "$new" ]; then
   docker compose stop "$active"

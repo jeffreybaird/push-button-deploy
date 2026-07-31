@@ -21,11 +21,12 @@ as a Docker Compose stack. The pieces, all provisioned by the bootstrap:
 | Concern | Implementation |
 |---|---|
 | Compute | One Ubuntu droplet running Docker Compose (cloud-init installs Docker only — no secrets) |
-| TLS | **Caddy** terminates TLS, auto-issues + renews a Let's Encrypt cert (HTTP-01/TLS-ALPN), reverse-proxies to the app container |
+| TLS | A **shared Caddy** on the droplet terminates TLS, auto-issues + renews a Let's Encrypt cert (HTTP-01/TLS-ALPN), reverse-proxies to this app's containers |
 | Database | **SQLite** by default — a file on a named Docker volume, replicated to DO Spaces by a **Litestream** sidecar. With `DATABASE_BACKEND=postgres`, DigitalOcean Managed Postgres instead: **private-VPC only**, TLS **verified** against the cluster CA (`verify_peer`) |
 | DNS | An A record at DNSimple → a **reserved IP** that survives droplet recreation |
 | Images | Built on GitHub's amd64 runners, pushed to **DO Container Registry (DOCR)**, **SHA-pinned** |
 | Releases | An `app_blue`/`app_green` pair behind Caddy — exactly one live at a time (zero-downtime swap) |
+| Neighbours | The droplet may host **other apps**. Each lives in `/root/apps/<slug>/` as its own compose project, with its own volumes, and adds one site file to the shared Caddy |
 
 ### If this app is on SQLite (the default)
 
@@ -58,9 +59,24 @@ Constraints that follow, and that a change to this app has to respect:
   target, and bound parameters are `?1`/`?2` rather than `$1`/`$2`.
 
 There is **no `fly.toml`/`render.yaml`-style host config file**. The runtime shape
-lives in `deploy/compose.yaml` (the blue/green + Caddy stack) and `deploy/Caddyfile`
-(TLS + reverse proxy), both shipped to the droplet at deploy time. Per-deploy values
-(image ref, domain, secrets) arrive in a `.env` written over SSH — never committed.
+lives in `deploy/compose.yaml` (the blue/green stack — **no proxy in it**), and the
+TLS/routing layer lives in `deploy/Caddyfile` + `deploy/edge-compose.yaml`, which
+describe the droplet's **shared** Caddy rather than this app's. All are shipped to
+the droplet at deploy time. Per-deploy values (image ref, domain, secrets) arrive in
+a `.env` written over SSH — never committed.
+
+**Where things land on the droplet:**
+
+```
+/root/caddy/            shared edge proxy — ONE per droplet, owns :80/:443
+  Caddyfile             imports sites/*.caddy
+  sites/<slug>.caddy    this app's route (written by deploy/edge.sh each deploy)
+/root/apps/<slug>/      THIS app's stack: compose.yaml, .env, swap.sh, volumes
+```
+
+`<slug>` is the `APP_SLUG` repo variable. It keeps the stack directory, compose
+project (hence container + volume names) and Caddy upstream names distinct from
+any other app sharing the droplet.
 
 ### Why this setup
 
@@ -108,6 +124,7 @@ These reach the container via `.env` (secrets) or the compose `environment:` blo
 | `SECRET_KEY_BASE`                 | Phoenix secret key                                             |
 | `PHX_HOST` / `DOMAIN`             | Public FQDN — URL host + the cert/Caddy site name             |
 | `PHX_SERVER`                      | `"true"` so the endpoint actually serves (set in compose)     |
+| `APP_SLUG`                        | This app's name on the droplet — compose project, stack dir, Caddy upstreams |
 | `PORT`                            | App listen port (`4000`, internal-only; Caddy proxies to it)  |
 | `VIDEO_PROVIDER_TOKEN_ID`         | API credential for your media/video provider                   |
 | `VIDEO_PROVIDER_TOKEN_SECRET`     | API credential for your media/video provider                   |
@@ -165,7 +182,7 @@ it as a **one-off container before the blue/green swap** — a gate, so traffic 
 hits a half-migrated DB:
 
 ```shell
-docker compose run --rm migrate bin/my_app eval 'MyApp.Release.migrate()'
+cd /root/apps/<slug> && docker compose run --rm migrate bin/my_app eval 'MyApp.Release.migrate()'
 ```
 
 A non-zero exit fails the deploy and the old release keeps serving.
@@ -263,11 +280,20 @@ x-app: &app
   expose: ["4000"]             # Caddy reaches it by service name on the compose net
 
 services:
-  app_blue: *app
-  app_green: *app
+  # Each color joins the droplet-wide `edge` network under a slug-qualified
+  # alias — that name is what the shared Caddy dials. A bare `app_blue` would be
+  # ambiguous once a second app is on the same network.
+  app_blue:  { <<: *app, networks: { web: {}, edge: { aliases: ["${APP_SLUG}-blue"] } } }
+  app_green: { <<: *app, networks: { web: {}, edge: { aliases: ["${APP_SLUG}-green"] } } }
   migrate: { <<: *app, restart: "no", profiles: ["tools"] }   # one-off migration runner
-  caddy: # ports 80/443, mounts ./Caddyfile, persists certs in a volume
+
+networks:
+  web:                    # private to this app
+  edge: { external: true } # shared with the droplet's Caddy and any other app
 ```
+
+There is **no `caddy` service here.** Only one process can own :443, so the proxy
+is host-owned (`/root/caddy`), not app-owned.
 
 > **No `ECTO_IPV6`/`ERL_AFLAGS` here.** Those exist for IPv6-only private networks
 > (a Fly-ism). This setup talks to Postgres over the droplet's **IPv4 private VPC**
@@ -276,19 +302,25 @@ services:
 
 ### `deploy/Caddyfile` essentials
 
-Naming the site by its public domain triggers Caddy's automatic HTTPS (Let's
-Encrypt over HTTP-01/TLS-ALPN). Both colors are listed; a dial to the stopped
-color fails fast and Caddy retries the live one, holding requests through the swap:
+The droplet's `Caddyfile` is one line — `import /etc/caddy/sites/*.caddy` — and
+each app contributes a site file. Naming the site by its public domain triggers
+Caddy's automatic HTTPS (Let's Encrypt over HTTP-01/TLS-ALPN). Both colors are
+listed; a dial to the stopped color fails fast and Caddy retries the live one,
+holding requests through the swap:
 
 ```caddyfile
-{$DOMAIN} {
-	reverse_proxy app_blue:4000 app_green:4000 {
+# /root/caddy/sites/<slug>.caddy, generated from deploy/site.caddy.tmpl
+myapp.example.com {
+	reverse_proxy myapp-blue:4000 myapp-green:4000 {
 		lb_try_duration 30s
 		lb_try_interval 250ms
 		fail_duration 10s
 	}
 }
 ```
+
+Certificates live in one volume shared by every app on the droplet, so adding an
+app never re-issues an existing one.
 
 ### Clustering (optional — not used here)
 
@@ -427,10 +459,12 @@ jobs:
       # write a mode-600 .env (IMAGE, DOMAIN, SECRET_KEY_BASE + the backend's own
       # vars); on Postgres also db-ca.pem. The .env and copy steps branch on
       # vars.DATABASE_BACKEND — SQLite ships litestream.yml where PG ships db-ca.pem.
-      # scp deploy/{compose.yaml,Caddyfile,swap.sh} + .env to root@droplet
-      - run: ssh root@$HOST "cd /root && docker compose pull"
-      - run: ssh root@$HOST "docker compose run --rm migrate bin/<app> eval '<Module>.Release.migrate()'"  # gate
-      - run: ssh root@$HOST "bash /root/swap.sh"          # health-checked blue/green swap
+      # scp deploy/{Caddyfile,site.caddy.tmpl,edge.sh,edge-compose.yaml} to /root/caddy
+      # scp deploy/{compose.yaml,swap.sh} + .env to /root/apps/$APP_SLUG
+      - run: ssh root@$HOST "APP_SLUG=... DOMAIN=... bash /root/caddy/edge.sh"   # shared network+Caddy+route
+      - run: ssh root@$HOST "cd /root/apps/$APP_SLUG && docker compose pull"
+      - run: ssh root@$HOST "cd /root/apps/$APP_SLUG && docker compose run --rm migrate bin/<app> eval '<Module>.Release.migrate()'"  # gate
+      - run: ssh root@$HOST "bash /root/apps/$APP_SLUG/swap.sh"   # health-checked blue/green swap
       - if: always()                                       # ...revoked no matter how the deploy ended
         run: doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} --inbound-rules "...address:${RUNNER_IP}/32"
 ```

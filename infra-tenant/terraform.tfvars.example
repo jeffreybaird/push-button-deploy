@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored — and the
+# bootstrap REFUSES to run if one exists, because tfvars silently outrank the
+# TF_VAR_* environment it passes in. This file documents the inputs; the
+# bootstrap supplies them.
+project_name = "myapp2"
+
+# The HOST droplet's state bucket — this is how the tenant finds the droplet.
+state_bucket   = "myapp-tfstate"
+state_endpoint = "https://nyc3.digitaloceanspaces.com"
+
+# DNS (DNSimple)
+dnsimple_token   = "dnsimple_xxxxxxxxxxxxxxxxxxxxxxxx"
+dnsimple_account = "123456"
+dns_zone         = "example.com"
+dns_record       = "myapp2" # -> myapp2.example.com ; use "@" for the apex
+dns_ttl          = 300

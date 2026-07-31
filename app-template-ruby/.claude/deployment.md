@@ -1,8 +1,10 @@
 # Deployment — Docker + Puma via push-button-deploy
 
 This app deploys through the **push-button-deploy** pipeline: one Ubuntu droplet on
-DigitalOcean running Docker Compose, Caddy terminating TLS, a blue/green pair of Puma
-containers, and Litestream replicating the SQLite file to object storage. Every push to `main`
+DigitalOcean running Docker Compose, a droplet-wide Caddy terminating TLS, a blue/green pair
+of Puma containers, and Litestream replicating the SQLite file to object storage. The droplet
+may host other apps too — each gets its own stack directory, compose project and volumes under
+`/root/apps/<slug>/`, and adds one site file to the shared Caddy. Every push to `main`
 runs the same pipeline. You do not run Kamal, Capistrano, or `docker` by hand.
 
 Related: `.claude/database.md` (the DB file + Litestream), `.claude/testing.md` (the test gate),
@@ -68,8 +70,11 @@ On the droplet:
 - **`db_init`** — one-shot: `litestream restore -if-db-not-exists -if-replica-exists`, then
   `chown` `/data` to the app uid. This is what recovers data on a recreated droplet.
 - **`litestream`** — long-running sidecar streaming the WAL to Spaces.
-- **`caddy`** — terminates TLS (automatic Let's Encrypt for `DOMAIN`), reverse-proxies to
-  whichever color is live.
+
+There is **no `caddy` service in this stack.** TLS and routing belong to the droplet's shared
+Caddy in `/root/caddy` (only one process can own :443). It terminates TLS with automatic Let's
+Encrypt for `DOMAIN` and reverse-proxies to `${APP_SLUG}-blue` / `${APP_SLUG}-green` — the
+aliases the two colors publish on the droplet-wide `edge` network.
 
 The app reads its config from environment variables the compose file sets and `.env` supplies —
 never from committed config. The variables that matter to your code:
@@ -81,6 +86,7 @@ never from committed config. The variables that matter to your code:
 | `DATABASE_PATH` | on-volume SQLite path (e.g. `/data/my_app.sqlite3`) |
 | `SECRET_KEY_BASE` | Rack session secret (`set :sessions, secret:`) |
 | `APP_HOST` / `DOMAIN` | the public FQDN, for absolute URLs |
+| `APP_SLUG` | this app's name on the droplet — compose project, stack dir, Caddy upstreams |
 
 Litestream/Spaces credentials (`LITESTREAM_*`, `BACKUP_*`) are consumed by the sidecar, not your
 app code.
@@ -120,7 +126,7 @@ hand with `gh secret set`).
 Push to `main`; the pipeline does the rest.
 
 **You (almost) never touch:** `Dockerfile`, `deploy/*.yaml`, `deploy/Caddyfile`,
-`.github/workflows/*.yml`, `deploy/litestream.yml`. These are managed by the push-button-deploy
+`deploy/site.caddy.tmpl`, `deploy/edge.sh`, `.github/workflows/*.yml`, `deploy/litestream.yml`. These are managed by the push-button-deploy
 tooling. If you change one, understand the blue/green + migration-gate contract first — a broken
 healthcheck or a non-additive migration takes the swap down.
 

@@ -35,6 +35,10 @@ jobs:
       HOST: ${{ vars.DROPLET_HOST }}
       DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
       TAG: ${{ inputs.tag }}
+      # Same slug the deploy workflow uses — it locates this app's stack among
+      # any others on the droplet.
+      APP_SLUG: ${{ vars.APP_SLUG }}
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}
     steps:
       - uses: actions/checkout@v6
 
@@ -90,6 +94,7 @@ jobs:
           cat > .env <<EOF
           IMAGE=${{ steps.meta.outputs.image }}:${TAG}
           DOMAIN=${{ vars.DOMAIN }}
+          APP_SLUG=${APP_SLUG}
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           EOF
@@ -101,6 +106,7 @@ jobs:
           cat > .env <<EOF
           IMAGE=${{ steps.meta.outputs.image }}:${TAG}
           DOMAIN=${{ vars.DOMAIN }}
+          APP_SLUG=${APP_SLUG}
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           DATABASE_PATH=${{ vars.DATABASE_PATH }}
           LITESTREAM_ACCESS_KEY_ID=${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
@@ -117,19 +123,41 @@ jobs:
           printf '%s\n' "${{ secrets.DATABASE_CA_CERT }}" > db-ca.pem
           chmod 644 db-ca.pem
 
+      # The shared edge proxy is host-owned and already running; refreshing it
+      # here keeps a rollback self-sufficient (it can bring a droplet back on its
+      # own) and re-asserts this app's route.
+      - name: Create stack directories
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "mkdir -p /root/caddy/sites '$STACK_DIR'"
+
+      - name: Copy shared edge files to droplet
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/edge-compose.yaml \
+            root@"$HOST":/root/caddy/compose.yaml
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/Caddyfile deploy/site.caddy.tmpl deploy/edge.sh \
+            root@"$HOST":/root/caddy/
+
       - name: Copy stack files + .env to droplet (Postgres)
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh db-ca.pem .env \
-            root@"$HOST":/root/
+            deploy/compose.yaml deploy/swap.sh db-ca.pem .env \
+            root@"$HOST":"$STACK_DIR"/
 
       - name: Copy stack files + .env to droplet (SQLite)
         if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh deploy/litestream.yml .env \
-            root@"$HOST":/root/
+            deploy/compose.yaml deploy/swap.sh deploy/litestream.yml .env \
+            root@"$HOST":"$STACK_DIR"/
+
+      - name: Prepare shared edge (network, Caddy, route)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "APP_SLUG='$APP_SLUG' DOMAIN='${{ vars.DOMAIN }}' bash /root/caddy/edge.sh"
 
       # No migration step: the pinned image is older than (or equal to) the
       # schema, so Ecto.Migrator would find nothing pending anyway.
@@ -139,7 +167,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
             "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
-             && cd /root && docker compose pull && bash /root/swap.sh"
+             && cd '$STACK_DIR' && docker compose pull && bash swap.sh"
 
       - name: Revoke runner IP
         if: always() && env.RUNNER_IP != ''

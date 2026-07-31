@@ -1,0 +1,157 @@
+# Push-to-main deploy pipeline for a ZOLA static site. Copied into the site repo
+# by the bootstrap as .github/workflows/deploy.yml.
+#
+# Unlike the Phoenix/Sinatra pipelines this builds no container image and pushes
+# nothing to a registry: `zola build` produces a directory, the directory is
+# shipped to the droplet as a release, and a symlink flip publishes it. The
+# droplet's shared Caddy serves the files directly.
+#
+# One job, not three. There is no separate test gate because `zola build` IS the
+# gate — a broken template, a bad shortcode or an unparsable front matter fails
+# the build, and nothing is uploaded.
+#
+# Required repo config (seeded by bootstrap):
+#   secret DIGITALOCEAN_ACCESS_TOKEN  - DO API token (firewall hole-punch)
+#   secret SSH_PRIVATE_KEY            - deploy key for the droplet
+#   var    DROPLET_HOST               - droplet IP
+#   var    FIREWALL_ID                - droplet firewall (temporary SSH hole-punch)
+#   var    DOMAIN                     - public FQDN (the Caddy site name)
+#   var    APP_SLUG                   - this site's slug on the droplet
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  # Redeploy whatever is on main without pushing a commit. Repo variables
+  # (DOMAIN, APP_SLUG, DROPLET_HOST) are not reflected in git, so changing one
+  # otherwise has no way to reach the droplet: a bootstrap re-run that finds
+  # nothing to commit triggers no deploy, and the old value keeps serving.
+  workflow_dispatch:
+
+# One deploy at a time; queue rather than cancel so a publish is never
+# interrupted half-way.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.DROPLET_HOST }}
+      APP_SLUG: ${{ vars.APP_SLUG }}
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}
+      RELEASE: ${{ github.sha }}
+    steps:
+      # Themes are Zola's standard submodule pattern; without recursive checkout
+      # the build fails on a missing theme rather than on anything you wrote.
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      # Single source of truth for the Zola version: .zola-version in the repo,
+      # the same way .ruby-version pins the Sinatra build. Bumping Zola is a
+      # commit to the site, not an edit to this workflow.
+      - name: Read .zola-version
+        id: zola
+        run: |
+          v=$(tr -d '[:space:]' < .zola-version 2>/dev/null || true)
+          if [ -z "$v" ]; then echo "::error::.zola-version is missing or empty"; exit 1; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install Zola
+        run: |
+          v="${{ steps.zola.outputs.version }}"
+          url="https://github.com/getzola/zola/releases/download/v${v}/zola-v${v}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" -o /tmp/zola.tar.gz \
+            || { echo "::error::could not download Zola v${v} from ${url} — is .zola-version a real release?"; exit 1; }
+          tar -xzf /tmp/zola.tar.gz -C /usr/local/bin zola
+          zola --version
+
+      # The build gate. --drafts is deliberately NOT passed: drafts stay out of
+      # production. The base URL comes from the deploy target rather than
+      # config.toml, so the same repo can be served from another domain without
+      # editing committed config.
+      - name: Build site
+        run: |
+          zola build --base-url "https://${{ vars.DOMAIN }}"
+          if [ ! -f public/index.html ]; then
+            echo "::error::build produced no public/index.html"; exit 1
+          fi
+          echo "built $(find public -type f | wc -l) files"
+
+      # Ship one file, not a directory tree: a tarball is a single scp and it
+      # extracts atomically enough that a half-uploaded release can't be
+      # published (publish.sh runs only after extraction succeeds).
+      - name: Package release
+        run: tar -czf site.tgz -C public .
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      # The droplet firewall keeps port 22 closed to the world; runners have no
+      # fixed IPs. Punch a /32 hole for THIS runner, revoked in the always()
+      # step below.
+      - name: Authorize runner IP for SSH
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          echo "RUNNER_IP=$runner_ip" >> "$GITHUB_ENV"
+          doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Create stack directories
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "mkdir -p /root/caddy/sites '$STACK_DIR/releases/$RELEASE'"
+
+      # /root/caddy is the SHARED edge proxy — one per droplet, host-owned. Every
+      # app ships these files so that ANY app's deploy can stand the proxy up,
+      # including the first one on a fresh droplet.
+      - name: Copy shared edge files to droplet
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/edge-compose.yaml \
+            root@"$HOST":/root/caddy/compose.yaml
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/Caddyfile deploy/site.caddy.tmpl deploy/edge.sh \
+            root@"$HOST":/root/caddy/
+
+      - name: Upload release
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/publish.sh site.tgz \
+            root@"$HOST":"$STACK_DIR"/
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "cd '$STACK_DIR' && tar -xzf site.tgz -C 'releases/$RELEASE' && rm -f site.tgz"
+
+      # Shared network + shared Caddy + this site's route. Runs BEFORE the
+      # publish so that on a first deploy the route exists the moment there is
+      # something to serve. (On a droplet still running the old single-stack
+      # layout this also performs the one-time migration — see deploy/edge.sh.)
+      - name: Prepare shared edge (network, Caddy, route)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "APP_SLUG='$APP_SLUG' DOMAIN='${{ vars.DOMAIN }}' bash /root/caddy/edge.sh"
+
+      # The deploy itself: one atomic symlink move. Old releases are kept for
+      # rollback (KEEP_RELEASES in publish.sh).
+      - name: Publish release
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "bash '$STACK_DIR'/publish.sh '$RELEASE'"
+
+      # Close the hole no matter how the deploy ended.
+      - name: Revoke runner IP
+        if: always() && env.RUNNER_IP != ''
+        run: |
+          doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${RUNNER_IP}/32"

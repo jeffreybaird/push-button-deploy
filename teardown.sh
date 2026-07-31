@@ -19,6 +19,12 @@
 # bootstrap.sh applied. Apps bootstrapped before infra/ existed fall back to
 # this repo's infra-* directories.
 #
+# TENANT APPS (those with an infra/tenant/ root — apps deployed onto a droplet
+# another app owns) take a different, much smaller path: their DNS record, their
+# stack + volumes under /root/apps/<slug> on the droplet, and their route out of
+# the shared Caddy. The droplet, its other apps, the reserved IP and the state
+# bucket belong to the host and are never touched.
+#
 # NOT touched: the DO registry itself, the SSH key in DO, the DNSimple zone,
 # the local app directory, and (without --delete-repo) the GitHub repo with
 # its secrets/variables.
@@ -42,11 +48,30 @@ log()  { printf '\033[31m==>\033[0m [%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Same precedence rule as bootstrap.sh: the CALLING SHELL WINS. A teardown that
+# silently used .env's DNS_ZONE instead of the one the operator named would
+# destroy records in the wrong zone.
 if [ -f "$SCRIPT_DIR/.env" ]; then
+  _envtmp="$(mktemp)"
+  for _k in $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$SCRIPT_DIR/.env"); do
+    if [ -n "${!_k+x}" ]; then printf '%s=%q\n' "$_k" "${!_k}" >> "$_envtmp"; fi
+  done
+
   set -a
   # shellcheck disable=SC1091
   . "$SCRIPT_DIR/.env"
   set +a
+
+  if [ -s "$_envtmp" ]; then
+    while IFS= read -r _line; do
+      _k="${_line%%=*}"
+      _was="${!_k}"
+      eval "export $_line"
+      [ "$_was" != "${!_k}" ] && log "$_k: using '${!_k}' from the environment, not '$_was' from .env"
+    done < "$_envtmp"
+  fi
+  rm -f "$_envtmp"
+  unset _envtmp _k _line _was
 fi
 
 REQUIRED_BINS="terraform doctl curl"
@@ -70,7 +95,18 @@ if [ -d "$APP_DIR" ]; then APP_DIR="$(cd "$APP_DIR" && pwd)"; fi
 # Destroy the app's OWN Terraform roots — the ones bootstrap.sh applied, which
 # may carry local edits. Apps predating <app_dir>/infra/ still have their roots
 # only in this repo, so fall back to those.
-if [ -d "$APP_DIR/infra/state" ]; then
+# A TENANT app has exactly one root and owns no shared infrastructure: it runs
+# on a droplet another app provisioned. Tearing it down must therefore remove
+# its DNS record, its stack + volumes on the droplet and its route through the
+# shared Caddy — and touch nothing else. The full teardown below would try to
+# destroy a droplet, a database and a bucket this app never owned.
+TENANT=0
+TENANT_TF_DIR="$APP_DIR/infra/tenant"
+if [ -d "$TENANT_TF_DIR" ]; then
+  TENANT=1
+  REQUIRED_ENV="$REQUIRED_ENV SSH_PRIVATE_KEY"
+  log "using the app's tenant root: $TENANT_TF_DIR (this app shares another app's droplet)"
+elif [ -d "$APP_DIR/infra/state" ]; then
   PERS_DIR="$APP_DIR/infra/persistent"
   APP_TF_DIR="$APP_DIR/infra/app"
   STATE_TF_DIR="$APP_DIR/infra/state"
@@ -95,12 +131,120 @@ if [ -f "$APP_DIR/mix.exs" ]; then
   # shellcheck source=scripts/app-meta.sh
   . "$SCRIPT_DIR/scripts/app-meta.sh"
   APP_NAME="$(app_name "$APP_DIR")"
+elif [ -f "$APP_DIR/Gemfile" ] || [ -f "$APP_DIR/config.toml" ]; then
+  # Sinatra apps and Zola sites have no mix.exs; the name is the directory
+  # basename (the same rule bootstrap's parse_meta uses).
+  APP_NAME="$(basename "$APP_DIR")"
+fi
+
+# A static site (Zola) pushes no image, so there is no registry repository to
+# delete — and deleting one that happens to share its name would take another
+# app's images with it.
+STATIC=0
+if [ -f "$APP_DIR/config.toml" ] && [ ! -f "$APP_DIR/mix.exs" ] && [ ! -f "$APP_DIR/Gemfile" ]; then
+  STATIC=1
 fi
 
 # PROJECT_NAME: same resolution as bootstrap (env wins, else app-name derived).
 if [ -z "${PROJECT_NAME:-}" ]; then
   [ -n "$APP_NAME" ] || fail "PROJECT_NAME not set and no app at $APP_DIR to derive it from"
   PROJECT_NAME="$(printf '%s' "$APP_NAME" | tr '_' '-')"
+fi
+
+# ---- tenant teardown (self-contained; exits) --------------------------------------
+if [ "$TENANT" = 1 ]; then
+  have ssh || fail "missing binary: ssh (a tenant teardown removes its stack from the shared droplet)"
+  [ -r "$SSH_PRIVATE_KEY" ] || fail "SSH private key not readable: $SSH_PRIVATE_KEY"
+
+  # The tenant root records where its state lives; it is the HOST's bucket, so
+  # nothing here may create or destroy a bucket.
+  hcl="$TENANT_TF_DIR/backend.hcl"
+  [ -f "$hcl" ] || fail "no $hcl — run the bootstrap on this app once before tearing it down"
+  STATE_BUCKET="$(sed -nE 's/^bucket[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$hcl" | head -1)"
+  STATE_ENDPOINT="$(sed -nE 's/.*s3[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$hcl" | head -1)"
+  STATE_KEY="$(sed -nE 's/^key[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$hcl" | head -1)"
+  [ -n "$STATE_BUCKET" ] && [ -n "$STATE_ENDPOINT" ] && [ -n "$STATE_KEY" ] \
+    || fail "could not read bucket/endpoint/key from $hcl"
+
+  export AWS_ACCESS_KEY_ID="$SPACES_ACCESS_KEY_ID"
+  export AWS_SECRET_ACCESS_KEY="$SPACES_SECRET_ACCESS_KEY"
+  export TF_VAR_project_name="$PROJECT_NAME"
+  export TF_VAR_state_bucket="$STATE_BUCKET"
+  export TF_VAR_state_endpoint="$STATE_ENDPOINT"
+  export TF_VAR_dnsimple_token="$DNSIMPLE_TOKEN"
+  export TF_VAR_dnsimple_account="$DNSIMPLE_ACCOUNT"
+  export TF_VAR_dns_zone="$DNS_ZONE"
+  export TF_VAR_dns_record="${DNS_RECORD:-$PROJECT_NAME}"
+
+  terraform -chdir="$TENANT_TF_DIR" init -input=false -force-copy -backend-config=backend.hcl >/dev/null
+
+  # Read the droplet's address BEFORE destroying the record that documents it.
+  DROPLET_IP="$(terraform -chdir="$TENANT_TF_DIR" output -raw host_ip 2>/dev/null || true)"
+  SLUG="$PROJECT_NAME"
+
+  log "TEARDOWN of TENANT '$PROJECT_NAME' (shared droplet ${DROPLET_IP:-unknown}):"
+  printf '  - DNS record for this app\n'
+  if [ "$STATIC" = 1 ]; then
+    printf '  - /root/apps/%s on the droplet (its built releases)\n' "$SLUG"
+  else
+    printf '  - /root/apps/%s on the droplet, INCLUDING ITS SQLITE VOLUME (all data)\n' "$SLUG"
+  fi
+  printf '  - its route from the shared Caddy (/root/caddy/sites/%s.caddy)\n' "$SLUG"
+  if [ -n "$APP_NAME" ] && [ "$STATIC" != 1 ]; then printf '  - registry repository %s\n' "$APP_NAME"; fi
+  if [ "$DELETE_REPO" = 1 ]; then printf '  - GitHub repository (--delete-repo)\n'; fi
+  printf '  NOT touched: the droplet, its other apps, the reserved IP, the state bucket.\n'
+  [ "$STATIC" = 1 ] \
+    || printf '  NOT touched: this app%s Litestream replica in Spaces (litestream/%s/) — delete it by hand if you want the data gone.\n' "'s" "$PROJECT_NAME"
+  if [ "$ASSUME_YES" != 1 ]; then
+    printf 'Type the project name (%s) to confirm: ' "$PROJECT_NAME"
+    read -r answer
+    [ "$answer" = "$PROJECT_NAME" ] || fail "confirmation did not match — aborting (nothing destroyed)"
+  fi
+
+  # 1. Remove the stack from the droplet. -v takes this app's volumes (its
+  #    SQLite file); they are project-scoped, so no other app's data is in
+  #    reach. Best-effort: a droplet we cannot reach (firewall, already gone)
+  #    must not block destroying the DNS record.
+  if [ -n "$DROPLET_IP" ]; then
+    log "droplet: removing /root/apps/$SLUG and its volumes"
+    ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+      root@"$DROPLET_IP" "
+        set -e
+        # A static site has no compose file; the -f guard keeps this from
+        # erroring out before the rm below gets to run.
+        if [ -f /root/apps/$SLUG/compose.yaml ]; then cd /root/apps/$SLUG && docker compose down -v --remove-orphans || true; fi
+        rm -rf /root/apps/$SLUG /root/caddy/sites/$SLUG.caddy
+        # Drop this app's route without disturbing the other apps' traffic.
+        cd /root/caddy && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+      " || log "WARNING: could not clean the droplet (unreachable?) — remove /root/apps/$SLUG and /root/caddy/sites/$SLUG.caddy by hand"
+  else
+    log "WARNING: no host IP in state — skipping droplet cleanup; remove /root/apps/$SLUG by hand"
+  fi
+
+  # 2. The one piece of infrastructure this app owns.
+  log "destroy: infra/tenant (DNS record)"
+  terraform -chdir="$TENANT_TF_DIR" destroy -auto-approve -input=false
+
+  # 3. Registry repository (the registry itself is shared and stays).
+  if [ -n "$APP_NAME" ] && [ "$STATIC" != 1 ] && doctl registry get --format Name --no-header >/dev/null 2>&1; then
+    if doctl registry repository list-v2 --format Name --no-header 2>/dev/null | grep -qx "$APP_NAME"; then
+      log "registry: deleting repository '$APP_NAME' (registry itself is kept)"
+      doctl registry repository delete "$APP_NAME" --force
+    fi
+  fi
+
+  if [ "$DELETE_REPO" = 1 ]; then
+    have gh || fail "gh required for --delete-repo"
+    ( cd "$APP_DIR" && gh repo delete --yes ) \
+      || fail "gh repo delete failed — it needs the delete_repo scope: gh auth refresh -h github.com -s delete_repo"
+  fi
+
+  # The bucket belongs to the host and stays; so does this tenant's now-empty
+  # state object under tenants/<project>/ (a few hundred bytes, and deleting it
+  # would mean reaching into the host's bucket by hand).
+  rm -rf "$TENANT_TF_DIR/.terraform"
+  log "done. The droplet and its other apps are untouched."
+  exit 0
 fi
 
 REGION="${REGION:-nyc3}"

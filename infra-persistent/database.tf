@@ -4,8 +4,9 @@
 # Every managed-Postgres resource below is gated on this. When the app runs on
 # SQLite (database_backend = "sqlite") none of them are created — the app keeps
 # its DB file on the droplet's local disk and replicates it to Spaces with
-# Litestream (deploy/compose.sqlite.yaml). The tag is created either way so
-# infra-app's droplet tagging stays valid regardless of backend.
+# Litestream (deploy/compose.sqlite.yaml); "none" (a static site) has no data
+# layer at all. The tag is created in every case so infra-app's droplet tagging
+# stays valid regardless of backend.
 locals {
   pg_count = var.database_backend == "postgres" ? 1 : 0
 }

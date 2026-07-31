@@ -4,15 +4,33 @@
 #
 #   ./bootstrap.sh --check [app_dir]   # verify prerequisites, exit non-zero on first gap
 #   ./bootstrap.sh [app_dir]           # provision + wire + deploy (default app_dir: .)
+#   ./bootstrap.sh --host <host_app_dir> [app_dir]
+#                                      # deploy onto a droplet that ALREADY serves
+#                                      # <host_app_dir>'s app (a "tenant")
+#
+# TENANT MODE (--host, or HOST_APP_DIR in the environment): the app is deployed
+# onto an existing droplet instead of getting one of its own. It provisions no
+# droplet, no reserved IP, no firewall, no state bucket and no database — it
+# adds a DNS record pointing at the host's IP, gets its own stack directory,
+# compose project and volumes on the droplet, and contributes one site file to
+# the droplet's shared Caddy. A tenant must be a SQLite app or a static site
+# (FRAMEWORK=zola): a SQLite tenant keeps its own file on its own volume with its
+# own Litestream prefix, and a static tenant stores nothing at all.
+#
+# The host is named by its APP DIRECTORY because that is where its Terraform
+# roots live: the tenant reads the host's state for the droplet IP, firewall ID
+# and state bucket, so a recreated droplet is picked up automatically.
 #
 # app_dir may be EMPTY or NOT EXIST YET: a fresh app is generated there
 # (Phoenix: mix phx.new <basename>; Sinatra: scripts/new-sinatra-app.sh). An
 # existing app is used as-is.
 #
 # Optional config (env, with defaults):
-#   FRAMEWORK         'phoenix' (default) or 'sinatra'. Selects the app stack the
-#                     bootstrap generates + deploys. 'sinatra' is SQLite-only and
-#                     forces DATABASE_BACKEND=sqlite. Chosen once per project.
+#   FRAMEWORK         'phoenix' (default), 'sinatra' or 'zola'. Selects the app
+#                     stack the bootstrap generates + deploys. 'sinatra' is
+#                     SQLite-only and forces DATABASE_BACKEND=sqlite; 'zola' is a
+#                     STATIC site with no database at all (DATABASE_BACKEND=none)
+#                     and no container image. Chosen once per project.
 #   DATABASE_BACKEND  'sqlite' (default) provisions no DB — the app keeps a
 #                     SQLite file on the droplet's local disk, replicated to
 #                     Spaces by Litestream. 'postgres' provisions a managed
@@ -79,17 +97,37 @@ have()  { command -v "$1" >/dev/null 2>&1; }
 # The choice is per-project and effectively permanent. Running an existing
 # Postgres project WITHOUT setting DATABASE_BACKEND=postgres would ask Terraform
 # to tear its cluster down — tf_persistent refuses rather than let that happen.
-DATABASE_BACKEND="${DATABASE_BACKEND:-sqlite}"
 is_sqlite() { [ "$DATABASE_BACKEND" = "sqlite" ]; }
 
 # Application framework selector. 'phoenix' (default) generates + deploys a
 # Phoenix/Elixir app; 'sinatra' a Sinatra/Ruby app (Sequel + Puma). is_sinatra /
 # is_phoenix gate every framework-specific branch. The Sinatra path is
 # SQLite-only (Sequel + Litestream), so choosing it forces the sqlite backend.
-FRAMEWORK="${FRAMEWORK:-phoenix}"
+# 'zola' is a STATIC site: `zola build` produces a directory, CI ships it to the
+# droplet as a release, and the shared Caddy serves those files directly. There
+# is no app container, no image in the registry and no database — which is why it
+# forces DATABASE_BACKEND=none rather than picking one.
 is_sinatra() { [ "$FRAMEWORK" = "sinatra" ]; }
 is_phoenix() { [ "$FRAMEWORK" = "phoenix" ]; }
-if is_sinatra; then DATABASE_BACKEND="sqlite"; fi
+is_zola()    { [ "$FRAMEWORK" = "zola" ]; }
+# A static site has no server-side runtime, so every dynamic-stack step below
+# (image build, blue/green swap, migrations, runtime secrets) is skipped or
+# replaced. is_static names that where the reason is "no app process" rather than
+# "Zola specifically" — the next static generator reuses the same branches.
+is_static()  { is_zola; }
+
+# Tenant mode: deploy onto a droplet another app already owns (--host, or
+# HOST_APP_DIR in the environment). is_tenant gates every step that would
+# otherwise provision host-owned infrastructure.
+#
+# Tenants are SQLite-only, deliberately. Sharing a droplet is a cost decision,
+# and the Postgres path's per-app cluster costs three times the droplet it would
+# be sharing; putting several apps in ONE cluster is a different feature (users,
+# grants and firewall rules per tenant) and not this one. Each SQLite tenant
+# keeps its own file on its own volume with its own Litestream prefix, so they
+# are isolated from each other without any of that.
+HOST_APP_DIR="${HOST_APP_DIR:-}"
+is_tenant() { [ -n "$HOST_APP_DIR" ]; }
 
 # Numbered step banner — the heartbeat of a run. If output stops after a step
 # banner, THAT step is where it stopped.
@@ -127,13 +165,75 @@ trap 'rc=$?; if [ "$rc" -ne 0 ]; then
 
 # Local config: a gitignored .env beside this script (see .env.example).
 # Shell-sourced, so $HOME etc. expand; `set -a` exports plain KEY=value lines
-# (an `export ` prefix also works). File values override the calling shell's.
+# (an `export ` prefix also works).
+#
+# PRECEDENCE: the CALLING SHELL WINS. A value already set in the environment is
+# restored after the file is sourced, so a per-run override does what it looks
+# like it does:
+#
+#     DNS_ZONE=other.com ./bootstrap.sh ~/src/site
+#
+# This used to be the other way round — the file overrode the shell — which made
+# per-run overrides silently impossible: the run above would provision against
+# whatever .env said and report success, having built the wrong thing. An
+# override that differs is announced rather than applied in silence.
 if [ -f "$SCRIPT_DIR/.env" ]; then
+  _envtmp="$(mktemp)"
+  # Every KEY on a plain or `export `-prefixed assignment line.
+  for _k in $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$SCRIPT_DIR/.env"); do
+    # ${!_k+x} is set only when the variable EXISTS in the environment, so an
+    # explicit empty value still counts as "the caller said so".
+    if [ -n "${!_k+x}" ]; then printf '%s=%q\n' "$_k" "${!_k}" >> "$_envtmp"; fi
+  done
+
   set -a
   # shellcheck disable=SC1091
   . "$SCRIPT_DIR/.env"
   set +a
+
+  # Re-apply what the caller set, and say so where the file disagreed. Still
+  # inside `set -a`'s effect for these names: they were exported while sourcing.
+  if [ -s "$_envtmp" ]; then
+    while IFS= read -r _line; do
+      _k="${_line%%=*}"
+      _was="${!_k}"
+      eval "export $_line"
+      [ "$_was" != "${!_k}" ] && warn "$_k: using '${!_k}' from the environment, not '$_was' from .env"
+    done < "$_envtmp"
+  fi
+  rm -f "$_envtmp"
+  unset _envtmp _k _line _was
 fi
+
+# Resolve FRAMEWORK and DATABASE_BACKEND *here*, after .env — not next to the
+# is_* predicates above. The predicates only read the variables, so where they
+# are defined is irrelevant; these lines APPLY defaults and coercions, and doing
+# that before .env is sourced would let a .env value silently outrank the
+# coercion (a FRAMEWORK=sinatra in .env would keep whatever DATABASE_BACKEND the
+# same file set, instead of being forced to sqlite).
+FRAMEWORK="${FRAMEWORK:-phoenix}"
+case "$FRAMEWORK" in
+  phoenix|sinatra|zola) ;;
+  *) fail "FRAMEWORK must be 'phoenix', 'sinatra' or 'zola' (got '$FRAMEWORK')" ;;
+esac
+
+DATABASE_BACKEND="${DATABASE_BACKEND:-sqlite}"
+# Sinatra runs on SQLite only (Sequel + Litestream); a static site has no data
+# layer at all. Both are FORCED rather than refused, because the common case is a
+# shared .env carrying a DATABASE_BACKEND meant for some other project — failing
+# there would be obstructive. But an override that changes what gets provisioned
+# is never silent: say so when the incoming value actually differed.
+_requested_backend="${DATABASE_BACKEND}"
+if is_sinatra; then DATABASE_BACKEND="sqlite"; fi
+if is_zola;    then DATABASE_BACKEND="none"; fi
+# Only 'postgres' is worth a warning: it is the one request whose silent
+# downgrade would change what gets provisioned, billed and backed up. Ignoring a
+# 'sqlite' on a static site provisions nothing either way, and a shared .env
+# naming it is the normal case — warning there would be noise on every run.
+if [ "$_requested_backend" = "postgres" ] && [ "$DATABASE_BACKEND" != "postgres" ]; then
+  warn "FRAMEWORK=$FRAMEWORK forces DATABASE_BACKEND=$DATABASE_BACKEND — the requested managed Postgres cluster will NOT be provisioned"
+fi
+unset _requested_backend
 
 # Terraform roots. The ones in THIS repo are templates: every app gets its own
 # copy under <app_dir>/infra/ (scripts/sync-infra.sh) and Terraform runs from
@@ -143,12 +243,15 @@ fi
 TPL_PERS_DIR="$SCRIPT_DIR/infra-persistent"
 TPL_APP_TF_DIR="$SCRIPT_DIR/infra-app"
 TPL_STATE_TF_DIR="$SCRIPT_DIR/infra-state"
+TPL_TENANT_TF_DIR="$SCRIPT_DIR/infra-tenant"
 
 # Set once APP_DIR is known (see main).
 set_infra_dirs() {
   PERS_DIR="$APP_DIR/infra/persistent"
   APP_TF_DIR="$APP_DIR/infra/app"
   STATE_TF_DIR="$APP_DIR/infra/state"
+  # Tenants have exactly this one root; the three above stay unset on disk.
+  TENANT_TF_DIR="$APP_DIR/infra/tenant"
 }
 
 # Share provider binaries across projects: switching projects drops each root's
@@ -161,7 +264,10 @@ mkdir -p "$TF_PLUGIN_CACHE_DIR"
 # `mix`; Sinatra scaffolds with bash and only needs `openssl` (fresh session
 # secret) — the Ruby build itself happens in Docker/CI, not locally.
 REQUIRED_BINS="git terraform doctl gh curl ssh scp dig"
-if is_sinatra; then REQUIRED_BINS="$REQUIRED_BINS openssl"; else REQUIRED_BINS="$REQUIRED_BINS mix"; fi
+# Zola needs nothing extra locally: the scaffold is plain bash and the build runs
+# in CI, so there is no `zola` binary to require.
+if is_sinatra; then REQUIRED_BINS="$REQUIRED_BINS openssl"
+elif is_phoenix; then REQUIRED_BINS="$REQUIRED_BINS mix"; fi
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
 
 # ---- story 6.1: preflight ----------------------------------------------------
@@ -171,8 +277,26 @@ preflight() {
 
   case "$DATABASE_BACKEND" in
     postgres|sqlite) ;;
+    # 'none' is never selectable by hand: it is what FRAMEWORK=zola implies, and
+    # the coercion above is the only thing that sets it.
+    none) is_zola || fail "DATABASE_BACKEND=none is only valid for FRAMEWORK=zola" ;;
     *) fail "DATABASE_BACKEND must be 'postgres' or 'sqlite' (got '$DATABASE_BACKEND')" ;;
   esac
+
+  # Tenant mode: the host must be a real, already-bootstrapped app directory —
+  # the tenant reads its Terraform state for the droplet's IP and firewall, so a
+  # host that was never applied has nothing to read.
+  if is_tenant; then
+    [ -d "$HOST_APP_DIR" ] || fail "host app directory does not exist: $HOST_APP_DIR"
+    [ -d "$HOST_APP_DIR/infra/app" ] \
+      || fail "$HOST_APP_DIR has no infra/app — it is not a bootstrapped host app (a tenant needs a host that owns a droplet)"
+    [ -f "$HOST_APP_DIR/infra/persistent/backend.hcl" ] \
+      || fail "$HOST_APP_DIR/infra/persistent/backend.hcl is missing — run the bootstrap on the host app first (it names the shared state bucket)"
+    [ "$HOST_APP_DIR" != "$APP_DIR" ] \
+      || fail "an app cannot be a tenant of itself (--host and app_dir are the same directory)"
+    is_sqlite || is_static \
+      || fail "a tenant must be a SQLite app or a static site: a shared droplet with a per-app managed Postgres cluster costs more than the droplet it shares. Unset DATABASE_BACKEND (or set it to sqlite)."
+  fi
 
   for b in $REQUIRED_BINS; do
     have "$b" || fail "missing binary: $b"
@@ -184,8 +308,8 @@ preflight() {
   # Both the templates and the app's own copies (which may not exist yet on a
   # first run — a glob over a missing directory simply matches nothing).
   local dir f
-  for dir in "$TPL_PERS_DIR" "$TPL_APP_TF_DIR" "$TPL_STATE_TF_DIR" \
-             "$PERS_DIR" "$APP_TF_DIR" "$STATE_TF_DIR"; do
+  for dir in "$TPL_PERS_DIR" "$TPL_APP_TF_DIR" "$TPL_STATE_TF_DIR" "$TPL_TENANT_TF_DIR" \
+             "$PERS_DIR" "$APP_TF_DIR" "$STATE_TF_DIR" "$TENANT_TF_DIR"; do
     for f in "$dir"/terraform.tfvars "$dir"/terraform.tfvars.json "$dir"/*.auto.tfvars "$dir"/*.auto.tfvars.json; do
       [ -e "$f" ] && fail "$f would override bootstrap's variables (terraform precedence: tfvars beats TF_VAR_ env). Move it aside: mv '$f' '$f.bak'"
     done
@@ -230,7 +354,10 @@ preflight() {
 # framework signature file) is used as-is; a non-empty non-app directory is
 # refused rather than generated over.
 ensure_app() {
-  local sig; if is_sinatra; then sig="Gemfile"; else sig="mix.exs"; fi
+  local sig
+  if is_sinatra;  then sig="Gemfile"
+  elif is_zola;   then sig="config.toml"
+  else                 sig="mix.exs"; fi
   if [ -f "$APP_DIR/$sig" ]; then
     log "app: using existing $APP_DIR"
     return 0
@@ -243,6 +370,15 @@ ensure_app() {
     # Scaffolds a Sinatra+Sequel+SQLite app and injects the app-template-ruby
     # skill docs. Existing apps are retrofitted by hand with the same script.
     "$SCRIPT_DIR/scripts/new-sinatra-app.sh" "$APP_DIR"
+    return 0
+  fi
+
+  if is_zola; then
+    # Scaffolds a themeless Zola site (content tree, Tera templates, stylesheet,
+    # .zola-version) and injects the app-template-zola skill docs. No local zola
+    # binary is involved — the scaffold is written by hand and the build runs in
+    # CI. Retrofit an existing site with the same script.
+    "$SCRIPT_DIR/scripts/new-zola-site.sh" "$APP_DIR"
     return 0
   fi
 
@@ -267,7 +403,20 @@ ensure_app() {
 # Sinatra has no mix.exs, so the app name is the dir basename (also written to
 # .app-name for the CI workflows) and the module is its camelized form.
 parse_meta() {
-  if is_sinatra; then
+  if is_zola; then
+    [ -f "$APP_DIR/config.toml" ] || fail "no config.toml in $APP_DIR — scaffold failed?"
+    APP_NAME="$(basename "$APP_DIR")"
+    case "$APP_NAME" in
+      # Hyphens are allowed here where they are not for Phoenix/Sinatra: nothing
+      # derives an Elixir atom or a Ruby module from a site's name, and hyphens
+      # are the natural spelling for a domain label.
+      [a-z]*[!a-z0-9_-]*|*[!a-z0-9_-]*|[!a-z]*)
+        fail "site name '$APP_NAME' must be lowercase letters, digits, '_' or '-' (start with a letter): the dir basename names the site + infra" ;;
+    esac
+    # Nothing evaluates a module for a static site; carried only so the log line
+    # and downstream references have a value.
+    APP_MODULE="(static site)"
+  elif is_sinatra; then
     [ -f "$APP_DIR/Gemfile" ] || fail "no Gemfile in $APP_DIR — scaffold failed?"
     APP_NAME="$(basename "$APP_DIR")"
     case "$APP_NAME" in
@@ -290,6 +439,13 @@ parse_meta() {
   esac
   REGION="${REGION:-nyc3}"
   DNS_RECORD="${DNS_RECORD:-$infra_name}"
+  # The app's identity ON THE DROPLET. One droplet can host several apps, so
+  # everything that could collide with a neighbour is keyed on this: the stack
+  # directory (/root/apps/<slug>), the compose project (hence container and
+  # volume names), the shared Caddy's site file, and the per-color network
+  # aliases Caddy dials. PROJECT_NAME is already unique per app and already
+  # hyphenated, which is what compose project names and DNS labels accept.
+  APP_SLUG="$PROJECT_NAME"
   log "app: $APP_NAME ($APP_MODULE) [$FRAMEWORK] | project: $PROJECT_NAME | region: $REGION"
 }
 
@@ -298,6 +454,14 @@ parse_meta() {
 # files only — hand edits in the app survive every later bootstrap run, and
 # drift from the templates is reported rather than overwritten.
 sync_infra() {
+  if is_tenant; then
+    # One root only. A tenant owns no droplet, IP, bucket or database, and
+    # seeding it with the host's roots would hand it a `terraform destroy` that
+    # takes the host down.
+    "$SCRIPT_DIR/scripts/sync-infra.sh" --tenant "$APP_DIR"
+    [ -d "$TENANT_TF_DIR" ] || fail "sync-infra did not create $TENANT_TF_DIR"
+    return 0
+  fi
   "$SCRIPT_DIR/scripts/sync-infra.sh" "$APP_DIR"
   # Every terraform call below already points at these (set_infra_dirs); this
   # is the step that makes the directories real.
@@ -384,6 +548,9 @@ wait_bucket_visible() { # $1: attempts, 5s apart
 
 # Point a root at the Spaces backend and init. -force-copy migrates any
 # existing local state into the bucket on first contact (idempotent after).
+# $2 (optional): state key, for roots that don't pin one in backend.tf. The host
+# roots each own a fixed key because they are alone in their bucket; tenants
+# share the HOST's bucket, so every tenant needs a key of its own.
 backend_init() {
   # A cached backend from a previous project may point at a bucket that no
   # longer exists (torn down) — init would try to migrate state OUT of it and
@@ -399,6 +566,9 @@ backend_init() {
 bucket    = "$STATE_BUCKET"
 endpoints = { s3 = "$STATE_ENDPOINT" }
 EOF
+  if [ -n "${2:-}" ]; then
+    printf 'key       = "%s"\n' "$2" >> "$1/backend.hcl"
+  fi
   log "backend: init $(basename "$1") against $STATE_BUCKET (may download providers; output in $LOG_FILE)..."
   quiet terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl
   log "backend: $(basename "$1") initialized"
@@ -435,7 +605,7 @@ tf_persistent() {
   # with them. Detect the mismatch from state and refuse before applying.
   # Reads `state list` rather than an output: states created before the sqlite
   # backend existed have no database_backend output to compare against.
-  if is_sqlite && terraform -chdir="$PERS_DIR" state list 2>/dev/null \
+  if { is_sqlite || is_static; } && terraform -chdir="$PERS_DIR" state list 2>/dev/null \
        | grep -q '^digitalocean_database_cluster\.pg'; then
     fail "project '$PROJECT_NAME' has a managed Postgres cluster in state, but DATABASE_BACKEND is 'sqlite'.
        Applying would DESTROY that cluster's database and user. If this project still uses Postgres,
@@ -445,7 +615,10 @@ tf_persistent() {
 
   terraform -chdir="$PERS_DIR" apply -auto-approve -input=false
   DOMAIN="$(terraform -chdir="$PERS_DIR" output -raw domain)"
-  if is_sqlite; then
+  if is_static; then
+    # No database of any kind, and nothing to replicate: the site is files.
+    log "static site: no database, no Litestream replica"
+  elif is_sqlite; then
     # No managed DB: the SQLite file lives on the droplet. Define the on-volume
     # path + the Spaces replica target (reuses the Terraform state bucket under a
     # per-app prefix). DATABASE_PATH must match deploy/compose.sqlite.yaml.
@@ -458,6 +631,83 @@ tf_persistent() {
     DATABASE_URL="$(terraform -chdir="$PERS_DIR" output -raw database_url)"
     DATABASE_CA_CERT="$(terraform -chdir="$PERS_DIR" output -raw database_ca_cert)"
   fi
+}
+
+# ---- tenant mode -------------------------------------------------------------
+# A tenant creates none of the shared infrastructure — it adopts the host's. The
+# host's state bucket is the one thing it must be told about, and the host app
+# already records it in its own backend.hcl, so read it from there rather than
+# asking the operator to repeat it (and get it wrong).
+adopt_host_state() {
+  export AWS_ACCESS_KEY_ID="$SPACES_ACCESS_KEY_ID"
+  export AWS_SECRET_ACCESS_KEY="$SPACES_SECRET_ACCESS_KEY"
+
+  local hcl="$HOST_APP_DIR/infra/persistent/backend.hcl"
+  STATE_BUCKET="$(sed -nE 's/^bucket[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$hcl" | head -1)"
+  STATE_ENDPOINT="$(sed -nE 's/.*s3[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$hcl" | head -1)"
+  [ -n "$STATE_BUCKET" ]   || fail "could not read the state bucket from $hcl"
+  [ -n "$STATE_ENDPOINT" ] || fail "could not read the state endpoint from $hcl"
+  # The endpoint is https://<region>.digitaloceanspaces.com; the region is the
+  # only part of it Litestream needs separately (SigV4 signing).
+  STATE_REGION="$(printf '%s' "$STATE_ENDPOINT" | sed -nE 's#^https://([^.]+)\..*#\1#p')"
+  [ -n "$STATE_REGION" ] || fail "could not derive the Spaces region from endpoint '$STATE_ENDPOINT'"
+
+  log "tenant: sharing host '$(basename "$HOST_APP_DIR")' — state bucket $STATE_BUCKET ($STATE_REGION)"
+}
+
+# Apply the tenant root: one DNS record pointing at the host's droplet. Reads
+# the host's app state for the IP and firewall, so nothing has to be copied
+# between the two app repos by hand.
+tf_tenant() {
+  export TF_VAR_project_name="$PROJECT_NAME"
+  export TF_VAR_state_bucket="$STATE_BUCKET"
+  export TF_VAR_state_endpoint="$STATE_ENDPOINT"
+  export TF_VAR_dnsimple_token="$DNSIMPLE_TOKEN"
+  export TF_VAR_dnsimple_account="$DNSIMPLE_ACCOUNT"
+  export TF_VAR_dns_zone="$DNS_ZONE"
+  export TF_VAR_dns_record="$DNS_RECORD"
+
+  log "terraform: infra/tenant (DNS record on the host's droplet)"
+  # Every tenant shares the host's bucket, so the key is per-project.
+  backend_init "$TENANT_TF_DIR" "tenants/${PROJECT_NAME}/terraform.tfstate"
+
+  # Same immutability guard the host roots make: PROJECT_NAME names this app's
+  # state key and its Litestream prefix, so renaming it strands both.
+  local existing
+  existing="$(terraform -chdir="$TENANT_TF_DIR" output -raw project_name 2>/dev/null || true)"
+  if [ -n "$existing" ] && [ "$existing" != "$PROJECT_NAME" ]; then
+    fail "project_name is immutable: state has '$existing', requested '$PROJECT_NAME' (it keys this tenant's state and Litestream replica)."
+  fi
+
+  terraform -chdir="$TENANT_TF_DIR" apply -auto-approve -input=false
+  DOMAIN="$(terraform -chdir="$TENANT_TF_DIR" output -raw domain)"
+  APP_IP="$(terraform -chdir="$TENANT_TF_DIR" output -raw host_ip)"
+  FW_ID="$(terraform -chdir="$TENANT_TF_DIR" output -raw firewall_id)"
+
+  if is_static; then
+    # A static tenant stores nothing: its releases live under /root/apps/<slug>
+    # on the droplet and are rebuilt from git on every deploy.
+    log "static site: no database, no Litestream replica"
+  else
+    # Same SQLite wiring as a host app, keyed on this app's own names so two
+    # tenants of one droplet never touch each other's data: separate volume
+    # (compose project <slug>), separate file, separate replica prefix.
+    DATABASE_PATH="/data/${APP_NAME}.sqlite3"
+    BACKUP_BUCKET="$STATE_BUCKET"
+    BACKUP_REGION="$STATE_REGION"
+    BACKUP_ENDPOINT="$STATE_ENDPOINT"
+    BACKUP_PATH="litestream/${PROJECT_NAME}/${APP_NAME}.sqlite3"
+  fi
+
+  log "tenant: $DOMAIN -> $APP_IP (droplet shared with $(basename "$HOST_APP_DIR"))"
+}
+
+# A static site pushes no image, so it needs no registry — and on the free
+# starter tier there is exactly ONE repository per account, which a site that
+# never pushes should not be holding.
+ensure_registry_unless_static() {
+  is_static && { log "static site: no container registry needed"; return 0; }
+  ensure_registry
 }
 
 # Ensure a DO Container Registry exists; capture its name.
@@ -518,6 +768,15 @@ wait_droplet_ready() {
     log "  not ready yet (attempt $i/30, ~$((i * 10))s) — cloud-init still installing Docker"
     sleep 10
   done
+  if is_tenant; then
+    # The droplet is already up and serving the host app, so this is almost
+    # never cloud-init — it is the firewall. Port 22 is open to the CIDRs the
+    # HOST's infra/app was applied with, and this machine may not be among them.
+    fail "cannot reach the shared droplet at $APP_IP over SSH.
+       The droplet belongs to $(basename "$HOST_APP_DIR"), and its firewall only
+       allows port 22 from the CIDRs that root was applied with. Add this machine:
+       SSH_CIDRS='[\"<host-operator-ip>/32\",\"$(curl -fsS https://api.ipify.org 2>/dev/null || echo x.x.x.x)/32\"]' ./bootstrap.sh $HOST_APP_DIR"
+  fi
   fail "droplet not Docker-ready after ~5min — check cloud-init (cloud-init status --long)"
 }
 
@@ -525,6 +784,7 @@ wait_droplet_ready() {
 # the DO API), so migrations would die with insufficient_privilege. Grant via
 # the droplet — the only host the DB firewall trusts. Idempotent.
 grant_db_schema() {
+  is_static && { log "static site: no database to grant on"; return 0; }
   is_sqlite && { log "sqlite backend: no managed DB schema grant"; return 0; }
   log "granting schema public privileges to DB user '$PROJECT_NAME' (via droplet)"
   local admin_url
@@ -603,9 +863,49 @@ pin_ruby() {
   log "toolchain: pinned Dockerfile RUBY_VERSION=$rv"
 }
 
+# The deploy-time files that are the SAME for every app: this app's blue/green
+# stack (swap.sh) plus the droplet's SHARED edge proxy (Caddyfile, its compose
+# file, the per-app site template and the script that installs all three). The
+# edge files travel in every app repo on purpose — any app's deploy must be able
+# to stand the proxy up, including the first one on a fresh droplet.
+copy_deploy_files() {
+  # Shared by every framework: the droplet's edge proxy.
+  cp "$SCRIPT_DIR/deploy/Caddyfile" \
+     "$SCRIPT_DIR/deploy/edge-compose.yaml" \
+     "$SCRIPT_DIR/deploy/edge.sh" \
+     "$APP_DIR/deploy/"
+
+  # The site file and the publish mechanism differ by what is being served.
+  # edge.sh always reads deploy/site.caddy.tmpl, so the right template is copied
+  # UNDER THAT NAME rather than teaching edge.sh about frameworks.
+  if is_static; then
+    # Caddy serves files off disk; publishing is a symlink flip, not a swap.
+    cp "$SCRIPT_DIR/deploy/site.static.caddy.tmpl" "$APP_DIR/deploy/site.caddy.tmpl"
+    cp "$SCRIPT_DIR/deploy/publish.sh"             "$APP_DIR/deploy/publish.sh"
+    rm -f "$APP_DIR/deploy/swap.sh"
+  else
+    # Caddy reverse-proxies to the live color; publishing is the blue/green swap.
+    cp "$SCRIPT_DIR/deploy/site.caddy.tmpl" "$APP_DIR/deploy/site.caddy.tmpl"
+    cp "$SCRIPT_DIR/deploy/swap.sh"         "$APP_DIR/deploy/swap.sh"
+  fi
+}
+
 # Generate release files (Phoenix), enforce DB TLS, drop in the pipeline files.
 # Order matters: gen.release BEFORE copying our Dockerfile (it writes its own).
 prep_app() {
+  if is_zola; then
+    # Nothing to compile, no image to build, no release task: a static site's
+    # whole pipeline is `zola build` plus a file copy. No Dockerfile and no
+    # compose.yaml are written on purpose — this app runs no containers of its
+    # own; the only container involved is the droplet's shared Caddy.
+    log "preparing site: pipeline files (Zola)"
+    mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
+    cp "$SCRIPT_DIR/app/.github/workflows/deploy.zola.yml"   "$APP_DIR/.github/workflows/deploy.yml"
+    cp "$SCRIPT_DIR/app/.github/workflows/rollback.zola.yml" "$APP_DIR/.github/workflows/rollback.yml"
+    copy_deploy_files
+    return 0
+  fi
+
   if is_sinatra; then
     log "preparing app: pipeline files (Sinatra)"
     cp "$SCRIPT_DIR/app/Dockerfile.ruby"    "$APP_DIR/Dockerfile"
@@ -614,7 +914,7 @@ prep_app() {
     mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
     cp "$SCRIPT_DIR/app/.github/workflows/deploy.ruby.yml"   "$APP_DIR/.github/workflows/deploy.yml"
     cp "$SCRIPT_DIR/app/.github/workflows/rollback.ruby.yml" "$APP_DIR/.github/workflows/rollback.yml"
-    cp "$SCRIPT_DIR/deploy/Caddyfile" "$SCRIPT_DIR/deploy/swap.sh" "$APP_DIR/deploy/"
+    copy_deploy_files
     # Sinatra is SQLite-only: Litestream sidecar + restore, no TLS to patch.
     cp "$SCRIPT_DIR/deploy/compose.sinatra.yaml" "$APP_DIR/deploy/compose.yaml"
     cp "$SCRIPT_DIR/deploy/litestream.yml"       "$APP_DIR/deploy/litestream.yml"
@@ -632,7 +932,7 @@ prep_app() {
   mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
   cp "$SCRIPT_DIR/app/.github/workflows/deploy.yml"   "$APP_DIR/.github/workflows/deploy.yml"
   cp "$SCRIPT_DIR/app/.github/workflows/rollback.yml" "$APP_DIR/.github/workflows/rollback.yml"
-  cp "$SCRIPT_DIR/deploy/Caddyfile" "$SCRIPT_DIR/deploy/swap.sh" "$APP_DIR/deploy/"
+  copy_deploy_files
   if is_sqlite; then
     # SQLite compose carries the Litestream sidecar + restore; no managed DB
     # means no TLS config to patch into runtime.exs.
@@ -674,20 +974,31 @@ seed_github() {
     printf '%s' "$DIGITALOCEAN_ACCESS_TOKEN" | gh secret set DIGITALOCEAN_ACCESS_TOKEN
     gh secret set SSH_PRIVATE_KEY < "$SSH_PRIVATE_KEY"
     # Session/signing secret. Phoenix ships a generator; Sinatra reads it as the
-    # Rack session secret, so any 64-byte hex works (openssl).
-    if is_sinatra; then
+    # Rack session secret, so any 64-byte hex works (openssl). A static site has
+    # no session, no cookie and no server-side code — it gets no secret at all.
+    if is_static; then
+      :
+    elif is_sinatra; then
       openssl rand -hex 64                     | gh secret set SECRET_KEY_BASE
     else
       mix phx.gen.secret                       | gh secret set SECRET_KEY_BASE
     fi
-    gh variable set DOCR_REGISTRY -b "$REG"
+    # A static site pushes no image, so it needs no registry (and burns no
+    # repository against the registry's tier limit).
+    is_static || gh variable set DOCR_REGISTRY -b "$REG"
     gh variable set DOMAIN        -b "$DOMAIN"
     gh variable set DROPLET_HOST  -b "$APP_IP"
     gh variable set FIREWALL_ID   -b "$FW_ID"
+    # Keeps this app's stack directory, compose project, Caddy site file and
+    # network aliases distinct from every other app on the same droplet.
+    gh variable set APP_SLUG      -b "$APP_SLUG"
     # deploy.yml branches its .env / file delivery on this.
     gh variable set DATABASE_BACKEND -b "$DATABASE_BACKEND"
 
-    if is_sqlite; then
+    if is_static; then
+      # No .env is written for a static site: nothing it ships is secret.
+      :
+    elif is_sqlite; then
       # SQLite: no DB URL/CA. The Spaces keypair (Litestream replica auth) and the
       # replica target travel as secrets/vars; deploy.yml writes them into .env.
       gh variable set DATABASE_PATH   -b "$DATABASE_PATH"
@@ -741,10 +1052,21 @@ diagnose() {
       || echo "(gh run list failed)"
     printf '\n--- 2. DNS: dig +short %s (expect %s) ---\n' "$DOMAIN" "$APP_IP"
     dig +short "$DOMAIN" || true
-    printf '\n--- 3. Caddy logs (last 40 lines) ---\n'
+    printf '\n--- 3. Caddy logs (last 40 lines) — SHARED across every app on this droplet ---\n'
     ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-      root@"$APP_IP" 'cd /root && docker compose logs --tail 40 caddy' 2>&1 \
-      || echo "(caddy logs unavailable — stack may not be up yet)"
+      root@"$APP_IP" 'cd /root/caddy && docker compose logs --tail 40 caddy' 2>&1 \
+      || echo "(caddy logs unavailable — the shared edge stack may not be up yet)"
+    printf '\n--- 4. This app'\''s stack (/root/apps/%s) ---\n' "$APP_SLUG"
+    # A static site has no containers: what matters is which release `current`
+    # points at, and whether the route file exists.
+    if is_static; then
+      probe="ls -l /root/apps/$APP_SLUG/current; ls -1t /root/apps/$APP_SLUG/releases 2>/dev/null | head -5"
+    else
+      probe="cd /root/apps/$APP_SLUG && docker compose ps -a"
+    fi
+    ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+      root@"$APP_IP" "$probe; cat /root/caddy/sites/$APP_SLUG.caddy" 2>&1 \
+      || echo "(app stack not on the droplet yet — the deploy has not reached it)"
     printf '\nnext: gh run watch (in %s); after a fix, re-run ./bootstrap.sh (idempotent)\n' "$APP_DIR"
   } >&2
   exit 1
@@ -783,24 +1105,41 @@ confirm_live() {
 }
 
 provision() {
+  # A tenant skips the five host-only steps and runs three of its own.
+  is_tenant && TOTAL_STEPS=14
   log "transcript of this run: $LOG_FILE"
   step "preflight checks";                          preflight
   step "ensure app exists (generate if missing)";   ensure_app
   step "parse app metadata";                        parse_meta
   step "GitHub repo + initial commit";              ensure_repo
   step "sync Terraform roots into the app (infra/)"; sync_infra
-  step "Terraform state bucket (infra/state)";      ensure_state_bucket
-  step "persistent infra: VPC/DB/DNS (infra/persistent)"; tf_persistent
-  step "container registry";                        ensure_registry
-  step "detect SSH allow CIDR";                     detect_cidr
-  step "app infra: droplet/firewall (infra/app)";  tf_app
+
+  if is_tenant; then
+    # Six steps the host already did, and doing them again is either wasteful
+    # (a second bucket, a second registry) or actively wrong (a second droplet
+    # for an app meant to share one). The tenant adopts them instead.
+    step "adopt the host's Terraform state bucket"; adopt_host_state
+    step "tenant infra: DNS on the host droplet (infra/tenant)"; tf_tenant
+    step "container registry";                      ensure_registry_unless_static
+  else
+    step "Terraform state bucket (infra/state)";    ensure_state_bucket
+    step "persistent infra: VPC/DB/DNS (infra/persistent)"; tf_persistent
+    step "container registry";                      ensure_registry_unless_static
+    step "detect SSH allow CIDR";                   detect_cidr
+    step "app infra: droplet/firewall (infra/app)"; tf_app
+  fi
+
   step "wait for droplet Docker daemon";            wait_droplet_ready
   step "grant DB schema privileges";                grant_db_schema
   step "prepare app: release/TLS/pipeline files";   prep_app
   step "seed GitHub secrets + variables";           seed_github
   step "commit + push pipeline (first deploy)";     commit_push
   step "poll until live";                           confirm_live
-  log "done. app live at https://$DOMAIN | droplet: $APP_IP"
+  if is_tenant; then
+    log "done. app live at https://$DOMAIN | droplet: $APP_IP (shared with $(basename "$HOST_APP_DIR"))"
+  else
+    log "done. app live at https://$DOMAIN | droplet: $APP_IP"
+  fi
 }
 
 # ---- main --------------------------------------------------------------------
@@ -816,17 +1155,29 @@ abs_dir() {
 }
 
 main() {
-  if [ "${1:-}" = "--check" ]; then
-    APP_DIR="$(abs_dir "${2:-.}")"
-    set_infra_dirs
+  local check=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check) check=1; shift ;;
+      # Tenant mode: deploy onto the droplet this app already owns. Equivalent
+      # to HOST_APP_DIR in the environment; the flag wins.
+      --host)
+        [ -n "${2:-}" ] || fail "--host needs the host app's directory"
+        HOST_APP_DIR="$(abs_dir "$2")"; shift 2 ;;
+      --host=*) HOST_APP_DIR="$(abs_dir "${1#--host=}")"; shift ;;
+      -*) fail "unknown argument: $1 (use --check, --host <host_app_dir>, or [app_dir])" ;;
+      *)  break ;;
+    esac
+  done
+
+  APP_DIR="$(abs_dir "${1:-.}")"
+  [ -z "$HOST_APP_DIR" ] || HOST_APP_DIR="$(abs_dir "$HOST_APP_DIR")"
+  set_infra_dirs
+
+  if [ "$check" -eq 1 ]; then
     preflight
     exit 0
   fi
-  case "${1:-}" in
-    -*) fail "unknown argument: $1 (use --check or [app_dir])" ;;
-  esac
-  APP_DIR="$(abs_dir "${1:-.}")"
-  set_infra_dirs
   provision
 }
 

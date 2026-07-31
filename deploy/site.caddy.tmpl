@@ -1,0 +1,20 @@
+# Per-app site file for the shared edge Caddy. edge.sh substitutes the two
+# placeholders and installs the result as /root/caddy/sites/<slug>.caddy, which
+# the top-level Caddyfile imports.
+#
+# Both blue/green colors are listed; exactly one runs at a time (story 7.2). A
+# dial to the stopped color's name fails instantly, fail_duration marks it down,
+# and lb_try_* retries the live one — so requests are held through the swap
+# window instead of dropped.
+#
+# The upstream names are the app's per-color aliases on the shared `edge`
+# network (compose.yaml). They carry the app slug because every app on this
+# droplet shares that network: a bare `app_blue` would be ambiguous, and Caddy
+# would round-robin traffic into the wrong tenant.
+__DOMAIN__ {
+	reverse_proxy __SLUG__-blue:4000 __SLUG__-green:4000 {
+		lb_try_duration 30s
+		lb_try_interval 250ms
+		fail_duration 10s
+	}
+}

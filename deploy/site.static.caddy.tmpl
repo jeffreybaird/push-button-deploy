@@ -1,0 +1,27 @@
+# Per-app site file for a STATIC site (Zola). edge.sh substitutes the two
+# placeholders and installs the result as /root/caddy/sites/<slug>.caddy, which
+# the top-level Caddyfile imports.
+#
+# A static site has no app container: Caddy serves the built files directly. The
+# droplet's /root/apps is bind-mounted into the Caddy container at /srv (see
+# deploy/edge-compose.yaml), so this path is /srv/<slug>/current — a symlink that
+# publish.sh flips atomically to the newest release. Because `root` resolves per
+# request, a deploy takes effect the instant the symlink moves; no reload needed.
+#
+# The symlink is RELATIVE (releases/<sha>) so it resolves the same way inside the
+# container as it does on the host.
+__DOMAIN__ {
+	root * /srv/__SLUG__/current
+
+	encode zstd gzip
+
+	# Zola emits a 404.html; serve it with the right status instead of Caddy's
+	# bare default. Without the inner file_server the rewrite would 404 again.
+	handle_errors {
+		@404 expression {err.status_code} == 404
+		rewrite @404 /404.html
+		file_server
+	}
+
+	file_server
+}

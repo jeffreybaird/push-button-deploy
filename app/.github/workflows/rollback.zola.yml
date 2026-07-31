@@ -1,0 +1,86 @@
+# Manual rollback for a ZOLA static site. Copied into the site repo by the
+# bootstrap as .github/workflows/rollback.yml.
+#
+# Trigger:  gh workflow run rollback.yml -f tag=<prior commit SHA>
+#
+# Nothing is rebuilt and nothing is re-uploaded: the previous releases are still
+# on the droplet under releases/, so a rollback is the same symlink flip the
+# deploy ends with. That also means the rollback window is however many releases
+# publish.sh keeps (KEEP_RELEASES, default 5) — older commits must be re-deployed
+# by pushing, not rolled back to.
+#
+# Shares the deploy workflow's concurrency group, so a rollback can never overlap
+# an in-flight push deploy (and vice versa).
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to publish (a prior commit SHA)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.DROPLET_HOST }}
+      APP_SLUG: ${{ vars.APP_SLUG }}
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}
+      RELEASE: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Authorize runner IP for SSH
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          echo "RUNNER_IP=$runner_ip" >> "$GITHUB_ENV"
+          doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Fail here — before touching the live symlink — if the requested release
+      # was pruned or never existed. publish.sh checks this too; doing it first
+      # makes the failure message list what IS available.
+      - name: Verify the release is still on the droplet
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "test -d '$STACK_DIR/releases/$RELEASE' || {
+               echo 'release $RELEASE is not on the droplet. Available:';
+               ls -1t '$STACK_DIR/releases' 2>/dev/null;
+               echo 'Older releases are pruned — re-deploy that commit instead.';
+               exit 1; }"
+
+      # Ship the current publish.sh: a rollback should not depend on whatever
+      # version of the script happened to be on the droplet.
+      - name: Copy publish.sh
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/publish.sh root@"$HOST":"$STACK_DIR"/
+
+      - name: Publish the older release
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "bash '$STACK_DIR'/publish.sh '$RELEASE'"
+
+      - name: Revoke runner IP
+        if: always() && env.RUNNER_IP != ''
+        run: |
+          doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${RUNNER_IP}/32"

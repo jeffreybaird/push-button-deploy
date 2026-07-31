@@ -1,0 +1,50 @@
+# The droplet's SHARED edge stack: one Caddy for every app on the host.
+#
+# Installed at /root/caddy/compose.yaml by edge.sh and owned by the droplet, not
+# by any single app. App stacks (/root/apps/<slug>/compose.yaml) contain no
+# proxy at all — they only join the `edge` network below, and each ships a site
+# file into ./sites/ that the Caddyfile imports.
+#
+# name: root — deliberate. Before multi-tenancy the whole stack (app + Caddy)
+# lived in /root, so compose named its volumes root_caddy_data /
+# root_caddy_config. Keeping the project name pins this Caddy to those SAME
+# volumes, so an existing droplet keeps its issued certificates and ACME account
+# across the migration instead of re-issuing everything. Pinning it here rather
+# than passing -p also means a bare `docker compose up` in this directory can't
+# accidentally start a SECOND Caddy (project "caddy") fighting for :443.
+name: root
+
+services:
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Per-app site files, one per app on this droplet. Bind-mounted (not a
+      # named volume) so a deploy can drop a file in and reload.
+      - ./sites:/etc/caddy/sites:ro
+      # Every app's stack directory. Dynamic apps don't need this — Caddy reaches
+      # them over the network — but a STATIC site (Zola) has no container at all:
+      # Caddy serves its files straight off disk from /srv/<slug>/current. Mounted
+      # read-only; the deploy writes to these paths over SSH, never through Caddy.
+      - /root/apps:/srv:ro
+      # Persist issued certs + ACME account across restarts/redeploys.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # Created by edge.sh (docker network create edge) and shared with every app
+  # stack on the droplet — this is how Caddy reaches <slug>-blue:4000. External
+  # because it outlives any one stack: tearing down an app must not delete the
+  # network the other apps are still on.
+  edge:
+    external: true

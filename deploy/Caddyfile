@@ -1,19 +1,17 @@
-# Caddy terminates TLS and reverse-proxies to the app container.
-# {$DOMAIN} is substituted from the DOMAIN env var (set in compose.yaml).
+# Shared edge proxy for EVERY app on this droplet.
 #
-# Naming the site by its public domain triggers Caddy's automatic HTTPS: it
-# obtains + renews a Let's Encrypt cert over HTTP-01/TLS-ALPN. This works once
-# the DNSimple A record (story 1.3) resolves to this droplet's IP and ports
-# 80/443 are reachable (firewall story 2.2). Certs persist in the caddy_data
-# volume.
-# Both blue/green colors are listed; only one runs at a time (story 7.2).
-# A dial to the stopped color's name fails instantly, fail_duration marks it
-# down, and lb_try_* retries the live one — so requests are held through the
-# swap window instead of dropped.
-{$DOMAIN} {
-	reverse_proxy app_blue:4000 app_green:4000 {
-		lb_try_duration 30s
-		lb_try_interval 250ms
-		fail_duration 10s
-	}
-}
+# One Caddy owns :80/:443 for the whole host. Each app contributes a site file
+# to sites/ at deploy time (edge.sh writes it from site.caddy.tmpl) and this
+# Caddyfile imports them all — so putting a second app on a droplet is a new
+# file plus a reload, never a second process fighting for port 443.
+#
+# Naming a site by its public domain triggers Caddy's automatic HTTPS: it
+# obtains + renews a Let's Encrypt cert over HTTP-01/TLS-ALPN. That works once
+# the DNSimple A record resolves to this droplet's IP and ports 80/443 are
+# reachable (firewall story 2.2). Certs persist in the caddy_data volume, which
+# is shared by every app on the host.
+#
+# The glob matches nothing on a brand-new droplet (before any app has
+# deployed); Caddy accepts an import that matches no files, so the edge stack
+# starts clean and the first site shows up on the first reload.
+import /etc/caddy/sites/*.caddy

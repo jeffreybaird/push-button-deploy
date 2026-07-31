@@ -2,12 +2,18 @@
 #
 # sync-infra.sh — seed an app repo with its OWN copy of the Terraform roots.
 #
-#   ./scripts/sync-infra.sh <app_dir>
+#   ./scripts/sync-infra.sh [--tenant] <app_dir>
 #
 # After this runs, <app_dir>/infra/{state,persistent,app}/ holds the Terraform
 # that owns that app's infrastructure, and bootstrap.sh/teardown.sh operate on
 # those copies rather than the ones in this repo. The app's infra therefore
 # travels with the app: clone the repo, and you can change the deploy.
+#
+# --tenant seeds ONE root instead — infra/tenant/ — for an app that deploys onto
+# a droplet another app already owns. A tenant provisions no droplet, no IP, no
+# bucket and no database: it adds a DNS record pointing at the host's reserved
+# IP and shares everything else. Copying the host's roots into a tenant would be
+# worse than useless, since `terraform destroy` there would take down the host.
 #
 # SEED ONCE, NEVER CLOBBER: a file that already exists in the app is left alone,
 # so hand edits survive re-runs of bootstrap.sh. Files that drift from this
@@ -20,8 +26,11 @@ set -euo pipefail
 fail() { printf 'sync-infra: %s\n' "$*" >&2; exit 1; }
 log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
 
+TENANT=0
+if [ "${1:-}" = "--tenant" ]; then TENANT=1; shift; fi
+
 APP_DIR="${1:-}"
-[ -n "$APP_DIR" ] || fail "usage: sync-infra.sh <app_dir>"
+[ -n "$APP_DIR" ] || fail "usage: sync-infra.sh [--tenant] <app_dir>"
 [ -d "$APP_DIR" ] || fail "no such directory: $APP_DIR"
 APP_DIR="$(cd "$APP_DIR" && pwd)"
 
@@ -50,9 +59,13 @@ copy_root() { # $1: root name (state|persistent|app)
 
 NEW=""
 DRIFT=""
-copy_root state
-copy_root persistent
-copy_root app
+if [ "$TENANT" -eq 1 ]; then
+  copy_root tenant
+else
+  copy_root state
+  copy_root persistent
+  copy_root app
+fi
 
 # The app repo must never commit state, provider caches, generated backend
 # pointers or real tfvars — same rules as this repo, scoped to infra/.
@@ -77,7 +90,63 @@ EOF
   NEW="$NEW infra/.gitignore"
 fi
 
-if [ ! -e "$APP_DIR/infra/README.md" ]; then
+if [ ! -e "$APP_DIR/infra/README.md" ] && [ "$TENANT" -eq 1 ]; then
+  cat > "$APP_DIR/infra/README.md" <<'EOF'
+# infra/ — this app's infrastructure (TENANT)
+
+This app is a **tenant**: it runs on a droplet another app already owns, behind
+that droplet's shared Caddy. It therefore owns exactly one piece of
+infrastructure of its own.
+
+```
+infra/tenant/       the DNSimple A record for this app's domain, pointed at the
+                    HOST droplet's reserved IP (read from the host's Terraform
+                    state in the shared Spaces bucket).
+```
+
+Everything else — droplet, reserved IP, firewall, VPC, state bucket, container
+registry — belongs to the host app and is shared. Destroying this root removes
+this app's DNS record and nothing else; the host and its other tenants are
+untouched by design.
+
+On the droplet this app lives in `/root/apps/<slug>/` as its own compose
+project, with its own volumes, and contributes one site file to the shared Caddy
+at `/root/caddy/sites/<slug>.caddy`.
+
+## Changing the deploy
+
+```bash
+/path/to/push-button-deploy/bootstrap.sh --host <host_app_dir> /path/to/this/app
+```
+
+Idempotent. The bootstrap seeds these files once and never overwrites them, so
+local edits survive; drift from the upstream template is reported.
+
+## Applying by hand
+
+Terraform here reads every input from `TF_VAR_*` and authenticates the Spaces
+backend with `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (the Spaces keypair):
+
+```bash
+terraform -chdir=infra/tenant init -input=false -backend-config=backend.hcl
+terraform -chdir=infra/tenant plan
+```
+
+Do NOT add a `terraform.tfvars`: tfvars outrank `TF_VAR_*` env, so it would
+silently override what the bootstrap passes in. The bootstrap fails loudly if it
+finds one.
+
+## Tearing down
+
+```bash
+/path/to/push-button-deploy/teardown.sh /path/to/this/app
+```
+
+For a tenant that removes the DNS record, this app's stack and volumes on the
+droplet, and its route from the shared Caddy. It never touches the droplet.
+EOF
+  NEW="$NEW infra/README.md"
+elif [ ! -e "$APP_DIR/infra/README.md" ]; then
   cat > "$APP_DIR/infra/README.md" <<'EOF'
 # infra/ — this app's infrastructure
 

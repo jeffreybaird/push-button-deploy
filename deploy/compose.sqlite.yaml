@@ -16,12 +16,22 @@
 # Interpolated values (${...}) come from .env, written over SSH at deploy time:
 #   IMAGE            full image ref incl tag, e.g. registry.../app:<sha> (SHA-pinned)
 #   DOMAIN           public FQDN (matches the DNSimple A record / cert)
+#   APP_SLUG         this app's slug — names the compose project + the network aliases
 #   DATABASE_PATH    on-volume path to the SQLite file, e.g. /data/app.sqlite3
 #   SECRET_KEY_BASE  Phoenix secret
 #   LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY   Spaces keypair
 #   BACKUP_BUCKET / BACKUP_ENDPOINT / BACKUP_REGION / BACKUP_PATH   replica target
 #
 # No secrets live in this file — only references. (locked decision 12)
+#
+# There is no proxy here: TLS and routing belong to the droplet's SHARED Caddy
+# (deploy/edge-compose.yaml, installed at /root/caddy), because one droplet can
+# host several apps and only one process can own :443. This stack joins the
+# shared `edge` network and publishes per-color aliases Caddy dials by name.
+
+# Every app on the droplet gets its own compose project, so its containers and
+# volumes (<slug>_app_data) can't collide with a neighbour's.
+name: ${APP_SLUG}
 
 # Shared definition for both colors (and the one-off migrate runner).
 x-app: &app
@@ -156,36 +166,46 @@ services:
           sleep "$${ARCHIVE_INTERVAL_SECONDS:-86400}"
         done
 
-  app_blue: *app
-  app_green: *app
+  # The two colors are the only services on the shared `edge` network, and each
+  # carries a slug-qualified alias there — that name is what the droplet's Caddy
+  # dials (see deploy/site.caddy.tmpl). The alias must be unique ACROSS apps:
+  # every app on the host shares this network, so a bare `app_blue` would be
+  # ambiguous and Caddy would round-robin into someone else's app.
+  #
+  # `networks` is re-declared rather than inherited because the alias differs per
+  # color; a YAML merge key can't vary a value between the two.
+  app_blue:
+    <<: *app
+    networks:
+      web: {}
+      edge:
+        aliases:
+          - ${APP_SLUG}-blue
+
+  app_green:
+    <<: *app
+    networks:
+      web: {}
+      edge:
+        aliases:
+          - ${APP_SLUG}-green
 
   # One-off migration runner (profile keeps it out of `up -d`):
   #   docker compose run --rm migrate bin/<app> eval '<Module>.Release.migrate()'
+  # Never serves traffic, so it stays off `edge`.
   migrate:
     <<: *app
     restart: "no"
     profiles: ["tools"]
 
-  caddy:
-    image: caddy:2.11.4-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Persist issued certs + ACME account across restarts/redeploys.
-      - caddy_data:/data
-      - caddy_config:/config
-    networks:
-      - web
-
 volumes:
   app_data:
-  caddy_data:
-  caddy_config:
 
 networks:
+  # Private to this app: the sidecars talk to nothing outside the project.
   web:
+  # The droplet-wide network the shared Caddy is on. Created by edge.sh, external
+  # because it outlives any single app — tearing this stack down must not
+  # disconnect the other apps on the host.
+  edge:
+    external: true

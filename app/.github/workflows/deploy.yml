@@ -8,11 +8,20 @@
 #   secret DIGITALOCEAN_ACCESS_TOKEN  - DO API token (registry + droplet)
 #   var    DOCR_REGISTRY              - DO Container Registry name
 #   var    FIREWALL_ID                - droplet firewall (temporary SSH hole-punch)
+#   var    APP_SLUG                   - this app's slug on the droplet; keeps the
+#                                       stack dir, compose project, Caddy site
+#                                       file and network aliases from colliding
+#                                       with any other app on the same host
 name: deploy
 
 on:
   push:
     branches: [main]
+  # Redeploy whatever is on main without pushing a commit. Repo variables
+  # (DOMAIN, APP_SLUG, DROPLET_HOST) are not reflected in git, so changing one
+  # otherwise has no way to reach the droplet: a bootstrap re-run that finds
+  # nothing to commit triggers no deploy, and the old value keeps serving.
+  workflow_dispatch:
 
 # One deploy at a time; never overlap. Queue rather than cancel so an in-flight
 # deploy (migrations!) is never interrupted.
@@ -137,6 +146,12 @@ jobs:
       IMAGE: ${{ needs.build.outputs.image }}:${{ github.sha }}
       HOST: ${{ vars.DROPLET_HOST }}
       DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      # One droplet can host several apps. Everything that must not collide with
+      # a neighbour is keyed on this slug: the stack directory, the compose
+      # project (hence container + volume names), the Caddy site file, and the
+      # per-color network aliases Caddy dials.
+      APP_SLUG: ${{ vars.APP_SLUG }}
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}
     steps:
       - uses: actions/checkout@v6
 
@@ -174,6 +189,7 @@ jobs:
           cat > .env <<EOF
           IMAGE=${IMAGE}
           DOMAIN=${{ vars.DOMAIN }}
+          APP_SLUG=${APP_SLUG}
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           EOF
@@ -185,6 +201,7 @@ jobs:
           cat > .env <<EOF
           IMAGE=${IMAGE}
           DOMAIN=${{ vars.DOMAIN }}
+          APP_SLUG=${APP_SLUG}
           SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
           DATABASE_PATH=${{ vars.DATABASE_PATH }}
           LITESTREAM_ACCESS_KEY_ID=${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
@@ -203,25 +220,50 @@ jobs:
           printf '%s\n' "${{ secrets.DATABASE_CA_CERT }}" > db-ca.pem
           chmod 644 db-ca.pem
 
+      # Two destinations, because two things live on the droplet with different
+      # owners: /root/caddy is the SHARED edge proxy (one per host, every app
+      # contributes a site file to it) and /root/apps/<slug> is this app's stack.
+      - name: Create stack directories
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "mkdir -p /root/caddy/sites '$STACK_DIR'"
+
+      - name: Copy shared edge files to droplet
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/edge-compose.yaml \
+            root@"$HOST":/root/caddy/compose.yaml
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/Caddyfile deploy/site.caddy.tmpl deploy/edge.sh \
+            root@"$HOST":/root/caddy/
+
       - name: Copy stack files + .env to droplet (Postgres)
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh db-ca.pem .env \
-            root@"$HOST":/root/
+            deploy/compose.yaml deploy/swap.sh db-ca.pem .env \
+            root@"$HOST":"$STACK_DIR"/
 
       - name: Copy stack files + .env to droplet (SQLite)
         if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/Caddyfile deploy/swap.sh deploy/litestream.yml .env \
-            root@"$HOST":/root/
+            deploy/compose.yaml deploy/swap.sh deploy/litestream.yml .env \
+            root@"$HOST":"$STACK_DIR"/
+
+      # Shared network + shared Caddy + this app's route, before the app starts.
+      # On a droplet still running the old single-stack layout this also performs
+      # the one-time migration into /root/apps (see deploy/edge.sh).
+      - name: Prepare shared edge (network, Caddy, route)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "APP_SLUG='$APP_SLUG' DOMAIN='${{ vars.DOMAIN }}' bash /root/caddy/edge.sh"
 
       - name: Registry login + pull new image
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
             "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
-             && cd /root && docker compose pull"
+             && cd '$STACK_DIR' && docker compose pull"
 
       # Migration gate: runs the new image as a one-off BEFORE serving traffic.
       # A non-zero exit fails this step -> the job fails -> the swap is skipped
@@ -230,7 +272,7 @@ jobs:
       - name: Run migrations (gate before traffic)
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "cd /root && docker compose run --rm migrate bin/${{ needs.build.outputs.app_name }} eval '${{ needs.build.outputs.module }}.Release.migrate()'"
+            "cd '$STACK_DIR' && docker compose run --rm migrate bin/${{ needs.build.outputs.app_name }} eval '${{ needs.build.outputs.module }}.Release.migrate()'"
 
       # Health-checked blue/green swap (story 7.2): start the idle color from
       # the new image, wait for its healthcheck, only then stop the old color.
@@ -238,7 +280,7 @@ jobs:
       - name: Swap to new release
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "bash /root/swap.sh"
+            "bash '$STACK_DIR'/swap.sh"
 
       # Close the hole no matter how the deploy ended.
       - name: Revoke runner IP
