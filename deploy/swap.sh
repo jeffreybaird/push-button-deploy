@@ -39,4 +39,36 @@ if [ -n "$active" ] && [ "$active" != "$new" ]; then
   docker compose stop "$active"
   docker compose rm -f "$active"
 fi
+
+# ---- completeness guard -------------------------------------------------------
+# Every service compose defines must have a container by now. `backup` once
+# shipped in compose.yaml for a full deploy without ever starting — it has no
+# dependent, so nothing pulled it in, and the deploy still reported success. A
+# green deploy that silently omits part of the stack is the failure this catches,
+# and it catches it for services that don't exist yet, not just that one.
+#
+# Compared on PRESENCE, not on running state, because db_init is a one-shot that
+# exits 0 by design and is therefore present-but-stopped. A container that
+# started and later died is a different failure: `restart: unless-stopped` keeps
+# retrying it and the logs show why.
+#
+# Excluded from the comparison:
+#   - services behind a profile (migrate) — compose already omits those from
+#     `config --services`
+#   - the idle color, deliberately removed just above; only "$new" should exist
+expected="$(docker compose config --services | grep -vxE 'app_(blue|green)'; printf '%s\n' "$new")"
+present="$(docker compose ps -a --services)"
+
+missing=""
+for svc in $expected; do
+  printf '%s\n' "$present" | grep -qx "$svc" || missing="$missing $svc"
+done
+
+if [ -n "$missing" ]; then
+  echo "swap: FAILED — compose defines services that never started:$missing" >&2
+  echo "swap: $new is live and serving, but the stack is incomplete." >&2
+  echo "swap: a service with no depends_on must be named explicitly above." >&2
+  exit 1
+fi
+
 echo "swap: $new is live"
