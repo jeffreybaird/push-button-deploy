@@ -31,18 +31,27 @@ If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for t
 Three Terraform roots with deliberately separate state:
 
 ```
-infra-state/        the Spaces bucket that stores the other two roots' state
+infra/state/        the Spaces bucket that stores the other two roots' state
                     (its own state is local — chicken/egg — losing it is a
                     non-event: terraform import re-adopts the bucket)
 
-infra-persistent/   VPC, reserved IP, managed Postgres, DNSimple A record
+infra/persistent/   VPC, reserved IP, managed Postgres, DNSimple A record
                     — things that must SURVIVE. prevent_destroy everywhere.
 
-infra-app/          droplet, reserved-IP assignment, firewall
+infra/app/          droplet, reserved-IP assignment, firewall
                     — disposable. `terraform destroy` here never touches
                     data: the DB firewall trusts a *tag* the droplet wears,
                     not the droplet itself.
 ```
+
+**The roots live in the app repo.** The `infra-*/` directories here are
+templates; the bootstrap copies them into `<app_dir>/infra/{state,persistent,app}`
+and runs Terraform from there, so an app's infrastructure is versioned, reviewed
+and rolled back alongside the code that runs on it — changing the deploy is a
+commit to the app repo. The copy is **seeded once and never overwritten**, so
+local edits survive re-runs; any file that has drifted from the template is
+reported so an upstream fix is easy to spot and adopt. To re-seed an app
+by hand: `./scripts/sync-infra.sh <app_dir>`.
 
 The droplet runs an `app_blue`/`app_green` pair (exactly one live at a time) behind Caddy. A deploy starts the idle color from the new image, waits for its container healthcheck, then stops the old one; Caddy holds and retries requests across the swap window.
 
@@ -200,11 +209,12 @@ The script is **idempotent**: fix whatever it complained about and re-run; every
 | Deploy | `git push` to `main` (in the app repo) |
 | Watch a deploy | `gh run watch` |
 | Roll back | `gh workflow run rollback.yml -f tag=<previous commit sha>` |
-| Recreate the droplet | `terraform -chdir=infra-app destroy && ./bootstrap.sh <app_dir>` — DB, IP, DNS, certs survive |
+| Change the infrastructure | edit `<app_dir>/infra/…`, commit, `./bootstrap.sh <app_dir>` (idempotent, applies all three roots) |
+| Recreate the droplet | `terraform -chdir=<app_dir>/infra/app destroy && ./bootstrap.sh <app_dir>` — DB, IP, DNS, certs survive |
 | Verify lifecycle isolation | `scripts/verify-isolation.sh` (asserts a destroy plan touches only droplet/firewall/IP-binding) |
 | SSH to the box | `ssh root@<reserved-ip>` (from the IP in `SSH_CIDRS` only) |
 
-For manual Terraform runs, export the same env vars plus `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` set to the Spaces keypair (the S3 backend reads those names).
+For manual Terraform runs, `cd` into the app and export the same env vars plus `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` set to the Spaces keypair (the S3 backend reads those names). `<app_dir>/infra/README.md` documents this for whoever clones the app repo.
 
 ## Costs (approximate, monthly)
 
@@ -226,13 +236,16 @@ For manual Terraform runs, export the same env vars plus `AWS_ACCESS_KEY_ID`/`AW
 ## Teardown
 
 ```bash
-# Disposable compute — safe, data survives:
-terraform -chdir=infra-app destroy
+# Everything, in the right order, with confirmation (data loss!):
+./teardown.sh <app_dir>
 
-# Everything (data loss!): the DB cluster, reserved IP, and state bucket are
-# protected with prevent_destroy; deliberately flip those flags first, then:
-terraform -chdir=infra-persistent destroy
-terraform -chdir=infra-state destroy
+# Or by hand — disposable compute only, data survives:
+terraform -chdir=<app_dir>/infra/app destroy
+
+# The DB cluster, reserved IP, and state bucket are protected with
+# prevent_destroy; deliberately flip those flags first, then:
+terraform -chdir=<app_dir>/infra/persistent destroy
+terraform -chdir=<app_dir>/infra/state destroy
 ```
 
 Also delete the container registry (`doctl registry delete`) and the GitHub repo if you're done with them.

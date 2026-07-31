@@ -333,6 +333,7 @@ Run `/a11y-audit` (`.claude/a11y-audit.md`) to audit recent UI.
 - No unbounded preloads in socket assigns
 
 ### Infrastructure
+- No infrastructure change outside `infra/` — the Terraform roots in this repo own the droplet, DB, DNS and state bucket (see `infra/README.md`); clicking it in the DO console makes the next apply fight you
 - No `mix` commands in production — release commands only
 - No secrets in `config/config.exs` or `config/prod.exs` — runtime only
 - No deploys that skip tests

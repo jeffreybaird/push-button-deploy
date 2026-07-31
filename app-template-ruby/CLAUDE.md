@@ -313,6 +313,7 @@ changes and "WIP"/"misc" commits.
 - No external API call without an OpenTelemetry span
 
 ### Infrastructure
+- No infrastructure change outside `infra/` — the Terraform roots in this repo own the droplet, DNS and state bucket (see `infra/README.md`); clicking it in the DO console makes the next apply fight you
 - No secrets in source — use `ENV.fetch` (dev/test via `dotenv`, prod via the deploy `.env`)
 - No deploys that skip tests
 - No background job without its account/scope id in arguments

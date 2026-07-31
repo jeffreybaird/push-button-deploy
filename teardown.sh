@@ -2,18 +2,22 @@
 #
 # teardown.sh — destroy everything bootstrap.sh created, in reverse order:
 #
-#   1. infra-app        droplet, firewall, reserved-IP assignment
-#   2. infra-persistent DB CLUSTER (ALL DATA), VPC, reserved IP, tag, DNS record
+#   1. infra/app        droplet, firewall, reserved-IP assignment
+#   2. infra/persistent DB CLUSTER (ALL DATA), VPC, reserved IP, tag, DNS record
 #   3. registry         the app's image repository (the registry itself stays)
-#   4. infra-state      the Terraform state bucket (deleted LAST — it holds the
+#   4. infra/state      the Terraform state bucket (deleted LAST — it holds the
 #                       state of roots 1 and 2 while they are being destroyed)
 #
 #   ./teardown.sh [--yes] [--delete-repo] [app_dir]
 #
 #   --yes          skip the type-the-project-name confirmation
 #   --delete-repo  also delete the GitHub repo (needs `gh auth refresh -s delete_repo`)
-#   app_dir        the app directory (default: .) — used to find the app name
-#                  for the registry repository and the GitHub repo
+#   app_dir        the app directory (default: .) — holds the app's own Terraform
+#                  roots under infra/, and names the registry/GitHub repo
+#
+# The roots destroyed are the APP'S copies (<app_dir>/infra/), the same ones
+# bootstrap.sh applied. Apps bootstrapped before infra/ existed fall back to
+# this repo's infra-* directories.
 #
 # NOT touched: the DO registry itself, the SSH key in DO, the DNSimple zone,
 # the local app directory, and (without --delete-repo) the GitHub repo with
@@ -45,10 +49,6 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   set +a
 fi
 
-PERS_DIR="$SCRIPT_DIR/infra-persistent"
-APP_TF_DIR="$SCRIPT_DIR/infra-app"
-STATE_TF_DIR="$SCRIPT_DIR/infra-state"
-
 REQUIRED_BINS="terraform doctl curl"
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
 
@@ -66,6 +66,21 @@ while [ $# -gt 0 ]; do
   shift
 done
 if [ -d "$APP_DIR" ]; then APP_DIR="$(cd "$APP_DIR" && pwd)"; fi
+
+# Destroy the app's OWN Terraform roots — the ones bootstrap.sh applied, which
+# may carry local edits. Apps predating <app_dir>/infra/ still have their roots
+# only in this repo, so fall back to those.
+if [ -d "$APP_DIR/infra/state" ]; then
+  PERS_DIR="$APP_DIR/infra/persistent"
+  APP_TF_DIR="$APP_DIR/infra/app"
+  STATE_TF_DIR="$APP_DIR/infra/state"
+  log "using the app's Terraform roots: $APP_DIR/infra"
+else
+  PERS_DIR="$SCRIPT_DIR/infra-persistent"
+  APP_TF_DIR="$SCRIPT_DIR/infra-app"
+  STATE_TF_DIR="$SCRIPT_DIR/infra-state"
+  log "no $APP_DIR/infra — falling back to this repo's Terraform roots"
+fi
 
 # ---- preflight -------------------------------------------------------------------
 for b in $REQUIRED_BINS; do have "$b" || fail "missing binary: $b"; done

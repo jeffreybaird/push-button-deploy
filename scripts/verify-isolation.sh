@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# verify-isolation.sh — assert that destroying infra-app touches ONLY the
+# verify-isolation.sh — assert that destroying the app root touches ONLY the
 # droplet, its firewall, and the reserved-IP binding. The managed Postgres
-# cluster and the reserved IP itself must survive (they live in infra-persistent
-# state, are guarded by prevent_destroy, and are referenced here read-only).
+# cluster and the reserved IP itself must survive (they live in the persistent
+# root's state, are guarded by prevent_destroy, and are referenced read-only).
 #
 # Runs `terraform plan -destroy` in the app module and fails if the plan would
 # destroy anything outside the allowlist. Requires DO creds + applied state.
@@ -11,12 +11,18 @@
 # bucket (bootstrap does this) and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY must
 # carry the Spaces keypair.
 #
-# Usage: scripts/verify-isolation.sh [infra-app-dir]
+# Usage: scripts/verify-isolation.sh [app_dir | terraform-root]
+#
+# An app directory is accepted directly: since the Terraform roots ship with the
+# app, <app_dir>/infra/app is the applied root and is used when it exists.
 #
 # Portable: POSIX-ish bash, works with BSD (macOS) grep/sed.
 set -euo pipefail
 
 APP_DIR="${1:-infra-app}"
+# Given an app directory, use the app's own copy of the droplet root. (An `if`,
+# not `[ … ] && …`: under `set -e` a false one-liner would exit the script.)
+if [ -d "$APP_DIR/infra/app" ]; then APP_DIR="$APP_DIR/infra/app"; fi
 
 # Resource-address prefixes infra-app is permitted to destroy.
 ALLOWED='^(digitalocean_droplet|digitalocean_firewall|digitalocean_reserved_ip_assignment)\.'

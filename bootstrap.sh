@@ -26,6 +26,11 @@
 #   STATE_BUCKET   Spaces bucket for Terraform state. Default: <PROJECT_NAME>-tfstate.
 #   SPACES_REGION  region for the state bucket (must offer Spaces). Default: REGION.
 #
+# The app owns its infrastructure: the Terraform roots in this repo are
+# templates, copied once into <app_dir>/infra/{state,persistent,app} and applied
+# from there, so a deploy change is a commit in the app repo. Existing copies
+# are never overwritten (drift from the templates is reported instead).
+#
 # Idempotent: safe to re-run after fixing a gap — every step guards re-entry.
 #
 # Required environment (the deploy's single source of truth) — export in the
@@ -77,7 +82,7 @@ if is_sinatra; then DATABASE_BACKEND="sqlite"; fi
 
 # Numbered step banner — the heartbeat of a run. If output stops after a step
 # banner, THAT step is where it stopped.
-STEP=0; TOTAL_STEPS=15
+STEP=0; TOTAL_STEPS=16
 step() {
   STEP=$((STEP + 1))
   printf '\033[36m==> [%s] step %s/%s:\033[0m %s\n' "$(ts)" "$STEP" "$TOTAL_STEPS" "$*"
@@ -119,9 +124,21 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   set +a
 fi
 
-PERS_DIR="$SCRIPT_DIR/infra-persistent"
-APP_TF_DIR="$SCRIPT_DIR/infra-app"
-STATE_TF_DIR="$SCRIPT_DIR/infra-state"
+# Terraform roots. The ones in THIS repo are templates: every app gets its own
+# copy under <app_dir>/infra/ (scripts/sync-infra.sh) and Terraform runs from
+# that copy, so an app's infrastructure is versioned with the app and can be
+# changed by editing its repo. The templates are seeded once and never
+# overwritten afterwards.
+TPL_PERS_DIR="$SCRIPT_DIR/infra-persistent"
+TPL_APP_TF_DIR="$SCRIPT_DIR/infra-app"
+TPL_STATE_TF_DIR="$SCRIPT_DIR/infra-state"
+
+# Set once APP_DIR is known (see main).
+set_infra_dirs() {
+  PERS_DIR="$APP_DIR/infra/persistent"
+  APP_TF_DIR="$APP_DIR/infra/app"
+  STATE_TF_DIR="$APP_DIR/infra/state"
+}
 
 # Share provider binaries across projects: switching projects drops each root's
 # .terraform (backend cache mismatch), and without this every switch
@@ -153,8 +170,11 @@ preflight() {
   # Bootstrap injects ALL terraform variables via TF_VAR_ env, which tfvars
   # files silently OVERRIDE (terraform precedence: tfvars > env). A leftover
   # tfvars file means stale tokens/CIDRs/names win — fail loudly instead.
+  # Both the templates and the app's own copies (which may not exist yet on a
+  # first run — a glob over a missing directory simply matches nothing).
   local dir f
-  for dir in "$PERS_DIR" "$APP_TF_DIR" "$STATE_TF_DIR"; do
+  for dir in "$TPL_PERS_DIR" "$TPL_APP_TF_DIR" "$TPL_STATE_TF_DIR" \
+             "$PERS_DIR" "$APP_TF_DIR" "$STATE_TF_DIR"; do
     for f in "$dir"/terraform.tfvars "$dir"/terraform.tfvars.json "$dir"/*.auto.tfvars "$dir"/*.auto.tfvars.json; do
       [ -e "$f" ] && fail "$f would override bootstrap's variables (terraform precedence: tfvars beats TF_VAR_ env). Move it aside: mv '$f' '$f.bak'"
     done
@@ -260,6 +280,17 @@ parse_meta() {
   REGION="${REGION:-nyc3}"
   DNS_RECORD="${DNS_RECORD:-$infra_name}"
   log "app: $APP_NAME ($APP_MODULE) [$FRAMEWORK] | project: $PROJECT_NAME | region: $REGION"
+}
+
+# Give the app its own copy of the Terraform roots (<app_dir>/infra/), so the
+# infrastructure is versioned alongside the code that runs on it. Seeds missing
+# files only — hand edits in the app survive every later bootstrap run, and
+# drift from the templates is reported rather than overwritten.
+sync_infra() {
+  "$SCRIPT_DIR/scripts/sync-infra.sh" "$APP_DIR"
+  # Every terraform call below already points at these (set_infra_dirs); this
+  # is the step that makes the directories real.
+  [ -d "$STATE_TF_DIR" ] || fail "sync-infra did not create $STATE_TF_DIR"
 }
 
 # Ensure the Spaces state bucket exists (story 7.4). This tiny root keeps
@@ -373,7 +404,7 @@ tf_persistent() {
   export TF_VAR_dns_record="$DNS_RECORD"
   export TF_VAR_database_backend="$DATABASE_BACKEND"
 
-  log "terraform: infra-persistent (database backend: $DATABASE_BACKEND)"
+  log "terraform: infra/persistent (database backend: $DATABASE_BACKEND)"
   backend_init "$PERS_DIR"
 
   # project_name is immutable: renaming forces DB-cluster replacement (blocked by
@@ -435,7 +466,7 @@ tf_app() {
   export TF_VAR_state_bucket="$STATE_BUCKET"
   export TF_VAR_state_endpoint="$STATE_ENDPOINT"
 
-  log "terraform: infra-app"
+  log "terraform: infra/app"
   backend_init "$APP_TF_DIR"
   terraform -chdir="$APP_TF_DIR" apply -auto-approve -input=false
   APP_IP="$(terraform -chdir="$APP_TF_DIR" output -raw app_ip)"
@@ -731,11 +762,12 @@ provision() {
   step "ensure app exists (generate if missing)";   ensure_app
   step "parse app metadata";                        parse_meta
   step "GitHub repo + initial commit";              ensure_repo
-  step "Terraform state bucket (infra-state)";      ensure_state_bucket
-  step "persistent infra: VPC/DB/DNS (infra-persistent)"; tf_persistent
+  step "sync Terraform roots into the app (infra/)"; sync_infra
+  step "Terraform state bucket (infra/state)";      ensure_state_bucket
+  step "persistent infra: VPC/DB/DNS (infra/persistent)"; tf_persistent
   step "container registry";                        ensure_registry
   step "detect SSH allow CIDR";                     detect_cidr
-  step "app infra: droplet/firewall (infra-app)";   tf_app
+  step "app infra: droplet/firewall (infra/app)";  tf_app
   step "wait for droplet Docker daemon";            wait_droplet_ready
   step "grant DB schema privileges";                grant_db_schema
   step "prepare app: release/TLS/pipeline files";   prep_app
@@ -760,6 +792,7 @@ abs_dir() {
 main() {
   if [ "${1:-}" = "--check" ]; then
     APP_DIR="$(abs_dir "${2:-.}")"
+    set_infra_dirs
     preflight
     exit 0
   fi
@@ -767,6 +800,7 @@ main() {
     -*) fail "unknown argument: $1 (use --check or [app_dir])" ;;
   esac
   APP_DIR="$(abs_dir "${1:-.}")"
+  set_infra_dirs
   provision
 }
 
