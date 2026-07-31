@@ -98,6 +98,64 @@ services:
       db_init:
         condition: service_completed_successfully
 
+  # Periodic full-database archive to Spaces, under its own prefix.
+  #
+  # This is NOT redundant with Litestream. The Litestream replica is a
+  # continuously-updated MIRROR with a short retention window (24h by default):
+  # it answers "the droplet died five minutes ago", and it cannot answer
+  # "restore last Tuesday" — the older WAL and snapshots have been pruned. On
+  # the Postgres backend the managed cluster's own backups covered that; on
+  # SQLite nothing does unless something like this runs.
+  #
+  # ARCHIVE_INTERVAL_SECONDS (optional, in .env) overrides the daily default.
+  backup:
+    image: alpine:3.22
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Read-write on purpose: opening a WAL-mode database needs to touch its
+      # -shm file even to read. VACUUM INTO only writes to the destination.
+      - app_data:/data
+    depends_on:
+      db_init:
+        condition: service_completed_successfully
+    networks:
+      - web
+    entrypoint: ["/bin/sh", "-c"]
+    # $$ escapes are for the CONTAINER shell — compose must not expand these.
+    command:
+      - |
+        apk add --no-cache sqlite curl >/dev/null || exit 1
+        name=$$(basename "$$DATABASE_PATH" .sqlite3)
+        echo "backup: archiving $$name every $${ARCHIVE_INTERVAL_SECONDS:-86400}s"
+        while :; do
+          ts=$$(date -u +%Y%m%dT%H%M%SZ)
+          month=$$(date -u +%Y-%m)
+          tmp=/tmp/$$name.sqlite3
+          rm -f "$$tmp" "$$tmp.gz"
+          # VACUUM INTO takes a consistent, compacted copy of a LIVE database.
+          # Copying the file directly would race with writers and could capture
+          # a torn page plus a stale -wal.
+          if ! sqlite3 "$$DATABASE_PATH" "VACUUM INTO '$$tmp'"; then
+            echo "backup: FAILED (VACUUM INTO)" >&2
+          elif ! gzip -f "$$tmp"; then
+            echo "backup: FAILED (gzip)" >&2
+          elif ! curl -fsS --max-time 300 -X PUT \
+                 --aws-sigv4 "aws:amz:$$BACKUP_REGION:s3" \
+                 --user "$$LITESTREAM_ACCESS_KEY_ID:$$LITESTREAM_SECRET_ACCESS_KEY" \
+                 -T "$$tmp.gz" \
+                 "$$BACKUP_ENDPOINT/$$BACKUP_BUCKET/archive/$$name/$$month/$$name-$$ts.sqlite3.gz"; then
+            echo "backup: FAILED (upload)" >&2
+          else
+            echo "backup: archive/$$name/$$month/$$name-$$ts.sqlite3.gz ($$(stat -c%s "$$tmp.gz") bytes)"
+          fi
+          rm -f "$$tmp" "$$tmp.gz"
+          # Failures fall through to the sleep rather than exiting: a crash-loop
+          # would just hammer Spaces, and the next cycle may well succeed.
+          sleep "$${ARCHIVE_INTERVAL_SECONDS:-86400}"
+        done
+
   app_blue: *app
   app_green: *app
 
