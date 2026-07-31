@@ -18,9 +18,22 @@ echo "swap: active=${active:-none} -> starting $new"
 # is still running and serving in that case.
 docker compose up -d --wait "$new"
 
-# Ensure Caddy is up (first deploy) and clear any orphaned pre-blue/green 'app'
+# Ensure the color-independent services are up (first deploy, or a service added
+# to compose.yaml since the last one) and clear any orphaned pre-blue/green 'app'
 # container — safe to do only now, after the new color is healthy.
-docker compose up -d --remove-orphans caddy
+#
+# litestream needs no mention: the app colors depend_on it, so `up` starts it.
+# `backup` has no dependent, so nothing would ever start it otherwise — and it
+# exists only on the SQLite stack, hence the check. This script is shared by both
+# backends, and naming a service the Postgres stack lacks would fail the deploy.
+extra="caddy"
+if docker compose config --services 2>/dev/null | grep -qx backup; then
+  extra="$extra backup"
+fi
+
+# Unquoted on purpose: $extra is a word list of service names, not one argument.
+# shellcheck disable=SC2086
+docker compose up -d --remove-orphans $extra
 
 if [ -n "$active" ] && [ "$active" != "$new" ]; then
   docker compose stop "$active"
