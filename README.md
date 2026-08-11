@@ -39,7 +39,9 @@ infra/state/        the Spaces bucket that stores the other two roots' state
                     (its own state is local — chicken/egg — losing it is a
                     non-event: terraform import re-adopts the bucket)
 
-infra/persistent/   VPC, reserved IP, managed Postgres, DNSimple A record
+infra/persistent/   VPC, reserved IP, managed Postgres, DNSimple A record,
+                    and a DigitalOcean *project* named after the app that
+                    groups its resources in the DO control panel
                     — things that must SURVIVE. prevent_destroy everywhere.
 
 infra/app/          droplet, reserved-IP assignment, firewall

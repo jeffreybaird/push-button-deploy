@@ -52,6 +52,11 @@ output "region" {
   value       = var.region
 }
 
+output "project_id" {
+  description = "ID of the app's DigitalOcean project — infra-app attaches the droplet to it."
+  value       = digitalocean_project.app.id
+}
+
 output "project_name" {
   description = "Project name — infra-app derives the droplet name from it."
   value       = var.project_name

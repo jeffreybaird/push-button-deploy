@@ -21,6 +21,12 @@ variable "vpc_ip_range" {
   default     = null
 }
 
+variable "state_bucket_name" {
+  description = "Name of the Spaces bucket holding Terraform state and Litestream backups (created by infra-state). Assigned to the app's DO project by URN. Empty string skips the assignment."
+  type        = string
+  default     = ""
+}
+
 variable "database_backend" {
   description = "Which database the app uses: 'sqlite' (the default) provisions no DB at all — the app keeps a SQLite file on the droplet's local disk, replicated to Spaces by Litestream (see deploy/compose.sqlite.yaml). 'postgres' provisions a managed Postgres cluster here instead. 'none' is for a STATIC site (FRAMEWORK=zola), which has no data layer at all."
   type        = string

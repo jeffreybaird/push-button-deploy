@@ -53,6 +53,22 @@ resource "digitalocean_droplet" "app" {
   user_data = file("${path.module}/cloud-init.yaml")
 }
 
+# Put the droplet in the app's DO project (created in infra-persistent).
+# Managed here, in this root's own state, so destroying infra-app detaches only
+# the droplet and leaves the persistent resources' assignments alone. try()
+# tolerates a persistent state written before projects existed — the droplet
+# then stays in the account default project until infra-persistent is re-applied.
+locals {
+  project_id = try(data.terraform_remote_state.persistent.outputs.project_id, "")
+}
+
+resource "digitalocean_project_resources" "app" {
+  count = local.project_id == "" ? 0 : 1
+
+  project   = local.project_id
+  resources = [digitalocean_droplet.app.urn]
+}
+
 # Bind the persistent reserved IP to this droplet. The assignment lives here so a
 # destroy releases the binding without destroying the IP itself (it has
 # prevent_destroy in infra-persistent).

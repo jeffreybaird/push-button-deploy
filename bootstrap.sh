@@ -584,6 +584,7 @@ tf_persistent() {
   export TF_VAR_dns_zone="$DNS_ZONE"
   export TF_VAR_dns_record="$DNS_RECORD"
   export TF_VAR_database_backend="$DATABASE_BACKEND"
+  export TF_VAR_state_bucket_name="$STATE_BUCKET"
 
   log "terraform: infra/persistent (database backend: $DATABASE_BACKEND)"
   backend_init "$PERS_DIR"
