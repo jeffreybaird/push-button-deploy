@@ -56,7 +56,9 @@ site file in the shared Caddy. It cannot reach production's data because it does
 not share a volume with it, and it cannot reach production's *backups* because
 `litestream.staging.yml` replicates into its own volume rather than Spaces and
 `compose.override.yaml` switches the archive loop off — its `.env` carries no
-Spaces keypair at all. It signs sessions with its own `STAGING_SECRET_KEY_BASE`.
+Spaces keypair at all. It signs sessions with a key derived from
+`SECRET_KEY_BASE` in the deploy job (one-way sha512, fixed label) — different
+from production's, and nothing anyone has to set per app or per PR.
 
 There is **one staging slot per app**, held by the most recent PR to deploy
 (`.staging-owner` on the droplet); a second PR takes it over and says so in a

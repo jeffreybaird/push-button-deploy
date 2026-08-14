@@ -28,9 +28,13 @@
 #                                       WORKFLOW ENTIRELY (every job is gated on
 #                                       it), which is how an app whose infra/
 #                                       predates staging stays untouched
-#   secret STAGING_SECRET_KEY_BASE    - staging's own session secret, never prod's
 #   plus the same DIGITALOCEAN_ACCESS_TOKEN / SSH_PRIVATE_KEY / DOCR_REGISTRY /
 #   FIREWALL_ID / DROPLET_HOST / APP_SLUG the production deploy uses
+#
+# There is NO staging secret to maintain: the environment's signing key is
+# derived from SECRET_KEY_BASE inside the deploy job (one-way, fixed label), so
+# it differs from production's without anyone setting a second secret per app or
+# per pull request.
 name: staging
 
 on:
@@ -169,11 +173,29 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
+      # Staging must not sign with production's key — a cookie forged in (or leaked
+      # out of) a PR environment would otherwise be valid against production. It
+      # must also not need anyone to set a secret per app or per PR, so it is
+      # DERIVED rather than stored: a one-way sha512 of the production secret
+      # under a fixed label. Same value on every deploy (staging sessions survive
+      # a redeploy), never equal to production's, and impossible to work
+      # backwards from. Rotating SECRET_KEY_BASE rotates this with it.
+      - name: Derive the staging signing secret
+        env:
+          PROD_SECRET: ${{ secrets.SECRET_KEY_BASE }}
+        run: |
+          if [ -z "$PROD_SECRET" ]; then
+            echo "::error::SECRET_KEY_BASE is not set on this repo — re-run the bootstrap"; exit 1
+          fi
+          s=$(printf 'push-button-deploy/staging|%s' "$PROD_SECRET" | sha512sum | cut -d' ' -f1)
+          # 128 hex chars. Masked so it can never surface in a log line.
+          echo "::add-mask::$s"
+          echo "STAGING_SECRET_KEY_BASE=$s" >> "$GITHUB_ENV"
+
       # Staging's .env is production's with three deliberate differences: the
-      # staging domain, the staging slug, and its OWN session secret — sharing
-      # SECRET_KEY_BASE would let anything that leaked out of a PR environment
-      # forge sessions against production. No Spaces keypair and no BACKUP_*
-      # target: replication in this environment is local to its own volume.
+      # staging domain, the staging slug, and the derived signing secret above.
+      # No Spaces keypair and no BACKUP_* target either: replication in this
+      # environment is local to its own volume.
       - name: Write .env
         run: |
           umask 077
@@ -181,7 +203,7 @@ jobs:
           IMAGE=${IMAGE}
           DOMAIN=${DOMAIN}
           APP_SLUG=${APP_SLUG}
-          SECRET_KEY_BASE=${{ secrets.STAGING_SECRET_KEY_BASE }}
+          SECRET_KEY_BASE=${STAGING_SECRET_KEY_BASE}
           DATABASE_PATH=${{ vars.DATABASE_PATH }}
           EOF
 

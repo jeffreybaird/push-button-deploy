@@ -46,10 +46,14 @@ resource "digitalocean_database_user" "app" {
   name       = var.project_name
 }
 
-# The staging environment's database — a second database in the SAME cluster,
-# reached by the same user over the same private host and the same CA. It costs
-# nothing (a cluster holds as many databases as you make) and it is the only way
-# a PR environment can run migrations without pointing them at production data.
+# The staging environment's database.
+#
+# NO SECOND INSTANCE. This is a logical database created ON the cluster the app
+# already runs (`cluster_id` below is that cluster), reached by the same user
+# over the same private host with the same CA — the DO bill does not change, and
+# there is no second cluster to size, firewall or forget about. What it buys is
+# the one thing staging cannot share: a place for a pull request's migrations to
+# run that is not production's data.
 #
 # It is deliberately NOT recreated per pull request: DO exposes no way to drop a
 # database from the droplet with the app user's privileges, and a cluster-admin

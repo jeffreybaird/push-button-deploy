@@ -489,13 +489,16 @@ On the droplet the environment is just another app: compose project
 `<slug>-stg` in `/root/apps/<slug>-stg`, its own volumes and containers, its own
 site file in the shared Caddy. What keeps it away from production's data:
 
-- **Postgres** — `STAGING_DATABASE_URL` names a *separate database* in the same
-  cluster. It is not reset per PR, so migrations accumulate in it.
+- **Postgres** — `STAGING_DATABASE_URL` names a *separate database on the same
+  managed cluster* (no second instance). It is not reset per PR, so migrations
+  accumulate in it.
 - **SQLite** — its own `app_data` volume, plus `litestream.staging.yml`
   (replicates into that volume, not Spaces) and `compose.override.yaml` (the
   archive loop is switched off). The staging `.env` carries **no Spaces keypair**.
-- **Its own `STAGING_SECRET_KEY_BASE`**, so a session forged in a PR environment
-  is not valid against production.
+- **A signing key derived from `SECRET_KEY_BASE`** in the deploy job (one-way
+  sha512, fixed label) — different from production's, so a session forged in a
+  PR environment is not valid against it, and there is no second secret for
+  anyone to set or rotate.
 
 There is **one staging slot per app**, held by the most recent PR to deploy
 (`.staging-owner` on the droplet). Fork PRs are skipped — GitHub withholds

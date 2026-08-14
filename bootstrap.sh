@@ -633,6 +633,11 @@ read_staging_outputs() {
         || fail "staging is on but the root produced no database_staging_url — adopt the current $template/database.tf and outputs.tf, or set enable_staging = false"
     fi
     log "staging: pull requests against main will serve on https://$STAGING_DOMAIN"
+    # if/fi rather than `[ … ] && log`: a false test here would be the last
+    # command in the function, and set -e would take the whole run down with it.
+    if [ -n "$STAGING_DATABASE_URL" ]; then
+      log "staging: uses database '${PROJECT_NAME}-staging' on the app's EXISTING Postgres cluster — no second instance"
+    fi
   elif wants_staging; then
     warn "no staging_domain output in $root — this app's infra copy predates PR staging environments.
      Production is unaffected; to enable them, adopt the current templates:
@@ -1173,13 +1178,11 @@ seed_github() {
     # DATABASE_PATH, DOCR_REGISTRY, DROPLET_HOST and FIREWALL_ID.
     if staging_enabled; then
       gh variable set STAGING_DOMAIN -b "$STAGING_DOMAIN"
-      # Its OWN signing secret. Sharing production's would mean a session cookie
-      # forged in (or leaked out of) a PR environment is valid against production.
-      if is_sinatra; then
-        openssl rand -hex 64 | gh secret set STAGING_SECRET_KEY_BASE
-      else
-        mix phx.gen.secret  | gh secret set STAGING_SECRET_KEY_BASE
-      fi
+      # No staging signing secret is seeded here on purpose: staging.yml derives
+      # one from SECRET_KEY_BASE at deploy time (one-way, fixed label), so the
+      # environment signs with a key that is not production's without anyone
+      # having to create, rotate or remember a second secret.
+      #
       # Postgres: the staging environment's own database in the same cluster, so
       # a PR's migrations can never run against production's.
       if [ -n "${STAGING_DATABASE_URL:-}" ]; then

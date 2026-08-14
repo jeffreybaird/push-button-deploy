@@ -220,9 +220,9 @@ containers, route or data.
 | Domain | `<record>.<zone>` | `<record>-stg.<zone>` |
 | Stack | `/root/apps/<slug>` | `/root/apps/<slug>-stg` |
 | Image tag | `<sha>` (+ `:latest`) | `pr-<n>-<sha>`, deleted when the PR closes |
-| Data (Postgres) | its own database in the cluster | a **separate database** in the same cluster |
+| Data (Postgres) | its own database in the cluster | a **separate database on the same cluster** — no second instance, no extra cost |
 | Data (SQLite) | its own volume, replicated to Spaces | its own volume, replicated **into that volume** |
-| Signing secret | `SECRET_KEY_BASE` | `STAGING_SECRET_KEY_BASE` (a different one) |
+| Signing secret | `SECRET_KEY_BASE` | derived from it in CI — different key, nothing to set |
 | Release | health-checked blue/green swap | the same swap, same gate |
 
 Things worth knowing before you rely on it:
@@ -239,11 +239,17 @@ Things worth knowing before you rely on it:
 - **Staging data is scratch, and it never touches production's backups.** On
   SQLite, Litestream replicates into the environment's own volume instead of
   Spaces and the periodic archive is switched off, so the staging deploy carries
-  no Spaces keypair at all. On Postgres, staging gets its own database in the
-  cluster (no extra cost) — but that database is **not** reset per PR, since
-  dropping it would need a cluster-admin credential in CI. Migrations accumulate;
-  when that stops being useful, delete the database in the DO console and re-run
-  the bootstrap.
+  no Spaces keypair at all. On Postgres, staging gets its own database **on the
+  app's existing managed cluster** — no second instance is provisioned and the
+  bill does not change; only the database name differs from production's, so a
+  PR's migrations can never run against production data. That database is **not**
+  reset per PR, since dropping it would need a cluster-admin credential in CI.
+  Migrations accumulate; when that stops being useful, delete the database in the
+  DO console and re-run the bootstrap.
+- **Nothing to set per PR — or per app.** Staging's signing key is derived inside
+  the deploy job from `SECRET_KEY_BASE` (one-way sha512 under a fixed label), so
+  it is stable across deploys, different from production's, and there is no
+  second secret to create or rotate. Rotating `SECRET_KEY_BASE` rotates it too.
 - **PRs from forks are skipped, deliberately.** This workflow holds the droplet's
   SSH key and the DO API token. GitHub withholds secrets from fork PRs, and
   handing them to unreviewed code would be the wrong fix.
@@ -380,7 +386,7 @@ The app name is the directory basename (must be a valid Elixir app name: `lower_
 8. **Wait** until the droplet answers `docker info` over SSH (a responsive daemon, not just the binary).
 9. **Grant** the app DB user `CREATE`/`USAGE` on schema `public` (PG15+ default-deny), via the droplet — the only host the DB firewall trusts.
 10. **Prepare the app** — deps, `phx.gen.release`, release migration task, *verified* DB TLS config, Dockerfile, compose stack, deploy + rollback workflows.
-11. **Seed GitHub** — secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`). Unless staging is off, also `STAGING_DOMAIN` plus staging's own `STAGING_SECRET_KEY_BASE` (and `STAGING_DATABASE_URL` on Postgres) — that variable is what arms the staging workflow.
+11. **Seed GitHub** — secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`). Unless staging is off, also `STAGING_DOMAIN` (and `STAGING_DATABASE_URL` on Postgres) — that variable is what arms the staging workflow. Staging needs no secret of its own: its signing key is derived in CI.
 12. **Commit + push** the pipeline files — which triggers the first deploy through the exact pipeline every later push uses: tests (Postgres service container) → image build → migration gate → blue/green swap.
 13. **Poll `https://<domain>`** until live. On failure it prints ordered diagnostics (Actions status, `dig`, Caddy logs) and tells you whether the deploy *failed* or just *isn't ready yet*.
 
