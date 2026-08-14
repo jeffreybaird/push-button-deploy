@@ -77,3 +77,9 @@ variable "dns_ttl" {
   type        = number
   default     = 300
 }
+
+variable "enable_staging" {
+  description = "Create the app's STAGING name (<record>-stg.<zone>, pointed at the same droplet) and, on the Postgres backend, its own database in the same cluster. A pull request against main stands an environment up behind that name and closing the PR tears it down. Ignored for a static site (database_backend = \"none\"), which has no server-side environment to build."
+  type        = bool
+  default     = true
+}

@@ -10,3 +10,7 @@ dnsimple_account = "123456"
 dns_zone         = "example.com"
 dns_record       = "app" # -> app.example.com ; use "@" for the apex
 dns_ttl          = 300
+
+# Pull-request staging environment (<record>-stg.<zone> on the same droplet).
+# false disables it: no staging record, and no staging database on Postgres.
+enable_staging = true

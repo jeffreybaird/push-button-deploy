@@ -39,3 +39,9 @@ variable "dns_ttl" {
   type        = number
   default     = 300
 }
+
+variable "enable_staging" {
+  description = "Create this tenant's STAGING name (<record>-stg.<zone>) on the host droplet. A pull request against main stands an environment up behind it and closing the PR tears it down. The bootstrap sets this false for a static site, which has no server-side environment to build."
+  type        = bool
+  default     = true
+}

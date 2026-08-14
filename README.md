@@ -20,6 +20,7 @@ If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for t
 | DNS | A record at DNSimple pointing at a reserved IP that survives droplet recreation |
 | Images | Built on GitHub's amd64 runners, pushed to DO Container Registry, SHA-pinned |
 | Deploys | Every push to `main`: test (gate) → build → migrate (gated) → health-checked blue/green swap (zero downtime) |
+| Staging | Every PR against `main`: a full environment on the same droplet at `<app>-stg.<zone>`, destroyed when the PR closes (see [Pull-request staging environments](#pull-request-staging-environments)) |
 | Tests | `mix test` against a Postgres 17 service container; red tests block the build and deploy |
 | Rollback | `gh workflow run rollback.yml -f tag=<previous sha>` — pins a prior image, no rebuild |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
@@ -39,10 +40,11 @@ infra/state/        the Spaces bucket that stores the other two roots' state
                     (its own state is local — chicken/egg — losing it is a
                     non-event: terraform import re-adopts the bucket)
 
-infra/persistent/   VPC, reserved IP, managed Postgres, DNSimple A record,
-                    and a DigitalOcean *project* named after the app that
-                    groups its resources in the DO control panel
-                    — things that must SURVIVE. prevent_destroy everywhere.
+infra/persistent/   VPC, reserved IP, managed Postgres, DNSimple A records (the
+                    app's and its staging name's), and a DigitalOcean *project*
+                    named after the app that groups its resources in the DO
+                    control panel — things that must SURVIVE. prevent_destroy
+                    everywhere.
 
 infra/app/          droplet, reserved-IP assignment, firewall
                     — disposable. `terraform destroy` here never touches
@@ -125,6 +127,7 @@ Optional (defaults in parentheses):
 | `PROJECT_NAME` | infra naming: DB, VPC, tag (app name). **Immutable after first apply** — renaming would force DB replacement; the script guards this. |
 | `REGION` | DO region slug (`nyc3`) |
 | `DNS_RECORD` | subdomain inside `DNS_ZONE` (app name); `@` for the apex |
+| `ENABLE_STAGING` | `true` — give the app a PR staging environment at `<DNS_RECORD>-stg.<DNS_ZONE>`. `false` provisions none. Always off for a static site. See [Pull-request staging environments](#pull-request-staging-environments) |
 | `SSH_CIDRS` | JSON list allowed to SSH, e.g. `["1.2.3.4/32"]` (auto-detected public IP `/32`) |
 | `DOCR_REGISTRY` | name if a registry must be created (`PROJECT_NAME`) |
 | `STATE_BUCKET` | Spaces bucket for TF state (`<PROJECT_NAME>-tfstate`) — names are globally unique per region; override on collision |
@@ -189,6 +192,78 @@ Because a static site pushes no image, it is the cheapest thing to put on a drop
 serves something else — it consumes a directory and a Caddy site file, and nothing at runtime.
 It also sidesteps the container registry entirely, which matters on the free starter tier (one
 repository per account).
+
+## Pull-request staging environments
+
+Opening a pull request against `main` stands a **complete copy of the app** up on
+the same droplet and serves it at `<app>-stg.<zone>`; closing the PR destroys it.
+Pushing to an open PR redeploys it. This is on for every app with a server-side
+runtime — Phoenix and Sinatra, host apps and tenants alike. **Static (`zola`)
+sites are excluded**: they have no environment to build, only files a symlink
+points at.
+
+```
+PR opened/pushed   test -> build image (pr-<n>-<sha>) -> migrate -> swap
+                   https://myapp-stg.example.com
+PR closed/merged   stack + volumes + route destroyed, staging images deleted
+```
+
+The environment is a normal app stack in every respect the droplet can see: its
+own compose project (`<slug>-stg`), its own volumes, its own container names, its
+own site file in the shared Caddy. That is exactly the isolation two *different*
+apps on one droplet get — which is the point: a PR cannot reach production's
+containers, route or data.
+
+| | production | staging |
+|---|---|---|
+| Trigger | push to `main` | pull request against `main` |
+| Domain | `<record>.<zone>` | `<record>-stg.<zone>` |
+| Stack | `/root/apps/<slug>` | `/root/apps/<slug>-stg` |
+| Image tag | `<sha>` (+ `:latest`) | `pr-<n>-<sha>`, deleted when the PR closes |
+| Data (Postgres) | its own database in the cluster | a **separate database** in the same cluster |
+| Data (SQLite) | its own volume, replicated to Spaces | its own volume, replicated **into that volume** |
+| Signing secret | `SECRET_KEY_BASE` | `STAGING_SECRET_KEY_BASE` (a different one) |
+| Release | health-checked blue/green swap | the same swap, same gate |
+
+Things worth knowing before you rely on it:
+
+- **One staging environment per app, not one per PR.** There is a single staging
+  name, so there is a single slot. The most recent PR to deploy holds it,
+  recorded in `.staging-owner` on the droplet; a second PR takes the slot over
+  (destroying the first PR's environment, data included) and says so in a
+  comment. Closing a PR tears the environment down only if that PR still owns it.
+- **The DNS record is permanent; the environment is not.** The record is declared
+  in Terraform next to the app's own, which is what keeps DNSimple credentials
+  out of CI and lets the certificate persist between PRs. Between PRs the name
+  resolves to the droplet and nothing serves it.
+- **Staging data is scratch, and it never touches production's backups.** On
+  SQLite, Litestream replicates into the environment's own volume instead of
+  Spaces and the periodic archive is switched off, so the staging deploy carries
+  no Spaces keypair at all. On Postgres, staging gets its own database in the
+  cluster (no extra cost) — but that database is **not** reset per PR, since
+  dropping it would need a cluster-admin credential in CI. Migrations accumulate;
+  when that stops being useful, delete the database in the DO console and re-run
+  the bootstrap.
+- **PRs from forks are skipped, deliberately.** This workflow holds the droplet's
+  SSH key and the DO API token. GitHub withholds secrets from fork PRs, and
+  handing them to unreviewed code would be the wrong fix.
+- **The environment shares the droplet's RAM and CPU with production.** Size for
+  the sum, as with any second app on the box (see [Several apps on one droplet](#several-apps-on-one-droplet)).
+- **Staging images share the app's registry repository** (the free tier allows
+  one), tagged `pr-<n>-<sha>`. Superseded tags for a PR are deleted on each
+  deploy and the rest when it closes; deleting tags frees manifests, not layers,
+  so run `doctl registry garbage-collection start` if the tier's storage gets tight.
+
+Turn it off for an app with `ENABLE_STAGING=false ./bootstrap.sh <app_dir>`: the
+record goes away, the `STAGING_DOMAIN` variable is deleted, and `staging.yml` —
+gated on that variable — stops running. An environment that is already up is
+*not* torn down by that (the bootstrap never destroys running stacks); do it
+explicitly with
+`ssh root@<reserved-ip> "APP_SLUG=<slug>-stg bash /root/caddy/staging-down.sh"`.
+Apps bootstrapped before this feature existed keep their seeded
+`infra/` copy (the bootstrap never overwrites one) and simply get no staging
+until they adopt the current `dns.tf`, `database.tf` and `outputs.tf`; the
+bootstrap prints the `diff` command that shows what changed.
 
 ## Database backend
 
@@ -305,7 +380,7 @@ The app name is the directory basename (must be a valid Elixir app name: `lower_
 8. **Wait** until the droplet answers `docker info` over SSH (a responsive daemon, not just the binary).
 9. **Grant** the app DB user `CREATE`/`USAGE` on schema `public` (PG15+ default-deny), via the droplet — the only host the DB firewall trusts.
 10. **Prepare the app** — deps, `phx.gen.release`, release migration task, *verified* DB TLS config, Dockerfile, compose stack, deploy + rollback workflows.
-11. **Seed GitHub** — secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`).
+11. **Seed GitHub** — secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`). Unless staging is off, also `STAGING_DOMAIN` plus staging's own `STAGING_SECRET_KEY_BASE` (and `STAGING_DATABASE_URL` on Postgres) — that variable is what arms the staging workflow.
 12. **Commit + push** the pipeline files — which triggers the first deploy through the exact pipeline every later push uses: tests (Postgres service container) → image build → migration gate → blue/green swap.
 13. **Poll `https://<domain>`** until live. On failure it prints ordered diagnostics (Actions status, `dig`, Caddy logs) and tells you whether the deploy *failed* or just *isn't ready yet*.
 
@@ -317,6 +392,8 @@ The script is **idempotent**: fix whatever it complained about and re-run; every
 |---|---|
 | Deploy | `git push` to `main` (in the app repo) |
 | Watch a deploy | `gh run watch` |
+| Get a staging environment | open a PR against `main`; it deploys to `<app>-stg.<zone>` and is destroyed when the PR closes |
+| Destroy a staging environment by hand | `ssh root@<reserved-ip> "APP_SLUG=<slug>-stg bash /root/caddy/staging-down.sh"` |
 | Roll back | `gh workflow run rollback.yml -f tag=<previous commit sha>` |
 | Change the infrastructure | edit `<app_dir>/infra/…`, commit, `./bootstrap.sh <app_dir>` (idempotent, applies all three roots) |
 | Recreate the droplet | `terraform -chdir=<app_dir>/infra/app destroy && ./bootstrap.sh <app_dir>` — DB, IP, DNS, certs survive. **Redeploy every tenant afterwards** (`gh workflow run deploy.yml` in each): their stacks live on that droplet |
@@ -348,11 +425,11 @@ For manual Terraform runs, `cd` into the app and export the same env vars plus `
 
 ## Teardown
 
-On a **tenant** app, `teardown.sh` removes only that app: its DNS record, its
-stack and volumes under `/root/apps/<slug>`, and its route out of the shared
-Caddy. The droplet and its other apps are untouched. (Its Litestream replica in
-Spaces is left behind — delete `litestream/<project>/` by hand if you want the
-data gone.)
+On a **tenant** app, `teardown.sh` removes only that app: its DNS records, its
+stack and volumes under `/root/apps/<slug>`, any staging environment left under
+`/root/apps/<slug>-stg`, and its routes out of the shared Caddy. The droplet and
+its other apps are untouched. (Its Litestream replica in Spaces is left behind —
+delete `litestream/<project>/` by hand if you want the data gone.)
 
 ```bash
 # Everything, in the right order, with confirmation (data loss!):

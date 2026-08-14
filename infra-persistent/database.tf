@@ -46,6 +46,22 @@ resource "digitalocean_database_user" "app" {
   name       = var.project_name
 }
 
+# The staging environment's database — a second database in the SAME cluster,
+# reached by the same user over the same private host and the same CA. It costs
+# nothing (a cluster holds as many databases as you make) and it is the only way
+# a PR environment can run migrations without pointing them at production data.
+#
+# It is deliberately NOT recreated per pull request: DO exposes no way to drop a
+# database from the droplet with the app user's privileges, and a cluster-admin
+# credential in CI would be a far worse trade than a long-lived scratch database.
+# Migrations accumulate in it; when that stops being useful, delete the database
+# in the DO console and re-apply this root to get a clean one.
+resource "digitalocean_database_db" "staging" {
+  count      = local.pg_count * local.staging_count
+  cluster_id = digitalocean_database_cluster.pg[0].id
+  name       = "${var.project_name}-staging"
+}
+
 # Cluster CA certificate — delivered to the droplet at deploy time so the app
 # can verify the server cert (verify_peer, story 7.3).
 data "digitalocean_database_ca" "pg" {

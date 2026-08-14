@@ -1,0 +1,23 @@
+# Litestream config for a STAGING environment — shipped to the droplet as
+# /root/apps/<slug>-stg/litestream.yml, in place of the production file.
+#
+# Same services, same commands, same restore-on-boot behaviour; only the replica
+# target changes. It is a plain directory inside the environment's own volume
+# rather than DO Spaces, which buys three things:
+#
+#   * a pull request can never write into the production replica prefix, so the
+#     thing you restore from in an emergency only ever holds production writes
+#   * the staging deploy needs no Spaces keypair — its .env carries no
+#     credentials at all
+#   * the replica is destroyed with the volume when the PR closes
+#     (deploy/staging-down.sh runs `docker compose down -v`)
+#
+# The boot-time `litestream restore -if-db-not-exists -if-replica-exists` finds
+# no replica the first time and starts the environment with an empty database,
+# which is the point: a staging environment holds test data, not a copy of
+# production's.
+dbs:
+  - path: ${DATABASE_PATH}
+    replicas:
+      - type: file
+        path: /data/staging-replica

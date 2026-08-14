@@ -21,6 +21,14 @@
 # roots live: the tenant reads the host's state for the droplet IP, firewall ID
 # and state bucket, so a recreated droplet is picked up automatically.
 #
+# PR STAGING: every app with a server-side runtime (i.e. not FRAMEWORK=zola)
+# also gets a staging name, <record>-stg.<zone>, pointed at the same droplet.
+# Opening a pull request against main stands a complete environment up behind it
+# — its own compose project, volumes, database and Caddy route — and closing the
+# PR destroys it (.github/workflows/staging.yml). The NAME is Terraform's, so CI
+# never needs DNSimple credentials; the ENVIRONMENT is the pipeline's. There is
+# one staging slot per app, held by the most recent PR to deploy.
+#
 # app_dir may be EMPTY or NOT EXIST YET: a fresh app is generated there
 # (Phoenix: mix phx.new <basename>; Sinatra: scripts/new-sinatra-app.sh). An
 # existing app is used as-is.
@@ -42,6 +50,9 @@
 #   PROJECT_NAME   infra naming (DB/tag/VPC). Default: the app name. IMMUTABLE after first apply.
 #   REGION         DO region slug. Default: nyc3.
 #   DNS_RECORD     subdomain in DNS_ZONE. Default: the app name.
+#   ENABLE_STAGING 'true' (default) gives the app a PR staging environment at
+#                  <DNS_RECORD>-stg.<DNS_ZONE>; 'false' provisions none. Always
+#                  false for a static site.
 #   SSH_CIDRS      JSON list for SSH allow, e.g. ["1.2.3.4/32"]. Default: auto-detected public IP /32.
 #   DOCR_REGISTRY  name for a new DO registry if none exists. Default: PROJECT_NAME.
 #   STATE_BUCKET   Spaces bucket for Terraform state. Default: <PROJECT_NAME>-tfstate.
@@ -115,6 +126,21 @@ is_zola()    { [ "$FRAMEWORK" = "zola" ]; }
 # replaced. is_static names that where the reason is "no app process" rather than
 # "Zola specifically" — the next static generator reuses the same branches.
 is_static()  { is_zola; }
+
+# PR STAGING ENVIRONMENTS. Every dynamic app gets a second name on the same
+# droplet, <record>-stg.<zone>, behind which a pull request against main stands
+# up a complete copy of itself — its own compose project, volumes, database and
+# Caddy route — torn down when the PR closes (.github/workflows/staging.yml,
+# deploy/staging-down.sh). A static site is excluded: there is no environment to
+# build, only files a symlink points at.
+#
+# The NAME is Terraform's (infra/persistent, or infra/tenant), so CI never needs
+# DNSimple credentials; the ENVIRONMENT is the pipeline's. STAGING_DOMAIN is read
+# back from Terraform after the apply and is empty when staging is off — which is
+# also what an app whose infra/ copy predates this feature reads as, so it simply
+# keeps deploying production and nothing breaks.
+wants_staging()   { [ "${ENABLE_STAGING:-true}" = true ] && ! is_static; }
+staging_enabled() { [ -n "${STAGING_DOMAIN:-}" ]; }
 
 # Tenant mode: deploy onto a droplet another app already owns (--host, or
 # HOST_APP_DIR in the environment). is_tenant gates every step that would
@@ -234,6 +260,16 @@ if [ "$_requested_backend" = "postgres" ] && [ "$DATABASE_BACKEND" != "postgres"
   warn "FRAMEWORK=$FRAMEWORK forces DATABASE_BACKEND=$DATABASE_BACKEND — the requested managed Postgres cluster will NOT be provisioned"
 fi
 unset _requested_backend
+
+# PR staging environments, on by default for anything with a server-side runtime.
+# Turning it off here removes the staging DNS record (and, on Postgres, the
+# staging database) on the next apply; the workflow shipped with the app then
+# finds no STAGING_DOMAIN variable and skips every job.
+ENABLE_STAGING="${ENABLE_STAGING:-true}"
+case "$ENABLE_STAGING" in
+  true|false) ;;
+  *) fail "ENABLE_STAGING must be 'true' or 'false' (got '$ENABLE_STAGING')" ;;
+esac
 
 # Terraform roots. The ones in THIS repo are templates: every app gets its own
 # copy under <app_dir>/infra/ (scripts/sync-infra.sh) and Terraform runs from
@@ -574,6 +610,36 @@ EOF
   log "backend: $(basename "$1") initialized"
 }
 
+# Read the staging outputs back from a root that was just applied.
+#
+#   $1  the app's root directory (infra/persistent or infra/tenant)
+#   $2  this repo's matching template, named in the hint below
+#
+# They are ABSENT — not empty — in an app whose infra/ copy predates staging:
+# sync-infra seeds each file once and never overwrites it, so an existing app
+# keeps its old dns.tf until someone adopts the new one. `output -raw` on a
+# missing output exits non-zero, so every read here tolerates failure and an
+# empty STAGING_DOMAIN means one thing everywhere: this app has no staging
+# environment, wire none.
+read_staging_outputs() {
+  local root="$1" template="$2"
+  STAGING_DOMAIN="$(terraform -chdir="$root" output -raw staging_domain 2>/dev/null || true)"
+  STAGING_DATABASE_URL=""
+
+  if staging_enabled; then
+    if ! is_sqlite && ! is_static; then
+      STAGING_DATABASE_URL="$(terraform -chdir="$root" output -raw database_staging_url 2>/dev/null || true)"
+      [ -n "$STAGING_DATABASE_URL" ] \
+        || fail "staging is on but the root produced no database_staging_url — adopt the current $template/database.tf and outputs.tf, or set enable_staging = false"
+    fi
+    log "staging: pull requests against main will serve on https://$STAGING_DOMAIN"
+  elif wants_staging; then
+    warn "no staging_domain output in $root — this app's infra copy predates PR staging environments.
+     Production is unaffected; to enable them, adopt the current templates:
+       diff -ru $template $root"
+  fi
+}
+
 # Provision persistent infra. Guards project_name immutability against TF state.
 tf_persistent() {
   export TF_VAR_do_token="$DIGITALOCEAN_ACCESS_TOKEN"
@@ -585,6 +651,9 @@ tf_persistent() {
   export TF_VAR_dns_record="$DNS_RECORD"
   export TF_VAR_database_backend="$DATABASE_BACKEND"
   export TF_VAR_state_bucket_name="$STATE_BUCKET"
+  # The staging NAME (and, on Postgres, the staging database). Off for a static
+  # site. An infra/persistent copy that predates staging simply ignores this.
+  if wants_staging; then export TF_VAR_enable_staging=true; else export TF_VAR_enable_staging=false; fi
 
   log "terraform: infra/persistent (database backend: $DATABASE_BACKEND)"
   backend_init "$PERS_DIR"
@@ -616,6 +685,7 @@ tf_persistent() {
 
   terraform -chdir="$PERS_DIR" apply -auto-approve -input=false
   DOMAIN="$(terraform -chdir="$PERS_DIR" output -raw domain)"
+  read_staging_outputs "$PERS_DIR" "$TPL_PERS_DIR"
   if is_static; then
     # No database of any kind, and nothing to replicate: the site is files.
     log "static site: no database, no Litestream replica"
@@ -667,6 +737,9 @@ tf_tenant() {
   export TF_VAR_dnsimple_account="$DNSIMPLE_ACCOUNT"
   export TF_VAR_dns_zone="$DNS_ZONE"
   export TF_VAR_dns_record="$DNS_RECORD"
+  # A tenant's staging environment is another compose project on the same shared
+  # droplet — one more name pointed at the host's IP.
+  if wants_staging; then export TF_VAR_enable_staging=true; else export TF_VAR_enable_staging=false; fi
 
   log "terraform: infra/tenant (DNS record on the host's droplet)"
   # Every tenant shares the host's bucket, so the key is per-project.
@@ -684,6 +757,7 @@ tf_tenant() {
   DOMAIN="$(terraform -chdir="$TENANT_TF_DIR" output -raw domain)"
   APP_IP="$(terraform -chdir="$TENANT_TF_DIR" output -raw host_ip)"
   FW_ID="$(terraform -chdir="$TENANT_TF_DIR" output -raw firewall_id)"
+  read_staging_outputs "$TENANT_TF_DIR" "$TPL_TENANT_TF_DIR"
 
   if is_static; then
     # A static tenant stores nothing: its releases live under /root/apps/<slug>
@@ -841,6 +915,19 @@ grant_db_schema() {
     "docker run --rm postgres:17-alpine psql '$admin_url' -v ON_ERROR_STOP=1 \
        -c 'GRANT ALL ON SCHEMA public TO \"$PROJECT_NAME\";'"
   log "schema grant applied"
+
+  # The staging database is a second database in the same cluster and needs the
+  # same grant, or the first PR environment's first migration dies on
+  # insufficient_privilege. Same route (through the droplet), same statement.
+  staging_enabled || return 0
+  local staging_admin_url
+  staging_admin_url="$(terraform -chdir="$PERS_DIR" output -raw database_staging_admin_url 2>/dev/null || true)"
+  [ -n "$staging_admin_url" ] || return 0
+  log "granting schema public privileges on the staging database (via droplet)"
+  quiet ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new root@"$APP_IP" \
+    "docker run --rm postgres:17-alpine psql '$staging_admin_url' -v ON_ERROR_STOP=1 \
+       -c 'GRANT ALL ON SCHEMA public TO \"$PROJECT_NAME\";'"
+  log "staging schema grant applied"
 }
 
 # Pin the app's Dockerfile ARGs (CI reads the same ARGs) to the local Elixir/OTP
@@ -934,7 +1021,21 @@ copy_deploy_files() {
     # Caddy reverse-proxies to the live color; publishing is the blue/green swap.
     cp "$SCRIPT_DIR/deploy/site.caddy.tmpl" "$APP_DIR/deploy/site.caddy.tmpl"
     cp "$SCRIPT_DIR/deploy/swap.sh"         "$APP_DIR/deploy/swap.sh"
+    # Tears a PR staging environment off the droplet. Travels with every dynamic
+    # app for the same reason edge.sh does: the workflow that needs it ships it.
+    cp "$SCRIPT_DIR/deploy/staging-down.sh" "$APP_DIR/deploy/staging-down.sh"
   fi
+}
+
+# The staging environment's two SQLITE-ONLY files. They are what keep a pull
+# request away from production's backups: replication goes to a path inside the
+# environment's own volume, and the archive-to-Spaces loop is switched off. The
+# Postgres stack needs neither — it has no such services, and its staging
+# isolation is a separate database in the same cluster.
+copy_staging_files() {
+  wants_staging || return 0
+  cp "$SCRIPT_DIR/deploy/compose.staging.yaml"   "$APP_DIR/deploy/compose.staging.yaml"
+  cp "$SCRIPT_DIR/deploy/litestream.staging.yml" "$APP_DIR/deploy/litestream.staging.yml"
 }
 
 # Generate release files (Phoenix), enforce DB TLS, drop in the pipeline files.
@@ -961,10 +1062,12 @@ prep_app() {
     mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
     cp "$SCRIPT_DIR/app/.github/workflows/deploy.ruby.yml"   "$APP_DIR/.github/workflows/deploy.yml"
     cp "$SCRIPT_DIR/app/.github/workflows/rollback.ruby.yml" "$APP_DIR/.github/workflows/rollback.yml"
+    cp "$SCRIPT_DIR/app/.github/workflows/staging.ruby.yml"  "$APP_DIR/.github/workflows/staging.yml"
     copy_deploy_files
     # Sinatra is SQLite-only: Litestream sidecar + restore, no TLS to patch.
     cp "$SCRIPT_DIR/deploy/compose.sinatra.yaml" "$APP_DIR/deploy/compose.yaml"
     cp "$SCRIPT_DIR/deploy/litestream.yml"       "$APP_DIR/deploy/litestream.yml"
+    copy_staging_files
     return 0
   fi
 
@@ -979,12 +1082,14 @@ prep_app() {
   mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
   cp "$SCRIPT_DIR/app/.github/workflows/deploy.yml"   "$APP_DIR/.github/workflows/deploy.yml"
   cp "$SCRIPT_DIR/app/.github/workflows/rollback.yml" "$APP_DIR/.github/workflows/rollback.yml"
+  cp "$SCRIPT_DIR/app/.github/workflows/staging.yml"  "$APP_DIR/.github/workflows/staging.yml"
   copy_deploy_files
   if is_sqlite; then
     # SQLite compose carries the Litestream sidecar + restore; no managed DB
     # means no TLS config to patch into runtime.exs.
     cp "$SCRIPT_DIR/deploy/compose.sqlite.yaml" "$APP_DIR/deploy/compose.yaml"
     cp "$SCRIPT_DIR/deploy/litestream.yml"      "$APP_DIR/deploy/litestream.yml"
+    copy_staging_files
   else
     cp "$SCRIPT_DIR/deploy/compose.yaml" "$APP_DIR/deploy/"
     "$SCRIPT_DIR/scripts/ensure-db-tls.sh" "$APP_DIR"
@@ -1058,6 +1163,34 @@ seed_github() {
     else
       printf '%s' "$DATABASE_URL"               | gh secret set DATABASE_URL
       printf '%s' "$DATABASE_CA_CERT"           | gh secret set DATABASE_CA_CERT
+    fi
+
+    # ---- PR staging environment ------------------------------------------------
+    # STAGING_DOMAIN is the switch: staging.yml gates every one of its jobs on it,
+    # so an app that has no staging name never runs the workflow at all. Nothing
+    # else is seeded here that production doesn't already have — the staging slug
+    # is derived from APP_SLUG in the workflow, and the staging stack reuses
+    # DATABASE_PATH, DOCR_REGISTRY, DROPLET_HOST and FIREWALL_ID.
+    if staging_enabled; then
+      gh variable set STAGING_DOMAIN -b "$STAGING_DOMAIN"
+      # Its OWN signing secret. Sharing production's would mean a session cookie
+      # forged in (or leaked out of) a PR environment is valid against production.
+      if is_sinatra; then
+        openssl rand -hex 64 | gh secret set STAGING_SECRET_KEY_BASE
+      else
+        mix phx.gen.secret  | gh secret set STAGING_SECRET_KEY_BASE
+      fi
+      # Postgres: the staging environment's own database in the same cluster, so
+      # a PR's migrations can never run against production's.
+      if [ -n "${STAGING_DATABASE_URL:-}" ]; then
+        printf '%s' "$STAGING_DATABASE_URL" | gh secret set STAGING_DATABASE_URL
+      fi
+    else
+      # Staging was turned off (or never on). The variable is the workflow's only
+      # switch, so leaving a stale one behind would keep deploying to a name
+      # Terraform has just removed from DNS. Absent already? Then there is
+      # nothing to remove and the failure is expected.
+      gh variable delete STAGING_DOMAIN >/dev/null 2>&1 || true
     fi
   )
 }
@@ -1234,6 +1367,11 @@ provision() {
     log "done. app live at https://$DOMAIN | droplet: $APP_IP (shared with $(basename "$HOST_APP_DIR"))"
   else
     log "done. app live at https://$DOMAIN | droplet: $APP_IP"
+  fi
+  # if/fi, not `&&`: as the last command in the function a false test would make
+  # provision() return non-zero, and set -e would stamp a successful run FAILED.
+  if staging_enabled; then
+    log "staging: a PR against main deploys to https://$STAGING_DOMAIN, and closing it destroys that environment"
   fi
 }
 

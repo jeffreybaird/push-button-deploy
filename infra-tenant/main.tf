@@ -39,6 +39,13 @@ locals {
   # Apex when dns_record is "" or "@", otherwise <record>.<zone>.
   is_apex = var.dns_record == "" || var.dns_record == "@"
   fqdn    = local.is_apex ? var.dns_zone : "${var.dns_record}.${var.dns_zone}"
+
+  # The STAGING name for this tenant's PR environments. Same droplet again — a
+  # tenant's staging stack is just another compose project on the host, sharing
+  # nothing with either the tenant's production stack or its neighbours.
+  staging_label = local.is_apex ? "${var.project_name}-stg" : "${var.dns_record}-stg"
+  staging_fqdn  = "${local.staging_label}.${var.dns_zone}"
+  staging_count = var.enable_staging ? 1 : 0
 }
 
 # The tenant's own name, pointed at the shared droplet. Caddy issues this app's
@@ -47,6 +54,18 @@ locals {
 resource "dnsimple_zone_record" "app" {
   zone_name = var.dns_zone
   name      = local.is_apex ? "" : var.dns_record
+  type      = "A"
+  value     = local.host_ip
+  ttl       = var.dns_ttl
+}
+
+# The tenant's staging name, pointed at the same host droplet. Declared here
+# rather than created by CI so the deploy pipeline never needs DNSimple
+# credentials, and so the certificate for it can issue before the first PR.
+resource "dnsimple_zone_record" "staging" {
+  count     = local.staging_count
+  zone_name = var.dns_zone
+  name      = local.staging_label
   type      = "A"
   value     = local.host_ip
   ttl       = var.dns_ttl
