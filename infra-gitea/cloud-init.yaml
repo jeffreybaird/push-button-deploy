@@ -1,0 +1,18 @@
+#cloud-config
+# Installs Docker Engine + the compose plugin, and mounts the persistent data
+# volume Terraform attaches (main.tf: digitalocean_volume.gitea_data) at
+# /mnt/gitea-data. No secrets, no Gitea config here — those arrive over SSH at
+# deploy time (same locked decision infra-app's cloud-init makes).
+#
+# The device is found by glob rather than a hardcoded name/path: exactly one
+# extra block device is ever attached to this droplet (DO's own convention
+# exposes it at /dev/disk/by-id/scsi-0DO_Volume_<name>), so matching the glob
+# is unambiguous and needs no Terraform templating into this file.
+package_update: true
+package_upgrade: false
+runcmd:
+  - [sh, -c, "curl -fsSL https://get.docker.com | sh"]
+  - [systemctl, enable, --now, docker]
+  - [mkdir, -p, /mnt/gitea-data]
+  - [sh, -c, "dev=$(ls /dev/disk/by-id/scsi-0DO_Volume_* 2>/dev/null | head -1); if [ -n \"$dev\" ]; then mount -o discard,defaults,noatime \"$dev\" /mnt/gitea-data; fi"]
+  - [sh, -c, "dev=$(ls /dev/disk/by-id/scsi-0DO_Volume_* 2>/dev/null | head -1); if [ -n \"$dev\" ] && ! grep -q gitea-data /etc/fstab; then echo \"$dev /mnt/gitea-data ext4 defaults,nofail,discard 0 2\" >> /etc/fstab; fi"]

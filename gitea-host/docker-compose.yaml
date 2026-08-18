@@ -1,0 +1,77 @@
+# Gitea server + its Actions runner, co-located on one droplet (see README
+# "Gitea support"). Copied to the droplet and started by bootstrap-gitea.sh —
+# nothing here is baked into an image; config/secrets arrive via the .env file
+# written alongside this at deploy time (same locked decision the app
+# pipelines follow: nothing secret in cloud-init or the image).
+#
+# All persistent state (Gitea's SQLite DB, git repo objects, Actions logs, the
+# runner's own registration) lives under the ATTACHED DATA VOLUME
+# (/mnt/gitea-data, mounted by cloud-init.yaml) — not in Docker-managed
+# volumes — so it survives a container/droplet recreation as long as the
+# Terraform-managed volume itself isn't destroyed.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - GITEA_DOMAIN=${GITEA_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/gitea-data/caddy_data:/data
+      - /mnt/gitea-data/caddy_config:/config
+    depends_on:
+      - gitea
+
+  gitea:
+    image: gitea/gitea:1.22
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=sqlite3
+      - GITEA__server__DOMAIN=${GITEA_DOMAIN}
+      - GITEA__server__ROOT_URL=https://${GITEA_DOMAIN}/
+      - GITEA__server__START_SSH_SERVER=true
+      - GITEA__server__SSH_LISTEN_PORT=22
+      - GITEA__server__SSH_PORT=2222
+      # Actions is OFF by default in Gitea — this is what makes the CI half
+      # of "Gitea support" actually work at all.
+      - GITEA__actions__ENABLED=true
+      # This instance has exactly one operator (you). Self-service signup on
+      # a freshly internet-exposed git host is not a default worth risking.
+      - GITEA__service__DISABLE_REGISTRATION=true
+    volumes:
+      - /mnt/gitea-data/gitea:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      # Git-over-SSH only — HTTP(S) is reached through Caddy, not published
+      # directly. Host 2222 avoids colliding with the droplet's own sshd on 22.
+      - "2222:22"
+
+  runner:
+    image: gitea/act_runner:latest
+    restart: unless-stopped
+    environment:
+      # Internal service address, not the public domain: the runner talks to
+      # Gitea directly over the compose network, so it never depends on
+      # public DNS/TLS being up (and works before the first cert issues).
+      - GITEA_INSTANCE_URL=http://gitea:3000
+      # Only consumed on FIRST start, to register — see bootstrap-gitea.sh's
+      # register_runner(). Once /data/.runner exists on the volume below, the
+      # image's entrypoint skips registration and just runs the daemon; this
+      # can be left stale/empty on every later restart.
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_REGISTRATION_TOKEN:-}
+      - GITEA_RUNNER_NAME=${GITEA_RUNNER_NAME:-gitea-host}
+    volumes:
+      - /mnt/gitea-data/runner:/data
+      # Job containers run as SIBLINGS on the HOST's Docker daemon (socket
+      # bind-mount), not nested Docker-in-Docker — simpler and avoids running
+      # the runner itself as --privileged.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - gitea

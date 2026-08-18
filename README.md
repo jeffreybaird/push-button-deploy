@@ -347,17 +347,64 @@ simpler and no less secure to allow-list it once in `infra-app/firewall.tf`
 (`gitea_runner_cidr`, wired from `GITEA_RUNNER_IP`) than to reimplement a
 punch/revoke dance that exists to solve a problem the Gitea path doesn't have.
 
+### Bootstrapping your own Gitea
+
+`GIT_PROVIDER=gitea` needs an actual instance and a registered Actions runner
+to talk to. `bootstrap-gitea.sh` stands both up, reusing the same
+DigitalOcean/DNSimple/Spaces credentials `bootstrap.sh` already needs — one
+`.env` covers both scripts.
+
+```bash
+./bootstrap-gitea.sh --check   # verify prerequisites
+./bootstrap-gitea.sh           # provision + configure + start
+```
+
+What it does: provisions one dedicated droplet (`infra-gitea/` — its own
+Terraform root, applied directly rather than copied into an app repo, since
+there's exactly one Gitea instance, not one per app) running Gitea and its
+Actions runner **co-located** — simplest and cheapest, and it makes
+`GITEA_RUNNER_IP` just that droplet's own IP, allow-listed once. Gitea's data
+(SQLite DB, git repo objects, Actions logs) lives on a separate persistent
+block-storage volume, not the droplet's root disk, so a droplet recreation
+(resize, image bump) doesn't lose it — but that volume is **not itself
+replicated anywhere** (unlike an app's SQLite file, which Litestream streams
+continuously — a multi-file git repo store doesn't fit that model). Snapshot
+it yourself for a real backup story.
+
+It also creates the one-time admin account and API token
+(`GITEA_ADMIN_EMAIL` is the only new required env var — see the script's
+header for the full list of optional ones) and registers the runner. At the
+end it prints exactly what to add to `.env` for `./bootstrap.sh`:
+
+```
+GIT_PROVIDER=gitea
+GITEA_URL=https://git.example.com
+GITEA_TOKEN=...
+GITEA_RUNNER_IP=<droplet-ip>/32
+```
+
+Idempotent like `bootstrap.sh`: re-running detects what's already done (an
+existing admin user, an already-registered runner) rather than redoing it —
+important here specifically because Gitea only ever shows a token or the
+generated admin password **once**, at creation; the script caches both
+locally (`.gitea-admin-token`, `.gitea-admin-password`, gitignored) so a
+re-run doesn't need to mint new ones.
+
+`./teardown-gitea.sh` destroys it — droplet, firewall, reserved IP, DNS
+record, and **the data volume** (every repo, the Gitea DB, all of it). It
+does not touch any app deployed through the instance, or the state bucket.
+
 **Verify against your instance before relying on this in production.** Gitea's
 Actions API has evolved across releases, and this integration was written
-against its REST API and workflow-syntax documentation rather than a live
-instance in this environment — `scripts/provider.sh`'s `ci_run_row`/
-`ci_diagnose_dump` (Actions run-status parsing) and `ci_dispatch_deploy`
-(workflow dispatch) are flagged in-code as the parts most likely to need
-adjusting for your version. A reasonable
-verification pass: stand up a throwaway Gitea + `act_runner` (Docker images
-`gitea/gitea` and `gitea/act_runner`), confirm `GIT_PROVIDER=gitea
-./bootstrap.sh --check` passes, then run a full bootstrap against it starting
-with `FRAMEWORK=zola` (smallest surface — no database, no registry).
+against its REST/CLI documentation rather than a live instance —
+`scripts/provider.sh`'s `ci_run_row`/`ci_diagnose_dump` (Actions run-status
+parsing) and `ci_dispatch_deploy` (workflow dispatch), plus
+`bootstrap-gitea.sh`'s `ensure_admin_token`/`ensure_runner` (Gitea CLI output
+parsing), are flagged in-code as the parts most likely to need adjusting for
+your version. A reasonable first run: `./bootstrap-gitea.sh --check`, then a
+full run, then `GIT_PROVIDER=gitea FRAMEWORK=zola ./bootstrap.sh --check`
+against it (smallest surface — no database, no registry) before a full app
+bootstrap.
 
 **No PR staging environments yet.** The staging workflow ships as a template
 under `app/.github/workflows/` and has no `app/.gitea/workflows/` counterpart,
@@ -483,6 +530,11 @@ For manual Terraform runs, `cd` into the app and export the same env vars plus `
   (`zola`) sites push no image and use no repository.
 - Reserved IP: free while assigned
 - Plus your DNSimple subscription.
+- **If self-hosting Gitea** (`bootstrap-gitea.sh`, optional — GitHub is free
+  and needs none of this): droplet `s-2vcpu-4gb` ~$24 (bigger than an app
+  droplet — the runner does real CI compute here) + a 40GB data volume ~$4 +
+  its own reserved IP (free while assigned). No managed Postgres, no
+  container registry — Gitea uses SQLite and no image of its own is built.
 
 ## Troubleshooting
 

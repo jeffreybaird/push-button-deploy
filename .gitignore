@@ -11,7 +11,13 @@ crash.log
 backend.hcl
 
 infra-app/terraform.tfvars.bak
-infra-persistent/terraform.tfvars.bakbootstrap.log
+infra-persistent/terraform.tfvars.bak
+bootstrap.log
 teardown.log
 terraform.tfvars.bak
-bootstrap.log
+
+# bootstrap-gitea.sh's cached admin credentials (generated once; re-run reuses
+# them rather than regenerating — Gitea only shows a token/password at
+# creation time, so losing this file means creating a new one by hand).
+.gitea-admin-token
+.gitea-admin-password

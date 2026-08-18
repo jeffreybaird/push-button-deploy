@@ -1,0 +1,9 @@
+# Gitea's own edge proxy — one instance, one site, unlike the shared
+# multi-tenant Caddy the apps deploy onto (deploy/Caddyfile). Automatic HTTPS
+# triggers the same way: this needs the DNSimple A record already resolving
+# to this droplet's IP, which infra-gitea/dns.tf creates before the droplet
+# even exists (same ordering guarantee infra-persistent's DNS record gives
+# the app path).
+{$GITEA_DOMAIN} {
+	reverse_proxy gitea:3000
+}
