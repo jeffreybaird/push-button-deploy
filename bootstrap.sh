@@ -711,11 +711,57 @@ ensure_registry_unless_static() {
   ensure_registry
 }
 
+# A DO registry caps how many REPOSITORIES it may hold, by subscription tier
+# (starter 1, basic 5, professional unlimited). One app = one repository, so an
+# account at its cap cannot take a new app — and nothing says so until the CI
+# build tries to push, six minutes and a whole droplet later, failing with an
+# opaque `denied: registry contains 5 repositories, limit is 5` buried in the
+# Actions log. The quota is knowable here, so check it here.
+#
+# Tolerant by design: an API hiccup, an unparseable body or an empty listing
+# must not block a bootstrap that would otherwise work. Only a definite
+# over-cap answer fails.
+check_registry_quota() {
+  local limit used
+  limit="$(curl -fsS -H "Authorization: Bearer $DIGITALOCEAN_ACCESS_TOKEN" \
+             https://api.digitalocean.com/v2/registry/subscription 2>/dev/null \
+           | sed -n 's/.*"included_repositories":[[:space:]]*\([0-9]*\).*/\1/p')"
+  # No answer, or 0 — which the API uses for "unlimited" on the professional
+  # tier, not for "no repositories allowed".
+  [ -n "$limit" ] && [ "$limit" -gt 0 ] 2>/dev/null || return 0
+
+  # `list-v2` honours neither --format nor --no-header, so the name column is
+  # cut by hand and the header row dropped — counting it would report one
+  # repository more than exist, and comparing against a whole row would never
+  # match this app's name.
+  local repos
+  repos="$(doctl registry repository list-v2 2>/dev/null | awk 'NR>1 {print $1}')" || return 0
+  # This app's own repository already exists: redeploying it takes no new slot,
+  # so a registry that is exactly full is still fine. The repository is named
+  # after .app-name (APP_NAME), which is what the build job pushes to.
+  printf '%s\n' "$repos" | grep -qx "$APP_NAME" && return 0
+
+  used="$(printf '%s\n' "$repos" | grep -c . || true)"
+  [ "$used" -ge "$limit" ] || return 0
+
+  fail "container registry '$REG' is full: $used of $limit repositories on this tier, and '$APP_NAME' would be one more.
+      The CI build would fail with 'denied: registry contains $used repositories, limit is $limit'.
+      Free a slot (delete EVERY manifest of a repository — deleting only its tags leaves the
+      repository, and the slot, in place):
+        doctl registry repository list-v2
+        doctl registry repository list-manifests <repo>
+        doctl registry repository delete-manifest <repo> <digest>...
+      Deletes are rejected while a garbage collection is running; check with
+      'doctl registry garbage-collection get-active'. Or raise the cap:
+        doctl registry options subscription-tiers"
+}
+
 # Ensure a DO Container Registry exists; capture its name.
 ensure_registry() {
   if doctl registry get --format Name --no-header >/dev/null 2>&1; then
     REG="$(doctl registry get --format Name --no-header)"
     log "registry: using existing '$REG'"
+    check_registry_quota
   else
     REG="${DOCR_REGISTRY:-$PROJECT_NAME}"
     log "registry: creating '$REG' (starter tier)"
