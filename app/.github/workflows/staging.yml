@@ -1,0 +1,520 @@
+# Pull-request staging environment. Copied into the app repo by the bootstrap.
+#
+# Opening a PR against main stands a complete second copy of the app up on the
+# SAME droplet, serving on <app>-stg.<zone>; closing the PR destroys it. Pushing
+# to an open PR redeploys it. Jobs: test (gate) -> build+push -> deploy, and a
+# separate destroy job on `closed`.
+#
+# The staging environment is a normal app stack in every respect the droplet can
+# see: its own compose project (<slug>-stg), its own volumes, its own container
+# names, its own site file in the shared Caddy. That is the same isolation two
+# different apps on one droplet get, so a PR cannot reach production's data,
+# containers or route.
+#
+# ONE ENVIRONMENT PER APP, not one per PR: there is a single staging name, so
+# there is a single slot. The most recent PR to deploy holds it, recorded in
+# .staging-owner on the droplet. A second PR takes the slot over — destroying the
+# first PR's environment as it does — and closing a PR only tears the
+# environment down if that PR still owns it.
+#
+# Required repo config (seeded by bootstrap):
+#   var    STAGING_DOMAIN             - <app>-stg.<zone>; ABSENT DISABLES THIS
+#                                       WORKFLOW ENTIRELY (every job is gated on
+#                                       it), which is how an app whose infra/
+#                                       predates staging stays untouched
+#   secret STAGING_DATABASE_URL       - Postgres backend only: a separate database
+#                                       ON THE APP'S EXISTING CLUSTER, not a new
+#                                       instance
+#   plus the same DIGITALOCEAN_ACCESS_TOKEN / SSH_PRIVATE_KEY / DOCR_REGISTRY /
+#   FIREWALL_ID / DROPLET_HOST / APP_SLUG the production deploy uses
+#
+# There is NO staging secret to maintain: the environment's signing key is
+# derived from SECRET_KEY_BASE inside the deploy job (one-way, fixed label), so
+# it differs from production's without anyone setting a second secret per app or
+# per pull request.
+name: staging
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, closed]
+
+# One staging operation at a time for the whole repo — deploys and teardowns
+# alike. The slot is a single directory on a single droplet, so two PRs racing
+# to claim it must be serialized rather than merged. Queue rather than cancel:
+# an interrupted teardown leaks an environment, and an interrupted deploy can
+# leave migrations half-applied.
+concurrency:
+  group: staging-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # The deploy comments the environment's URL on the PR.
+  pull-requests: write
+
+env:
+  REGISTRY: registry.digitalocean.com
+  # The PR number is the staging slot's owner, and part of every staging image
+  # tag — the teardown finds both by it.
+  PR: ${{ github.event.pull_request.number }}
+
+jobs:
+  # Red tests block the staging deploy exactly as they block production's.
+  test:
+    # Three gates, all of them load-bearing:
+    #   * `closed` runs the destroy job instead
+    #   * no STAGING_DOMAIN means this app has no staging environment wired
+    #   * a PR from a FORK gets no secrets from GitHub, and must not: this
+    #     workflow holds the droplet's SSH key and the DO API token, and would
+    #     hand both to code nobody has reviewed. Such PRs are skipped, not failed.
+    if: >-
+      github.event.action != 'closed'
+      && vars.STAGING_DOMAIN != ''
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same source of truth as the production pipeline: the Dockerfile's ARGs.
+      - name: Parse Elixir/OTP pins from Dockerfile
+        id: vers
+        run: |
+          elixir=$(grep -E '^ARG ELIXIR_VERSION=' Dockerfile | head -1 | cut -d= -f2)
+          otp=$(grep -E '^ARG OTP_VERSION=' Dockerfile | head -1 | cut -d= -f2)
+          if [ -z "$elixir" ] || [ -z "$otp" ]; then
+            echo "::error::could not parse ELIXIR_VERSION/OTP_VERSION ARGs from Dockerfile"; exit 1
+          fi
+          echo "elixir=$elixir" >> "$GITHUB_OUTPUT"
+          echo "otp=$otp" >> "$GITHUB_OUTPUT"
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ steps.vers.outputs.elixir }}
+          otp-version: ${{ steps.vers.outputs.otp }}
+
+      - name: Cache deps and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-${{ runner.os }}-${{ steps.vers.outputs.elixir }}-${{ steps.vers.outputs.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-test-${{ runner.os }}-${{ steps.vers.outputs.elixir }}-${{ steps.vers.outputs.otp }}-
+
+      - name: Run tests
+        run: |
+          mix deps.get
+          mix test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest # native amd64
+    outputs:
+      app_name: ${{ steps.meta.outputs.app_name }}
+      module: ${{ steps.meta.outputs.module }}
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Parse app name from mix.exs
+        id: meta
+        run: |
+          app_name=$(grep -Eo 'app:[[:space:]]*:[a-z][a-z0-9_]*' mix.exs | head -1 | sed -E 's/.*:([a-z0-9_]+)$/\1/')
+          if [ -z "$app_name" ]; then echo "::error::could not parse app name from mix.exs"; exit 1; fi
+          module=$(grep -Eo 'defmodule[[:space:]]+[A-Za-z0-9_.]+\.MixProject' mix.exs | head -1 | sed -E 's/defmodule[[:space:]]+([A-Za-z0-9_.]+)\.MixProject/\1/')
+          if [ -z "$module" ]; then echo "::error::could not parse base module from mix.exs"; exit 1; fi
+          echo "app_name=$app_name" >> "$GITHUB_OUTPUT"
+          echo "module=$module" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${{ vars.DOCR_REGISTRY }}/${app_name}" >> "$GITHUB_OUTPUT"
+          # Staging images share the app's registry repository (the free tier
+          # allows exactly one) and are told apart by tag. The tag names the PR
+          # AND pins the commit: the PR part is what the teardown deletes, the
+          # SHA part is what keeps the deploy immutable. It is the PR's HEAD sha
+          # rather than github.sha, which for a pull_request event is the
+          # ephemeral merge commit and means nothing once the PR closes.
+          echo "tag=pr-${PR}-${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DO Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # No :latest here — that tag is production's, and a staging build must
+      # never become what an unpinned pull resolves to.
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            APP_NAME=${{ steps.meta.outputs.app_name }}
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Stand the environment up on the droplet. Mirrors the production deploy step
+  # for step, against the staging slug, the staging domain and staging data.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ needs.build.outputs.image }}:${{ needs.build.outputs.tag }}
+      HOST: ${{ vars.DROPLET_HOST }}
+      DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      APP_SLUG: ${{ vars.APP_SLUG }}-stg
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}-stg
+      DOMAIN: ${{ vars.STAGING_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Authorize runner IP for SSH
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          echo "RUNNER_IP=$runner_ip" >> "$GITHUB_ENV"
+          doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Staging must not sign with production's key — a cookie forged in (or leaked
+      # out of) a PR environment would otherwise be valid against production. It
+      # must also not need anyone to set a secret per app or per PR, so it is
+      # DERIVED rather than stored: a one-way sha512 of the production secret
+      # under a fixed label. Same value on every deploy (staging sessions survive
+      # a redeploy), never equal to production's, and impossible to work
+      # backwards from. Rotating SECRET_KEY_BASE rotates this with it.
+      - name: Derive the staging signing secret
+        env:
+          PROD_SECRET: ${{ secrets.SECRET_KEY_BASE }}
+        run: |
+          if [ -z "$PROD_SECRET" ]; then
+            echo "::error::SECRET_KEY_BASE is not set on this repo — re-run the bootstrap"; exit 1
+          fi
+          s=$(printf 'push-button-deploy/staging|%s' "$PROD_SECRET" | sha512sum | cut -d' ' -f1)
+          # 128 hex chars. Masked so it can never surface in a log line.
+          echo "::add-mask::$s"
+          echo "STAGING_SECRET_KEY_BASE=$s" >> "$GITHUB_ENV"
+
+      # Staging's .env is production's with three deliberate differences: the
+      # staging domain, the staging slug, and the derived signing secret above.
+      - name: Write .env (Postgres)
+        if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
+        run: |
+          umask 077
+          cat > .env <<EOF
+          IMAGE=${IMAGE}
+          DOMAIN=${DOMAIN}
+          APP_SLUG=${APP_SLUG}
+          DATABASE_URL=${{ secrets.STAGING_DATABASE_URL }}
+          SECRET_KEY_BASE=${STAGING_SECRET_KEY_BASE}
+          EOF
+          if ! grep -q '^DATABASE_URL=ecto://' .env; then
+            echo "::error::STAGING_DATABASE_URL is not set. Re-run the bootstrap against this app — it creates the staging database on the existing cluster and seeds this secret."
+            exit 1
+          fi
+
+      # No Spaces keypair and no BACKUP_* target: the staging litestream.yml
+      # replicates into the environment's own volume, and the archive loop is
+      # switched off by compose.override.yaml. A PR environment cannot write
+      # anywhere near production's backups because it holds no credentials for
+      # them.
+      - name: Write .env (SQLite)
+        if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
+        run: |
+          umask 077
+          cat > .env <<EOF
+          IMAGE=${IMAGE}
+          DOMAIN=${DOMAIN}
+          APP_SLUG=${APP_SLUG}
+          SECRET_KEY_BASE=${STAGING_SECRET_KEY_BASE}
+          DATABASE_PATH=${{ vars.DATABASE_PATH }}
+          EOF
+
+      - name: Write db-ca.pem
+        if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
+        run: |
+          printf '%s\n' "${{ secrets.DATABASE_CA_CERT }}" > db-ca.pem
+          chmod 644 db-ca.pem
+
+      # The production deploy REPLACES the shared edge files on every run; a
+      # staging deploy must not, and this is the one place the two differ on
+      # purpose. Those files configure the proxy EVERY app on the droplet sits
+      # behind, and edge.sh reloads it — so a PR that breaks the Caddyfile, by
+      # malice or by typo, would take production down with it. Install them only
+      # where they are missing (a droplet no production deploy has reached yet)
+      # and otherwise use what production put there.
+      #
+      # staging-down.sh is the exception: nothing else ships it, and it can only
+      # ever touch /root/apps/<slug>-stg — it refuses any slug not ending in -stg.
+      # It must land BEFORE the slot is claimed, since claiming may mean running it.
+      - name: Install shared edge files if the droplet has none
+        run: |
+          ssh_do() { ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" "$@"; }
+          ssh_do "mkdir -p /root/caddy/sites /root/apps /root/caddy/.incoming"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/edge-compose.yaml deploy/Caddyfile deploy/edge.sh \
+            root@"$HOST":/root/caddy/.incoming/
+          ssh_do "
+            set -e
+            cd /root/caddy/.incoming
+            [ -e /root/caddy/compose.yaml ] || mv edge-compose.yaml /root/caddy/compose.yaml
+            [ -e /root/caddy/Caddyfile ]    || mv Caddyfile        /root/caddy/Caddyfile
+            [ -e /root/caddy/edge.sh ]      || mv edge.sh          /root/caddy/edge.sh
+            rm -rf /root/caddy/.incoming
+          "
+          # Staging-owned files, always refreshed because nothing else ships them
+          # and they are named for this environment alone:
+          #   staging-down.sh          — refuses any slug not ending in -stg
+          #   site.<slug>-stg.tmpl     — the DYNAMIC site template, under a name no
+          #                              other app writes. The shared
+          #                              site.caddy.tmpl cannot be used here: on a
+          #                              droplet whose last production deploy was a
+          #                              static site it holds the STATIC template,
+          #                              and rendering staging from that would serve
+          #                              files off a directory that does not exist.
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/staging-down.sh root@"$HOST":/root/caddy/staging-down.sh
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/site.caddy.tmpl root@"$HOST":/root/caddy/"site.${APP_SLUG}.tmpl"
+
+      # Who owns the single staging slot. Three cases:
+      #   this PR      -> update the environment in place, keep its data
+      #   another PR   -> destroy that environment first, then build ours
+      #   nobody       -> build ours
+      # The marker is written before anything else is copied, so a deploy that
+      # dies halfway still leaves the slot attributed to this PR — and therefore
+      # still tearable-down by closing it.
+      - name: Claim the staging slot for this pull request
+        run: |
+          ssh_do() { ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" "$@"; }
+          owner=$(ssh_do "cat '$STACK_DIR/.staging-owner' 2>/dev/null || true" | tr -d '[:space:]')
+          if [ "$owner" = "$PR" ]; then
+            echo "staging slot already held by PR #$PR — updating it in place"
+            echo "STAGING_FRESH=0" >> "$GITHUB_ENV"
+          else
+            if [ -n "$owner" ]; then
+              echo "::notice::staging is currently PR #${owner}'s environment — taking the slot over and destroying it"
+              echo "PREVIOUS_PR=$owner" >> "$GITHUB_ENV"
+              ssh_do "APP_SLUG='$APP_SLUG' bash /root/caddy/staging-down.sh"
+            fi
+            echo "STAGING_FRESH=1" >> "$GITHUB_ENV"
+          fi
+          ssh_do "mkdir -p '$STACK_DIR' && printf '%s\n' '$PR' > '$STACK_DIR/.staging-owner'"
+
+      - name: Copy stack files + .env to droplet (Postgres)
+        if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/compose.yaml deploy/swap.sh db-ca.pem .env \
+            root@"$HOST":"$STACK_DIR"/
+
+      # compose.staging.yaml lands as compose.override.yaml, which Docker Compose
+      # merges automatically — that is how swap.sh and the migration runner get
+      # the staging behaviour without knowing staging exists. litestream.staging.yml
+      # lands under the name the compose file mounts.
+      - name: Copy stack files + .env to droplet (SQLite)
+        if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/compose.yaml deploy/swap.sh .env \
+            root@"$HOST":"$STACK_DIR"/
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/litestream.staging.yml root@"$HOST":"$STACK_DIR"/litestream.yml
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/compose.staging.yaml root@"$HOST":"$STACK_DIR"/compose.override.yaml
+
+      # Same shared Caddy, one more site file. The staging name resolves to this
+      # droplet already (Terraform created the record), so the certificate issues
+      # on the first request and persists in the shared caddy_data volume — the
+      # next PR to claim the slot reuses it instead of asking Let's Encrypt again.
+      - name: Prepare shared edge (network, Caddy, route)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "APP_SLUG='$APP_SLUG' DOMAIN='$DOMAIN' SITE_TMPL='site.${APP_SLUG}.tmpl' bash /root/caddy/edge.sh"
+
+      - name: Registry login + pull new image
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
+             && cd '$STACK_DIR' && docker compose pull"
+
+      # Against the STAGING database (Postgres) or the environment's own SQLite
+      # volume — never production's. A failed migration fails the job and leaves
+      # whatever was serving in place, exactly as in production.
+      - name: Run migrations (gate before traffic)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "cd '$STACK_DIR' && docker compose run --rm migrate bin/${{ needs.build.outputs.app_name }} eval '${{ needs.build.outputs.module }}.Release.migrate()'"
+
+      - name: Swap to new release
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "bash '$STACK_DIR'/swap.sh"
+
+      # One staging image per PR: the tag just deployed stays, every older tag
+      # for this PR goes. Best-effort — a registry hiccup must not fail a deploy
+      # that already succeeded. (Deleting tags frees the manifest, not the layers;
+      # run `doctl registry garbage-collection start` when the tier's storage
+      # limit gets close.)
+      - name: Prune superseded staging images for this PR
+        if: success()
+        continue-on-error: true
+        run: |
+          keep="${{ needs.build.outputs.tag }}"
+          repo="${{ needs.build.outputs.app_name }}"
+          # `|| true` because the runner's shell has pipefail on and a grep that
+          # matches nothing (the first deploy of a PR) exits 1.
+          tags=$(doctl registry repository list-tags "$repo" --format Tag --no-header 2>/dev/null \
+                   | grep -E "^pr-${PR}-" || true)
+          for t in $tags; do
+            [ "$t" = "$keep" ] && continue
+            echo "registry: deleting superseded staging tag $t"
+            doctl registry repository delete-tag "$repo" "$t" --force || true
+          done
+
+      - name: Report the environment
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha='${{ github.event.pull_request.head.sha }}'
+          {
+            printf '### Staging environment\n\n'
+            printf '**https://%s** — PR #%s @ `%s`\n' "$DOMAIN" "$PR" "$sha"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Comment only when the environment is NEW to this PR. Every later push
+          # redeploys the same URL, and a comment per push is noise.
+          [ "${STAGING_FRESH:-0}" = "1" ] || exit 0
+          {
+            printf 'Staging environment is live: **https://%s**\n\n' "$DOMAIN"
+            printf 'Deployed from `%s`. Every push to this PR redeploys it; closing the PR destroys it.\n' "$sha"
+            if [ -n "${PREVIOUS_PR:-}" ]; then
+              printf '\nIt took the staging slot over from #%s (there is one staging environment per app), whose environment and data were destroyed.\n' "$PREVIOUS_PR"
+            fi
+          } > /tmp/staging-comment.md
+          gh pr comment "$PR" --body-file /tmp/staging-comment.md || echo "::warning::could not comment on the PR"
+
+      - name: Revoke runner IP
+        if: always() && env.RUNNER_IP != ''
+        run: |
+          doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${RUNNER_IP}/32"
+
+  # Closing the PR — merged or not — destroys the environment it stood up.
+  destroy:
+    if: >-
+      github.event.action == 'closed'
+      && vars.STAGING_DOMAIN != ''
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.DROPLET_HOST }}
+      APP_SLUG: ${{ vars.APP_SLUG }}-stg
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}-stg
+    steps:
+      # The PR's own ref is gone by now (GitHub deletes refs/pull/N/merge when a
+      # PR closes), and running a closed PR's version of the teardown script
+      # would be the wrong code anyway. Take the base branch's.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Authorize runner IP for SSH
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          echo "RUNNER_IP=$runner_ip" >> "$GITHUB_ENV"
+          doctl compute firewall add-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Only if this PR still owns the slot. Another PR may have taken it over
+      # while this one sat open — tearing down then would destroy THEIR
+      # environment, and the takeover already destroyed ours.
+      - name: Destroy the staging environment
+        run: |
+          ssh_do() { ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" "$@"; }
+          owner=$(ssh_do "cat '$STACK_DIR/.staging-owner' 2>/dev/null || true" | tr -d '[:space:]')
+          if [ -z "$owner" ]; then
+            echo "no staging environment on the droplet — nothing to destroy"
+            exit 0
+          fi
+          if [ "$owner" != "$PR" ]; then
+            echo "::notice::staging now belongs to PR #${owner} — leaving it alone"
+            exit 0
+          fi
+          # Refresh the script from the base branch when it is there; fall back
+          # to the copy the deploy left on the droplet, so a repo whose base
+          # predates staging-down.sh can still tear its environment down.
+          if [ -f deploy/staging-down.sh ]; then
+            scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+              deploy/staging-down.sh root@"$HOST":/root/caddy/staging-down.sh
+          else
+            echo "deploy/staging-down.sh not in the base branch — using the copy on the droplet"
+          fi
+          ssh_do "APP_SLUG='$APP_SLUG' bash /root/caddy/staging-down.sh"
+          echo "DESTROYED=1" >> "$GITHUB_ENV"
+          printf 'Staging environment for PR #%s destroyed.\n' "$PR" >> "$GITHUB_STEP_SUMMARY"
+
+      # The images this PR pushed have nothing left to run them.
+      - name: Delete this PR's staging images
+        if: always() && env.DESTROYED == '1'
+        continue-on-error: true
+        run: |
+          app_name=$(grep -Eo 'app:[[:space:]]*:[a-z][a-z0-9_]*' mix.exs | head -1 | sed -E 's/.*:([a-z0-9_]+)$/\1/')
+          [ -n "$app_name" ] || exit 0
+          tags=$(doctl registry repository list-tags "$app_name" --format Tag --no-header 2>/dev/null \
+                   | grep -E "^pr-${PR}-" || true)
+          for t in $tags; do
+            echo "registry: deleting staging tag $t"
+            doctl registry repository delete-tag "$app_name" "$t" --force || true
+          done
+
+      - name: Revoke runner IP
+        if: always() && env.RUNNER_IP != ''
+        run: |
+          doctl compute firewall remove-rules ${{ vars.FIREWALL_ID }} \
+            --inbound-rules "protocol:tcp,ports:22,address:${RUNNER_IP}/32"

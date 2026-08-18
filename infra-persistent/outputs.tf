@@ -47,6 +47,13 @@ output "domain" {
   value       = local.fqdn
 }
 
+# Empty when staging is off (or the app is a static site) — bootstrap reads that
+# as "this project has no staging environment" and wires none.
+output "staging_domain" {
+  description = "Fully-qualified domain the PR staging environment serves on, or \"\" when staging is disabled."
+  value       = local.staging_count > 0 ? local.staging_fqdn : ""
+}
+
 output "region" {
   description = "Region slug — infra-app pins the droplet to the same region as the reserved IP."
   value       = var.region
@@ -66,6 +73,22 @@ output "project_name" {
 # the app user no CREATE on schema public (doadmin owns it via the DO API), so
 # bootstrap runs a one-time GRANT through the droplet — the only host the DB
 # firewall trusts.
+# Same cluster, same user, same CA — only the database name differs. This is what
+# the staging deploy writes into the PR environment's .env, so a PR's migrations
+# can never touch the production database.
+output "database_staging_url" {
+  description = "Ecto connection URL for the STAGING database over the private VPC host. Empty on SQLite, or when staging is disabled."
+  value = try(format(
+    "ecto://%s:%s@%s:%d/%s",
+    digitalocean_database_user.app[0].name,
+    urlencode(digitalocean_database_user.app[0].password),
+    digitalocean_database_cluster.pg[0].private_host,
+    digitalocean_database_cluster.pg[0].port,
+    digitalocean_database_db.staging[0].name,
+  ), "")
+  sensitive = true
+}
+
 output "database_admin_url" {
   description = "doadmin connection URL for the app DB (private host). Used to grant schema privileges. Empty on the SQLite backend."
   value = try(format(
@@ -75,6 +98,23 @@ output "database_admin_url" {
     digitalocean_database_cluster.pg[0].private_host,
     digitalocean_database_cluster.pg[0].port,
     digitalocean_database_db.app[0].name,
+  ), "")
+  sensitive = true
+}
+
+# The same one-time GRANT the app database needs, for the staging database:
+# PG15+ gives the app user no CREATE on schema public of a database doadmin owns,
+# so without this the staging environment's first migration dies on
+# insufficient_privilege.
+output "database_staging_admin_url" {
+  description = "doadmin connection URL for the STAGING database (private host). Used to grant schema privileges. Empty on SQLite, or when staging is disabled."
+  value = try(format(
+    "postgresql://%s:%s@%s:%d/%s?sslmode=require",
+    digitalocean_database_cluster.pg[0].user,
+    urlencode(digitalocean_database_cluster.pg[0].password),
+    digitalocean_database_cluster.pg[0].private_host,
+    digitalocean_database_cluster.pg[0].port,
+    digitalocean_database_db.staging[0].name,
   ), "")
   sensitive = true
 }

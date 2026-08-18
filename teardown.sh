@@ -190,6 +190,7 @@ if [ "$TENANT" = 1 ]; then
     printf '  - /root/apps/%s on the droplet, INCLUDING ITS SQLITE VOLUME (all data)\n' "$SLUG"
   fi
   printf '  - its route from the shared Caddy (/root/caddy/sites/%s.caddy)\n' "$SLUG"
+  printf '  - its PR staging environment, if one is up (/root/apps/%s-stg + its route)\n' "$SLUG"
   if [ -n "$APP_NAME" ] && [ "$STATIC" != 1 ]; then printf '  - registry repository %s\n' "$APP_NAME"; fi
   if [ "$DELETE_REPO" = 1 ]; then printf '  - GitHub repository (--delete-repo)\n'; fi
   printf '  NOT touched: the droplet, its other apps, the reserved IP, the state bucket.\n'
@@ -213,10 +214,14 @@ if [ "$TENANT" = 1 ]; then
         # A static site has no compose file; the -f guard keeps this from
         # erroring out before the rm below gets to run.
         if [ -f /root/apps/$SLUG/compose.yaml ]; then cd /root/apps/$SLUG && docker compose down -v --remove-orphans || true; fi
+        # The PR staging environment, if a pull request left one running. Same
+        # treatment: its own compose project, so -v reaches only its volumes.
+        if [ -f /root/apps/$SLUG-stg/compose.yaml ]; then cd /root/apps/$SLUG-stg && docker compose down -v --remove-orphans || true; fi
         rm -rf /root/apps/$SLUG /root/caddy/sites/$SLUG.caddy
+        rm -rf /root/apps/$SLUG-stg /root/caddy/sites/$SLUG-stg.caddy
         # Drop this app's route without disturbing the other apps' traffic.
         cd /root/caddy && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-      " || log "WARNING: could not clean the droplet (unreachable?) — remove /root/apps/$SLUG and /root/caddy/sites/$SLUG.caddy by hand"
+      " || log "WARNING: could not clean the droplet (unreachable?) — remove /root/apps/$SLUG, /root/apps/$SLUG-stg and their /root/caddy/sites/*.caddy files by hand"
   else
     log "WARNING: no host IP in state — skipping droplet cleanup; remove /root/apps/$SLUG by hand"
   fi
@@ -273,7 +278,7 @@ export TF_VAR_bucket_name="$STATE_BUCKET"
 log "TEARDOWN of project '$PROJECT_NAME':"
 printf '  - droplet + firewall + reserved-IP assignment\n'
 printf '  - DATABASE CLUSTER %s-pg AND ALL ITS DATA\n' "$PROJECT_NAME"
-printf '  - VPC, reserved IP, tag, DNS record\n'
+printf '  - VPC, reserved IP, tag, DNS records (the app'\''s and its staging name'\''s)\n'
 if [ -n "$APP_NAME" ]; then printf '  - registry repository %s\n' "$APP_NAME"; fi
 printf '  - state bucket %s\n' "$STATE_BUCKET"
 if [ "$DELETE_REPO" = 1 ]; then printf '  - GitHub repository (--delete-repo)\n'; fi

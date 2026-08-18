@@ -41,6 +41,36 @@ git push main
 
 ---
 
+## Staging: the same pipeline, run by a pull request
+
+```
+PR opened / pushed  ─> .github/workflows/staging.yml
+                         test -> build (pr-<n>-<sha>) -> migrate -> swap
+                         live at STAGING_DOMAIN  (<app>-stg.<zone>)
+PR closed / merged  ─> deploy/staging-down.sh over SSH: stack, volumes and route gone
+```
+
+On the droplet the environment is just another app: compose project `<slug>-stg`
+in `/root/apps/<slug>-stg`, its own containers, its own `app_data` volume, its own
+site file in the shared Caddy. It cannot reach production's data because it does
+not share a volume with it, and it cannot reach production's *backups* because
+`litestream.staging.yml` replicates into its own volume rather than Spaces and
+`compose.override.yaml` switches the archive loop off — its `.env` carries no
+Spaces keypair at all. It signs sessions with a key derived from
+`SECRET_KEY_BASE` in the deploy job (one-way sha512, fixed label) — different
+from production's, and nothing anyone has to set per app or per PR.
+
+There is **one staging slot per app**, held by the most recent PR to deploy
+(`.staging-owner` on the droplet); a second PR takes it over and says so in a
+comment. Fork PRs are skipped — GitHub withholds secrets from them, and this
+workflow holds the droplet's SSH key.
+
+Changing `deploy.yml` usually means changing `staging.yml` the same way (a new
+secret in `.env`, a new file scp'd to the stack directory, a new release step) —
+otherwise staging quietly stops matching what production runs.
+
+---
+
 ## The image (`Dockerfile`)
 
 Multi-stage: a builder installs gems (with the sqlite3 native extension), a slim runtime
@@ -126,7 +156,8 @@ hand with `gh secret set`).
 Push to `main`; the pipeline does the rest.
 
 **You (almost) never touch:** `Dockerfile`, `deploy/*.yaml`, `deploy/Caddyfile`,
-`deploy/site.caddy.tmpl`, `deploy/edge.sh`, `.github/workflows/*.yml`, `deploy/litestream.yml`. These are managed by the push-button-deploy
+`deploy/site.caddy.tmpl`, `deploy/edge.sh`, `deploy/staging-down.sh`,
+`.github/workflows/*.yml`, `deploy/litestream.yml`, `deploy/litestream.staging.yml`. These are managed by the push-button-deploy
 tooling. If you change one, understand the blue/green + migration-gate contract first — a broken
 healthcheck or a non-additive migration takes the swap down.
 

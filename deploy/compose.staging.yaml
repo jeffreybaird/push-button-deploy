@@ -1,0 +1,36 @@
+# Staging overlay for the SQLITE stacks (compose.sqlite.yaml / compose.sinatra.yaml).
+# Shipped to the droplet as /root/apps/<slug>-stg/compose.override.yaml, which
+# Docker Compose merges on top of compose.yaml automatically — so swap.sh, the
+# migration runner and `docker compose pull` all pick it up with no flags and no
+# staging-specific branches anywhere else.
+#
+# It exists to keep a pull-request environment away from PRODUCTION BACKUPS.
+# Everything else about the stack is deliberately identical to production: the
+# same image, the same blue/green swap, the same healthcheck gate.
+#
+# The other half of that isolation is litestream.staging.yml, copied into the
+# staging directory as litestream.yml: it replicates to a path inside the app's
+# own volume instead of to Spaces, so `litestream replicate` and the boot-time
+# `litestream restore` behave exactly as they do in production while reaching
+# nothing outside this environment. Between the two, a staging deploy needs no
+# Spaces credentials at all — none are written into its .env.
+#
+# NOT used on the Postgres backend: that stack has no litestream/backup services
+# to neutralize (its staging environment is isolated by a separate database in
+# the same cluster), and an override naming a service the base file lacks would
+# define a new, imageless one.
+services:
+  # The periodic archive uploads a VACUUMed copy of the database to Spaces under
+  # archive/<db-name>/, a prefix keyed on the FILE name — which staging shares
+  # with production. Left running it would interleave scratch snapshots with the
+  # real ones, in the one place you look when you need a backup you can trust.
+  #
+  # Replaced rather than removed: the service stays present (swap.sh asserts that
+  # every service compose defines actually has a container) and stays up, so an
+  # operator looking at `docker compose ps` sees why it is idle.
+  backup:
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "backup: disabled — this is a staging environment, its data is scratch"
+        while :; do sleep 3600; done

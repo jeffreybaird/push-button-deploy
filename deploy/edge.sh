@@ -3,7 +3,15 @@
 # edge.sh — make the droplet ready to host THIS app alongside any others.
 # Run by the deploy/rollback workflows over SSH, before the app stack starts:
 #
-#   APP_SLUG=<slug> DOMAIN=<fqdn> bash /root/caddy/edge.sh
+#   APP_SLUG=<slug> DOMAIN=<fqdn> [SITE_TMPL=<file>] bash /root/caddy/edge.sh
+#
+# SITE_TMPL names the template the site file is rendered from, relative to this
+# directory. It defaults to site.caddy.tmpl — the shared one each production
+# deploy ships, which is the DYNAMIC template for an app and the STATIC one for a
+# site, whichever deployed last. That is fine for a production deploy, which
+# writes the file and renders from it in the same breath, but not for a caller
+# that must not touch shared state: a PR staging deploy ships its own template
+# under its own name and points this at it.
 #
 # It owns everything shared between apps on the host:
 #
@@ -105,8 +113,10 @@ mkdir -p sites
 # This app's site file. Written every deploy so a domain change lands, and
 # compared first so an unchanged deploy doesn't churn the config.
 site="sites/${APP_SLUG}.caddy"
+tmpl="${SITE_TMPL:-site.caddy.tmpl}"
+[ -f "$tmpl" ] || fail "no site template at /root/caddy/$tmpl — a deploy must ship one before it can be routed"
 tmp="$(mktemp)"
-sed -e "s|__DOMAIN__|${DOMAIN}|g" -e "s|__SLUG__|${APP_SLUG}|g" site.caddy.tmpl > "$tmp"
+sed -e "s|__DOMAIN__|${DOMAIN}|g" -e "s|__SLUG__|${APP_SLUG}|g" "$tmpl" > "$tmp"
 if ! cmp -s "$tmp" "$site"; then
   mv "$tmp" "$site"
   log "wrote $site ($DOMAIN -> ${APP_SLUG}-blue/green:4000)"

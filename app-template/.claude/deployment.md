@@ -478,6 +478,37 @@ Required repo config (seeded by the bootstrap):
   `DATABASE_URL`/`DATABASE_CA_CERT`
 - variables: `DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`
 
+### Staging: the same pipeline, run by a pull request
+
+`.github/workflows/staging.yml` mirrors `deploy.yml` for pull requests against
+`main`: **PR opened or pushed** → test → build (`pr-<n>-<sha>`) → migrate → swap,
+serving at `STAGING_DOMAIN` (`<app>-stg.<zone>`); **PR closed** → the environment
+is destroyed by `deploy/staging-down.sh` over SSH.
+
+On the droplet the environment is just another app: compose project
+`<slug>-stg` in `/root/apps/<slug>-stg`, its own volumes and containers, its own
+site file in the shared Caddy. What keeps it away from production's data:
+
+- **Postgres** — `STAGING_DATABASE_URL` names a *separate database on the same
+  managed cluster* (no second instance). It is not reset per PR, so migrations
+  accumulate in it.
+- **SQLite** — its own `app_data` volume, plus `litestream.staging.yml`
+  (replicates into that volume, not Spaces) and `compose.override.yaml` (the
+  archive loop is switched off). The staging `.env` carries **no Spaces keypair**.
+- **A signing key derived from `SECRET_KEY_BASE`** in the deploy job (one-way
+  sha512, fixed label) — different from production's, so a session forged in a
+  PR environment is not valid against it, and there is no second secret for
+  anyone to set or rotate.
+
+There is **one staging slot per app**, held by the most recent PR to deploy
+(`.staging-owner` on the droplet). Fork PRs are skipped — GitHub withholds
+secrets from them, and this workflow holds the droplet's SSH key.
+
+When you change `deploy.yml`, ask whether `staging.yml` needs the same change: a
+new secret in `.env`, a new file scp'd to the stack directory, or a new step in
+the release sequence has to be mirrored, or staging silently stops matching what
+production runs — which is the whole point of having it.
+
 ### Rules
 
 - The `build` job declares `needs: test` and `deploy` declares `needs: build` —

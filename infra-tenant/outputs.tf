@@ -3,6 +3,12 @@ output "domain" {
   value       = local.fqdn
 }
 
+# Empty when staging is off — bootstrap reads that as "no staging environment".
+output "staging_domain" {
+  description = "Fully-qualified domain this tenant's PR staging environment serves on, or \"\" when staging is disabled."
+  value       = local.staging_count > 0 ? local.staging_fqdn : ""
+}
+
 output "host_ip" {
   description = "Public IP of the droplet this app is a tenant of (the host's reserved IP)."
   value       = local.host_ip

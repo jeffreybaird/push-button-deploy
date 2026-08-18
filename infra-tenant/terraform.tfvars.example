@@ -14,3 +14,6 @@ dnsimple_account = "123456"
 dns_zone         = "example.com"
 dns_record       = "myapp2" # -> myapp2.example.com ; use "@" for the apex
 dns_ttl          = 300
+
+# Pull-request staging environment (<record>-stg.<zone> on the host droplet).
+enable_staging = true
