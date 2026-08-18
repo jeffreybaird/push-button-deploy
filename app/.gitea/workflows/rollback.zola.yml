@@ -1,0 +1,78 @@
+# Manual rollback for a ZOLA static site. Copied into the site repo by the
+# bootstrap as .gitea/workflows/rollback.yml.
+#
+# This is the GIT_PROVIDER=gitea counterpart of
+# ../.github/workflows/rollback.zola.yml — same pipeline, minus the per-run SSH
+# firewall hole-punch (see ../deploy.yml's header comment in this directory).
+# That hole-punch was doctl's ONLY use in this workflow — with it gone, a
+# static site's Gitea rollback needs no DigitalOcean credential either.
+#
+# Trigger: from the Gitea web UI (Actions tab -> rollback -> Run workflow), or
+#          POST $GITEA_URL/api/v1/repos/<owner>/<repo>/actions/workflows/rollback.yml/dispatches
+#          with {"ref":"main","inputs":{"tag":"<prior commit sha>"}}
+#
+# Nothing is rebuilt and nothing is re-uploaded: the previous releases are still
+# on the droplet under releases/, so a rollback is the same symlink flip the
+# deploy ends with. That also means the rollback window is however many releases
+# publish.sh keeps (KEEP_RELEASES, default 5) — older commits must be re-deployed
+# by pushing, not rolled back to.
+#
+# Shares the deploy workflow's concurrency group, so a rollback can never overlap
+# an in-flight push deploy (and vice versa).
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to publish (a prior commit SHA)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-${{ gitea.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.DROPLET_HOST }}
+      APP_SLUG: ${{ vars.APP_SLUG }}
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}
+      RELEASE: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # No firewall hole-punch here (see file header) — the runner's IP is
+      # already allow-listed for SSH, statically, in infra-app/firewall.tf.
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Fail here — before touching the live symlink — if the requested release
+      # was pruned or never existed. publish.sh checks this too; doing it first
+      # makes the failure message list what IS available.
+      - name: Verify the release is still on the droplet
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "test -d '$STACK_DIR/releases/$RELEASE' || {
+               echo 'release $RELEASE is not on the droplet. Available:';
+               ls -1t '$STACK_DIR/releases' 2>/dev/null;
+               echo 'Older releases are pruned — re-deploy that commit instead.';
+               exit 1; }"
+
+      # Ship the current publish.sh: a rollback should not depend on whatever
+      # version of the script happened to be on the droplet.
+      - name: Copy publish.sh
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/publish.sh root@"$HOST":"$STACK_DIR"/
+
+      - name: Publish the older release
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "bash '$STACK_DIR'/publish.sh '$RELEASE'"

@@ -140,3 +140,23 @@ As a developer, I want the script to poll for HTTPS, so that I know when the app
 **7.2 — Zero-downtime** — health-checked swap instead of restart-in-place.
 **7.3 — Verified DB TLS** — deliver DO's CA cert, switch to `verify_peer`.
 **7.4 — Portable state** — move Terraform state to a DO Spaces backend.
+
+---
+
+**Epic 8 — Self-hosted Gitea support**
+
+**8.1 — GIT_PROVIDER selector + Gitea REST shim**
+As a developer, I want to point the bootstrap at a self-hosted Gitea instance instead of GitHub, so that I'm not required to use GitHub for either code hosting or CI/CD.
+- `GIT_PROVIDER` env var, `github` (default) or `gitea`, resolved/validated the same way as `FRAMEWORK`/`DATABASE_BACKEND` (after `.env`, with `is_github`/`is_gitea` predicates).
+- `scripts/provider.sh` holds every provider `if`/`else`: repo create/exists/delete, secret/variable set, run-status, diagnostics — talking to Gitea over its REST API via `curl` (no `tea` CLI). `gh` stays required only for `GIT_PROVIDER=github`; `jq` becomes required only for `gitea`.
+- Unset `GIT_PROVIDER` (the default) is byte-for-byte the same GitHub behavior as before this story — no regression for existing users.
+
+**8.2 — Gitea Actions workflow templates**
+As a developer, I want the CI pipeline to run on Gitea Actions, so that self-hosted Gitea covers CI/CD as well as code hosting.
+- `app/.gitea/workflows/{deploy,rollback}{,.ruby,.zola}.yml` — Gitea-Actions-syntax copies of the GitHub templates (`gitea.sha`/`gitea.ref` in place of `github.*`), with the per-run SSH firewall hole-punch removed entirely (see 8.3).
+- `prep_app()` copies into `.gitea/workflows/` instead of `.github/workflows/` when `GIT_PROVIDER=gitea`.
+
+**8.3 — Static runner-IP allow-list (no firewall hole-punch)**
+As a developer, I want the self-hosted Actions runner's SSH access handled without a per-run firewall punch, so that a Gitea deploy doesn't need the GitHub-hosted-runner-specific "unpredictable IP" workaround.
+- `GITEA_RUNNER_IP` env var, wired to a new `infra-app` Terraform variable (`gitea_runner_cidr`, empty list default) allow-listed once in `infra-app/firewall.tf`.
+- Zero Terraform/firewall change for existing `GIT_PROVIDER=github` deploys (the new variable defaults to no rule).

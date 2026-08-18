@@ -35,3 +35,9 @@ variable "ssh_cidrs" {
   description = "CIDR blocks allowed to reach SSH (port 22). Restrict to your own IP/range."
   type        = list(string)
 }
+
+variable "gitea_runner_cidr" {
+  description = "CIDR of a self-hosted Gitea Actions runner, allow-listed for SSH (deploy-over-SSH) alongside ssh_cidrs. Empty (default) adds no rule — the GitHub path punches a temporary hole per deploy instead (see app/.github/workflows/deploy.yml) and never needs this."
+  type        = list(string)
+  default     = []
+}
