@@ -44,9 +44,14 @@ jobs:
 
       # Ruby version comes from .ruby-version (single source of truth, same file
       # the Dockerfile's RUBY_VERSION is kept in sync with).
+      # `ruby-version: .ruby-version` (not `ruby-version-file:`) — the file form
+      # of the input is newer than some resolutions of the @v1 tag, which reject
+      # it with "Unexpected input(s) 'ruby-version-file'" and then silently fall
+      # back to a default Ruby. A path given to `ruby-version` is read from the
+      # file in every version of the action, so the pin cannot be ignored.
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version-file: .ruby-version
+          ruby-version: .ruby-version
           bundler-cache: true
 
       # spec_helper migrates a fresh SQLite test DB before the suite runs, so no

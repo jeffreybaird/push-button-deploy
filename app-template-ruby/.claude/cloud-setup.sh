@@ -14,7 +14,7 @@
 # immediately.
 #
 # The Ruby version comes from .ruby-version — the same source of truth the
-# Dockerfile's RUBY_VERSION ARG and CI's ruby-version-file use. This SQLite app
+# Dockerfile's RUBY_VERSION ARG and CI's ruby/setup-ruby use. This SQLite app
 # has no external database service to start.
 set -euo pipefail
 
