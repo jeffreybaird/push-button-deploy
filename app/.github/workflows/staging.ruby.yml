@@ -81,9 +81,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # `ruby-version: .ruby-version`, not `ruby-version-file:` — see the note in
+      # deploy.ruby.yml: the file input is rejected by older resolutions of @v1.
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version-file: .ruby-version
+          ruby-version: .ruby-version
           bundler-cache: true
 
       # spec_helper migrates a fresh SQLite test DB before the suite runs, so no
