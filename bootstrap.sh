@@ -1063,29 +1063,77 @@ seed_github() {
 }
 
 # Commit + push -> triggers CI = the FIRST deploy via the SAME path as later ones.
+#
+# A re-run of the bootstrap after fixing something that lives OUTSIDE git — a
+# full container registry, a rotated secret, a changed repo variable — commits
+# nothing and so pushes nothing, which fires no `push` event and starts no
+# deploy. Left there, the next step would poll the PREVIOUS run and report its
+# already-fixed failure as this run's verdict, and no amount of re-running could
+# ever go green. So: when nothing reached GitHub, dispatch the workflow.
 commit_push() {
   log "commit + push (triggers first deploy via CI)"
-  ( cd "$APP_DIR"
-    git add -A
-    if git diff --cached --quiet; then
-      log "nothing new to commit"
-    else
-      git commit -q -m "chore: wire push-button deploy pipeline"
-    fi
-    git push -u origin main
-  )
-  HEAD_SHA="$(cd "$APP_DIR" && git rev-parse HEAD)"
+  local before after
+  before="$(git -C "$APP_DIR" rev-parse origin/main 2>/dev/null || echo none)"
+  git -C "$APP_DIR" add -A
+  if git -C "$APP_DIR" diff --cached --quiet; then
+    log "nothing new to commit"
+  else
+    git -C "$APP_DIR" commit -q -m "chore: wire push-button deploy pipeline"
+  fi
+  git -C "$APP_DIR" push -u origin main
+  after="$(git -C "$APP_DIR" rev-parse origin/main)"
+  HEAD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
+
+  # The run confirm_live is allowed to judge must be one this invocation caused.
+  # Remember the newest run that already existed for this commit, so a stale
+  # conclusion left over from an earlier attempt cannot be mistaken for ours.
+  PREV_RUN_ID="$(latest_run_id)"
+  if [ "$before" != "$after" ]; then
+    DEPLOY_TRIGGERED=1                       # the push itself started the deploy
+    return 0
+  fi
+  case "$(run_state)" in
+    ""|completed*)
+      log "nothing pushed — dispatching deploy.yml so this run redeploys main"
+      ( cd "$APP_DIR" && gh workflow run deploy.yml --ref main ) \
+        || fail "could not dispatch deploy.yml (gh workflow run) — trigger it by hand: gh workflow run deploy.yml --ref main"
+      DEPLOY_TRIGGERED=1 ;;
+    *)
+      log "a deploy for this commit is already running — waiting on it"
+      DEPLOY_TRIGGERED=0 ;;
+  esac
 }
 
 # ---- story 6.3: confirm liveness ----------------------------------------------
 
-# Status of the deploy run for the commit we just pushed: "status conclusion".
-# Empty until GitHub registers the run.
-run_state() {
+# The newest deploy run for the commit we just pushed, as "id status conclusion".
+# Empty until GitHub registers a run.
+run_row() {
   ( cd "$APP_DIR" \
     && gh run list --workflow deploy.yml --commit "$HEAD_SHA" --limit 1 \
-         --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null
+         --json databaseId,status,conclusion \
+         --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"' 2>/dev/null
   ) || true
+}
+
+latest_run_id() { local r; r="$(run_row)"; printf '%s' "${r%% *}"; }
+
+# The state of OUR deploy, as "status conclusion". GitHub takes a few seconds to
+# register a freshly pushed or dispatched run, and in that window the newest run
+# for this commit is still the previous attempt — whose "completed failure"
+# would otherwise end the bootstrap instantly with a verdict about a problem
+# that has already been fixed. Report "not registered yet" (empty) until the id
+# moves off the one we recorded before triggering.
+run_state() {
+  local row id
+  row="$(run_row)"
+  [ -n "$row" ] || return 0
+  id="${row%% *}"
+  if [ "${DEPLOY_TRIGGERED:-0}" = 1 ] && [ -n "${PREV_RUN_ID:-}" ] \
+     && [ "$id" = "$PREV_RUN_ID" ]; then
+    return 0
+  fi
+  printf '%s' "${row#* }"
 }
 
 # Ordered diagnostics (AC 6.3): Actions status, dig, Caddy logs. Always exits 1 —
