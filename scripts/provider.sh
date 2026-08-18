@@ -216,9 +216,14 @@ ci_run_row() {
     return 0
   fi
   local row id status
+  # Response shape isn't certain across Gitea versions (bare array vs
+  # {"workflow_runs": [...]}) — `.workflow_runs // .` looks like it'd handle
+  # both, but jq's `//` only falls back on null/false, NOT on the type error
+  # that `.workflow_runs` raises when the input is already an array. Check the
+  # type explicitly instead of leaning on `//` for this.
   row="$(gitea_api GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/tasks" 2>/dev/null \
     | jq -r --arg sha "$HEAD_SHA" '
-        (.workflow_runs // .) as $runs
+        (if type == "array" then . else (.workflow_runs // []) end) as $runs
         | [$runs[]? | select(.head_sha == $sha)]
         | sort_by(.run_number // .id) | last
         | "\(.id // "")\t\(.status // "")"
@@ -270,7 +275,7 @@ ci_diagnose_dump() {
   fi
   gitea_api GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/tasks?limit=3" 2>/dev/null \
     | jq -r '
-        (.workflow_runs // .) as $runs
+        (if type == "array" then . else (.workflow_runs // []) end) as $runs
         | $runs[:3][]
         | "\(.id)\t\(.status)\t\((.head_sha // "")[0:8])\t\(.run_started_at // .created_at // "")"
       ' \
