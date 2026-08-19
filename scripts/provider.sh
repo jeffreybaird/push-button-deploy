@@ -90,11 +90,26 @@ ci_auth_check() {
   GITEA_OWNER_RESOLVED="${GITEA_OWNER:-$GITEA_AUTH_LOGIN}"
 }
 
+# Does the repo exist ON THE HOST? Named explicitly rather than inferred from
+# the local git remote: a bare `gh repo view` resolves the repo FROM the
+# current directory's origin, which makes it useless for answering this
+# question when origin is missing (or points at something deleted).
 repo_exists() {
   if is_github; then
-    gh repo view >/dev/null 2>&1
+    gh repo view "$APP_NAME" >/dev/null 2>&1
   else
     [ "$(gitea_api_status GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME")" = "200" ]
+  fi
+}
+
+# Clone URL for this app's repo, used to wire origin when the repo already
+# exists but the local remote does not. Empty output means "could not
+# determine" and the caller fails loudly rather than wiring a bad remote.
+repo_remote_url() {
+  if is_github; then
+    gh repo view "$APP_NAME" --json url -q .url 2>/dev/null
+  else
+    printf '%s/%s/%s.git\n' "$GITEA_URL" "$GITEA_OWNER_RESOLVED" "$APP_NAME"
   fi
 }
 

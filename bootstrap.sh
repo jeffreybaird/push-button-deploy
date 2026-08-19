@@ -1075,11 +1075,33 @@ prep_app() {
 ensure_repo() {
   ( cd "$APP_DIR"
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 || git init -q -b main
-    if git remote get-url origin >/dev/null 2>&1 || repo_exists; then
-      :
+
+    # Ask the PROVIDER whether the repo exists — never the local remote. An
+    # origin outlives the repo it points at (deleted by hand, or the whole
+    # instance rebuilt), so treating "origin is configured" as proof of
+    # existence skipped creation and left the push below to die on a 404.
+    if repo_exists; then
+      log "repo '$APP_NAME' already exists on the code host"
     else
+      # Any origin at this point references something that is gone: stale by
+      # definition. Drop it so repo_create can wire a correct one.
+      if git remote get-url origin >/dev/null 2>&1; then
+        warn "origin points at a repo that no longer exists — recreating it"
+        git remote remove origin
+      fi
       log "creating private $( is_gitea && printf Gitea || printf GitHub ) repo '$APP_NAME'"
       repo_create
+    fi
+
+    # repo_create wires origin, but only on the path where it did the
+    # creating. A repo that already existed while the local remote did not
+    # (fresh directory, or a hand-run `git remote remove origin`) needs one.
+    if ! git remote get-url origin >/dev/null 2>&1; then
+      remote_url="$(repo_remote_url)"
+      [ -n "$remote_url" ] \
+        || fail "repo '$APP_NAME' exists on the code host but its clone URL could not be determined"
+      log "wiring origin -> $remote_url"
+      git remote add origin "$remote_url"
     fi
     if ! git rev-parse HEAD >/dev/null 2>&1; then
       log "initial commit (app as generated)"
