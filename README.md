@@ -394,6 +394,23 @@ re-run doesn't need to mint new ones.
 record, and **the data volume** (every repo, the Gitea DB, all of it). It
 does not touch any app deployed through the instance, or the state bucket.
 
+**Resizing.** Change `GITEA_DROPLET_SIZE` and re-run. Sizing *up* is an
+in-place CPU/RAM resize. Sizing *down* is refused by DigitalOcean — a plan
+with a smaller disk gets `This size is not available because it has a
+smaller disk`, even with `resize_disk = false`, and snapshots don't help
+(a snapshot can only create a droplet with a disk at least as large). Use:
+
+```bash
+./bootstrap-gitea.sh --replace-droplet
+```
+
+That recreates the droplet rather than resizing it, which is safe by design
+here: the data volume (Gitea's DB and repos, Caddy's certs, the runner's
+registration) and the reserved IP are separate resources, and cloud-init
+mounts the volume without formatting it. You keep your repos, accounts,
+issued certificates, runner registration and IP; only Docker and the pulled
+images are rebuilt, which the rest of the run does anyway.
+
 **Verify against your instance before relying on this in production.** Gitea's
 Actions API has evolved across releases. `bootstrap-gitea.sh` through "Gitea
 is answering" (provisioning, Docker, the compose stack) is confirmed against

@@ -5,6 +5,15 @@
 #
 #   ./bootstrap-gitea.sh --check   # verify prerequisites, exit non-zero on first gap
 #   ./bootstrap-gitea.sh           # provision + configure + start
+#   ./bootstrap-gitea.sh --replace-droplet
+#                                  # recreate the droplet instead of updating
+#                                  # it in place. Needed to DOWNSIZE, since
+#                                  # DigitalOcean refuses a resize onto a plan
+#                                  # with a smaller disk ("This size is not
+#                                  # available because it has a smaller disk")
+#                                  # even with resize_disk = false. Keeps the
+#                                  # data volume, reserved IP and DNS record;
+#                                  # rebuilds only Docker + the images.
 #
 # One droplet, on its own dedicated infra (infra-gitea/): Gitea server + its
 # Actions runner co-located (see README "Gitea support" for why — the short
@@ -144,6 +153,9 @@ GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-}"
 GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-}"
 GITEA_RUNNER_NAME="${GITEA_RUNNER_NAME:-gitea-host}"
 
+# --replace-droplet: recreate the droplet instead of updating it in place.
+REPLACE_DROPLET=0
+
 # Local caches (gitignored): Gitea shows a token/password ONCE, at creation.
 # Re-running this script must not try to mint a second one where the first
 # still works.
@@ -245,7 +257,19 @@ tf_gitea() {
 
   log "terraform: infra-gitea"
   backend_init "$GITEA_TF_DIR"
-  terraform -chdir="$GITEA_TF_DIR" apply -auto-approve -input=false
+  if [ "$REPLACE_DROPLET" = 1 ]; then
+    # Recreating rather than updating. Safe by design: every stateful thing
+    # lives on the attached volume (Gitea's DB + repos, Caddy's certs, the
+    # runner's registration), the reserved IP is its own resource, and
+    # cloud-init mounts the volume without ever formatting it. What is lost
+    # is the root disk: Docker Engine and the pulled images, both rebuilt by
+    # the remaining steps of this run.
+    log "REPLACING the droplet (data volume + reserved IP are untouched)"
+    terraform -chdir="$GITEA_TF_DIR" apply -auto-approve -input=false \
+      -replace=digitalocean_droplet.gitea
+  else
+    terraform -chdir="$GITEA_TF_DIR" apply -auto-approve -input=false
+  fi
   GITEA_IP="$(terraform -chdir="$GITEA_TF_DIR" output -raw gitea_ip)"
   GITEA_DOMAIN="$(terraform -chdir="$GITEA_TF_DIR" output -raw domain)"
   GITEA_URL="https://$GITEA_DOMAIN"
@@ -491,7 +515,8 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --check) check=1; shift ;;
-      -*) fail "unknown argument: $1 (use --check)" ;;
+      --replace-droplet) REPLACE_DROPLET=1; shift ;;
+      -*) fail "unknown argument: $1 (use --check, --replace-droplet)" ;;
       *)  fail "unknown argument: $1 (bootstrap-gitea.sh takes no positional args)" ;;
     esac
   done
