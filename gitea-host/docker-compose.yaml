@@ -35,8 +35,18 @@ services:
       - GITEA__database__DB_TYPE=sqlite3
       - GITEA__server__DOMAIN=${GITEA_DOMAIN}
       - GITEA__server__ROOT_URL=https://${GITEA_DOMAIN}/
-      - GITEA__server__START_SSH_SERVER=true
-      - GITEA__server__SSH_LISTEN_PORT=22
+      # Git-over-SSH is served by the OpenSSH daemon the gitea/gitea image
+      # already runs on :22 inside the container -- NOT by Gitea's own built-in
+      # Go SSH server. Setting START_SSH_SERVER=true makes both try to bind
+      # :22 and whichever loses the race dies fatally; confirmed live, where
+      # it left the container crash-looping ("Failed to start SSH server:
+      # listen tcp :22: bind: address already in use") after a recreate
+      # happened to let sshd win. Explicitly FALSE rather than just omitted:
+      # app.ini persists on the data volume and the entrypoint only rewrites
+      # keys it is given, so an omitted key would keep its old true value.
+      - GITEA__server__START_SSH_SERVER=false
+      # The port EXTERNAL clients use, i.e. the host side of the 2222:22
+      # mapping below. Only affects the clone URLs Gitea displays.
       - GITEA__server__SSH_PORT=2222
       # Actions is OFF by default in Gitea — this is what makes the CI half
       # of "Gitea support" actually work at all.

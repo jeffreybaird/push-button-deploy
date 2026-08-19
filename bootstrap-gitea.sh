@@ -38,17 +38,22 @@
 # each detect prior completion rather than redo it (Gitea only shows a
 # token/password at CREATION time — re-running does not print a new one).
 #
-# Provisioning through "Gitea is answering" (steps 1-8) is confirmed against
-# a live instance. The `gitea admin`/`gitea actions` CLI steps (9-11) are
-# still being verified as issues surface — three confirmed fixes already
-# folded in: `docker compose exec` defaults to root, which the gitea binary
-# refuses to run as (`-u 1000` on every invocation below); GITEA__security__
-# INSTALL_LOCK=true is REQUIRED in gitea-host/docker-compose.yaml for a
-# headless env-var-driven setup, or the CLI reports the instance as
-# not-installed no matter what (/api/healthz answering doesn't catch this —
-# it's a liveness check, not an install check); and `--config
-# /data/gitea/conf/app.ini` points the CLI at the entrypoint's own config
-# rather than its default search. If a later step fails, `docker compose
+# Being verified against a live instance as issues surface. Confirmed fixes
+# already folded in, all found that way:
+#   - infra-gitea/cloud-init.yaml must be pure ASCII: an em-dash in a comment
+#     made cloud-init discard the whole user-data as invalid, so Docker was
+#     never installed (cloud-init reported "done", degraded — not "stuck").
+#   - gitea-host/docker-compose.yaml must NOT set START_SSH_SERVER=true: the
+#     image already runs sshd on :22 in the container, and the two racing for
+#     that port left it crash-looping.
+#   - GITEA__security__INSTALL_LOCK=true is REQUIRED for a headless
+#     env-var-driven setup, or the CLI reports the instance as not-installed
+#     no matter what (/api/healthz answering doesn't catch this — it is a
+#     liveness check, not an install check).
+#   - every gitea CLI call needs `-u 1000` (exec defaults to root, which the
+#     gitea binary refuses to run as) and `--config /data/gitea/conf/app.ini`
+#     (points it at the config the entrypoint generated).
+# If a later step fails, `docker compose
 # exec -u 1000 gitea gitea admin user --help` (or
 # names/output format against the actual image version running.
 # ensure_admin_token()/ensure_runner() parse CLI output defensively and fail
@@ -281,12 +286,30 @@ start_core_services() {
 # confirm_summary() checks it last, informationally).
 wait_gitea_healthy() {
   log "waiting for Gitea to answer internally..."
-  local i
+  local i restarts
   for i in $(seq 1 30); do
     if remote_ssh "cd /root/gitea && docker compose exec -T gitea curl -fsS http://localhost:3000/api/healthz" >/dev/null 2>&1; then
       log "Gitea is answering."
       return 0
     fi
+
+    # A crash-looping container never becomes healthy, so polling it for the
+    # full 5 minutes only delays a failure that is already certain — and the
+    # reason is sitting in its logs the whole time. Docker's restart counter
+    # is the tell: a container that is merely slow to start never restarts at
+    # all. Bail as soon as it is clearly looping and print the logs, rather
+    # than timing out and telling the operator to go read them by hand.
+    restarts="$(remote_ssh "cd /root/gitea && cid=\$(docker compose ps -q gitea) && docker inspect -f '{{.RestartCount}}' \$cid" 2>/dev/null || true)"
+    case "$restarts" in
+      ''|*[!0-9]*) : ;;   # unavailable / not a number: keep waiting
+      *)
+        if [ "$restarts" -ge 3 ]; then
+          warn "the gitea container has restarted $restarts times — it is crash-looping, not starting slowly. Last 40 log lines:"
+          remote_ssh "cd /root/gitea && docker compose logs --tail 40 gitea" >&2 2>/dev/null || true
+          fail "Gitea is crash-looping (see the log lines above). Full log: ssh root@$GITEA_IP 'cd /root/gitea && docker compose logs gitea'"
+        fi ;;
+    esac
+
     log "  not answering yet (attempt $i/30, ~$((i * 10))s)"
     sleep 10
   done

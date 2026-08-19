@@ -402,11 +402,13 @@ a live instance — real issues that only showed up there are already fixed:
 cloud-init YAML parser and silently discarded the whole config, so Docker
 never installed); every `gitea admin`/`gitea actions` CLI call needs
 `docker compose exec -u 1000` (exec defaults to root; the gitea binary
-refuses to run as root); and `gitea-host/docker-compose.yaml` needs
+refuses to run as root); `gitea-host/docker-compose.yaml` needs
 `GITEA__security__INSTALL_LOCK=true` for a headless env-var-driven setup, or
 the CLI reports the instance as not-installed no matter what — `/api/healthz`
 answering doesn't catch this, since it's a liveness check, not an install
-check. Past that point — `scripts/provider.sh`'s
+check; and that same file must leave `START_SSH_SERVER` off, because the
+image already runs sshd on port 22 inside the container and the two racing
+for it left Gitea crash-looping. Past that point — `scripts/provider.sh`'s
 `ci_run_row`/`ci_diagnose_dump` (Actions run-status parsing) and
 `ci_dispatch_deploy` (workflow dispatch), plus the rest of
 `bootstrap-gitea.sh`'s own `ensure_admin_token`/`ensure_runner` (CLI output
