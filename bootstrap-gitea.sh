@@ -40,14 +40,16 @@
 #
 # Provisioning through "Gitea is answering" (steps 1-8) is confirmed against
 # a live instance. The `gitea admin`/`gitea actions` CLI steps (9-11) are
-# still being verified as issues surface — two confirmed fixes already
+# still being verified as issues surface — three confirmed fixes already
 # folded in: `docker compose exec` defaults to root, which the gitea binary
-# refuses to run as (`-u 1000` on every invocation below), and a fresh exec
-# doesn't share the entrypoint's config context, so the CLI needs pointing
-# explicitly at the app.ini the entrypoint generated (`--config
-# /data/gitea/conf/app.ini`) or it reports the instance as not-installed. If
-# a later step fails, `docker compose exec -u 1000 gitea gitea admin user --help` (or
-# `... actions --help`) on the droplet is the fastest way to check exact flag
+# refuses to run as (`-u 1000` on every invocation below); GITEA__security__
+# INSTALL_LOCK=true is REQUIRED in gitea-host/docker-compose.yaml for a
+# headless env-var-driven setup, or the CLI reports the instance as
+# not-installed no matter what (/api/healthz answering doesn't catch this —
+# it's a liveness check, not an install check); and `--config
+# /data/gitea/conf/app.ini` points the CLI at the entrypoint's own config
+# rather than its default search. If a later step fails, `docker compose
+# exec -u 1000 gitea gitea admin user --help` (or
 # names/output format against the actual image version running.
 # ensure_admin_token()/ensure_runner() parse CLI output defensively and fail
 # loud with the raw output if a parse doesn't match.
@@ -314,14 +316,18 @@ ensure_admin_user() {
   # as root") — confirmed against a live instance. 1000 matches the
   # USER_UID/USER_GID the compose file sets for the git user.
   #
-  # --config: the entrypoint generates /data/gitea/conf/app.ini from the
-  # GITEA__* env vars before starting the WEB server (PID 1) — but a fresh
-  # `docker compose exec` process doesn't share that context and, left to its
-  # own default config search, reports the instance as not-installed even
-  # though it plainly is (also confirmed live: "Unable to load config file
-  # for a installed Gitea instance"). Pointing the CLI at the same file the
-  # entrypoint wrote fixes it. Every gitea CLI invocation below needs both
-  # this and -u 1000 for the same reasons.
+  # --config: points the CLI at the same app.ini the entrypoint generates
+  # from the GITEA__* env vars, rather than trusting its own default search
+  # (belt-and-suspenders; harmless either way).
+  #
+  # The actual fix for "Unable to load config file for a installed Gitea
+  # instance" (confirmed live — --config alone did NOT resolve it) was
+  # gitea-host/docker-compose.yaml's GITEA__security__INSTALL_LOCK=true:
+  # without it Gitea considers itself genuinely not-installed no matter what
+  # config file is loaded — /api/healthz answering is a liveness check, not
+  # an install check, so wait_gitea_healthy() passing didn't catch this.
+  # Every gitea CLI invocation below needs -u 1000 and --config for the
+  # reasons above.
   out="$(remote_ssh "cd /root/gitea && docker compose exec -T -u 1000 gitea gitea --config /data/gitea/conf/app.ini admin user create --admin --username '$GITEA_ADMIN_USER' --password '$GITEA_ADMIN_PASSWORD' --email '$GITEA_ADMIN_EMAIL' --must-change-password=false" 2>&1)" || rc=$?
   printf '%s\n' "$out" >> "$LOG_FILE"
   if [ "$rc" -ne 0 ]; then

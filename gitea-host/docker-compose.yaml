@@ -44,6 +44,14 @@ services:
       # This instance has exactly one operator (you). Self-service signup on
       # a freshly internet-exposed git host is not a default worth risking.
       - GITEA__service__DISABLE_REGISTRATION=true
+      # REQUIRED for a headless, env-var-driven setup: without this, Gitea
+      # considers itself not-installed regardless of a valid app.ini being
+      # present, and the web install wizard sits at "/" waiting for someone
+      # to click through it by hand. /api/healthz answers fine either way
+      # (it's a liveness check, not an install check) — confirmed live: the
+      # gitea CLI's MustInstalled() check is what actually enforces this,
+      # and it failed until this was added.
+      - GITEA__security__INSTALL_LOCK=true
     volumes:
       - /mnt/gitea-data/gitea:/data
       - /etc/timezone:/etc/timezone:ro
