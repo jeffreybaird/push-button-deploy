@@ -55,6 +55,14 @@ resource "digitalocean_droplet" "gitea" {
   ssh_keys   = [data.digitalocean_ssh_key.deploy.fingerprint]
   volume_ids = [digitalocean_volume.gitea_data.id]
   user_data  = file("${path.module}/cloud-init.yaml")
+
+  # Resize CPU/RAM only, never the disk. DigitalOcean can grow a disk but
+  # never shrink one, so a disk-inclusive resize is a ONE-WAY door: bump the
+  # size once and you can never come back down without replacing the droplet.
+  # Everything worth keeping lives on the attached volume rather than the root
+  # disk, so giving up disk resizing costs nothing and keeps droplet_size a
+  # freely adjustable dial in both directions.
+  resize_disk = false
 }
 
 resource "digitalocean_reserved_ip_assignment" "gitea" {

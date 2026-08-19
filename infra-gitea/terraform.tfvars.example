@@ -12,6 +12,6 @@ ssh_cidrs        = ["203.0.113.4/32"]   # your IP/range allowed to admin-SSH (po
 # project_name   = "gitea-infra"
 # region         = "nyc3"
 # dns_record     = "git"                # git.example.com
-# droplet_size   = "s-2vcpu-4gb"
+# droplet_size   = "s-1vcpu-1gb"   # bump for heavier CI; see variables.tf
 # droplet_image  = "ubuntu-24-04-x64"
 # data_volume_gb = 40

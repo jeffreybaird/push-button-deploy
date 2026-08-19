@@ -23,9 +23,21 @@ variable "vpc_ip_range" {
 }
 
 variable "droplet_size" {
-  description = "Droplet size slug. Gitea's runner does real CI compute here (test/build for every app it deploys), so this needs more headroom than an app droplet's default."
+  description = <<-EOT
+    Droplet size slug. Gitea itself is tiny (server + Caddy + an idle runner
+    total ~300-400MB); what actually drives this is the CI work the co-located
+    runner does for every app it deploys:
+      zola     - download a binary, `zola build`, scp a tarball: s-1vcpu-1gb
+      sinatra  - bundle install, rspec, Docker build of a Ruby image: s-1vcpu-2gb
+      phoenix  - mix test + a Postgres service container + a multi-stage
+                 Elixir release build: s-2vcpu-4gb
+    The default is the small end deliberately: sizing UP is a painless
+    CPU/RAM-only resize, sizing DOWN is not (DigitalOcean cannot shrink a
+    disk - see resize_disk in main.tf). Start here, bump it when a heavier
+    framework actually arrives.
+  EOT
   type        = string
-  default     = "s-2vcpu-4gb"
+  default     = "s-1vcpu-1gb"
 }
 
 variable "droplet_image" {

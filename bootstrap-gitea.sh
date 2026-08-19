@@ -26,8 +26,10 @@
 #   GITEA_PROJECT_NAME     default "gitea-infra" — names the state-bucket
 #                          workspace and infra-gitea's resources.
 #   GITEA_REGION           default "nyc3".
-#   GITEA_DROPLET_SIZE     default "s-2vcpu-4gb" (real CI compute happens
-#                          here — bigger than an app droplet's default).
+#   GITEA_DROPLET_SIZE     default "s-1vcpu-1gb". Sized for a zola workload;
+#                          bump for heavier CI (sinatra ~s-1vcpu-2gb, phoenix
+#                          ~s-2vcpu-4gb). Sizing up is painless, down is not
+#                          — see infra-gitea/variables.tf.
 #   GITEA_DATA_VOLUME_GB   default 40.
 #   SSH_CIDRS              same var bootstrap.sh uses — admin SSH access to
 #                          THIS droplet. (Separate from Gitea's own git+ssh
@@ -135,7 +137,7 @@ fi
 GITEA_PROJECT_NAME="${GITEA_PROJECT_NAME:-gitea-infra}"
 GITEA_REGION="${GITEA_REGION:-nyc3}"
 GITEA_DNS_RECORD="${GITEA_DNS_RECORD:-git}"
-GITEA_DROPLET_SIZE="${GITEA_DROPLET_SIZE:-s-2vcpu-4gb}"
+GITEA_DROPLET_SIZE="${GITEA_DROPLET_SIZE:-s-1vcpu-1gb}"
 GITEA_DATA_VOLUME_GB="${GITEA_DATA_VOLUME_GB:-40}"
 GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-gitea-admin}"
 GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-}"

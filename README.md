@@ -546,10 +546,14 @@ For manual Terraform runs, `cd` into the app and export the same env vars plus `
 - Reserved IP: free while assigned
 - Plus your DNSimple subscription.
 - **If self-hosting Gitea** (`bootstrap-gitea.sh`, optional — GitHub is free
-  and needs none of this): droplet `s-2vcpu-4gb` ~$24 (bigger than an app
-  droplet — the runner does real CI compute here) + a 40GB data volume ~$4 +
-  its own reserved IP (free while assigned). No managed Postgres, no
+  and needs none of this): droplet `s-1vcpu-1gb` ~$6 + a 40GB data volume ~$4
+  + its own reserved IP (free while assigned). No managed Postgres, no
   container registry — Gitea uses SQLite and no image of its own is built.
+  Gitea itself is tiny; the droplet size is really a **CI sizing** decision,
+  since the co-located runner builds every app you deploy through it —
+  `zola` fits the default, `sinatra` wants ~`s-1vcpu-2gb` (~$12), and
+  `phoenix` (mix test + a Postgres service container + an Elixir release
+  build) wants ~`s-2vcpu-4gb` (~$24). Set `GITEA_DROPLET_SIZE` to bump it.
 
 ## Troubleshooting
 
