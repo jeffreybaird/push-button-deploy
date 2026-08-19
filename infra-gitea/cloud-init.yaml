@@ -1,7 +1,7 @@
 #cloud-config
 # Installs Docker Engine + the compose plugin, and mounts the persistent data
 # volume Terraform attaches (main.tf: digitalocean_volume.gitea_data) at
-# /mnt/gitea-data. No secrets, no Gitea config here — those arrive over SSH at
+# /mnt/gitea-data. No secrets, no Gitea config here - those arrive over SSH at
 # deploy time (same locked decision infra-app's cloud-init makes).
 #
 # The device is found by glob rather than a hardcoded name/path: exactly one
