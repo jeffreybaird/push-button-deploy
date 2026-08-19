@@ -14,7 +14,9 @@
 # already needs (same .env works for both) plus a handful of Gitea-specific
 # ones for the one-time admin account:
 #   GITEA_ADMIN_EMAIL      required — no sensible default.
-#   GITEA_ADMIN_USER       default "admin".
+#   GITEA_ADMIN_USER       default "gitea-admin". NOT "admin" — Gitea
+#                          reserves that name (and api/user/org/explore/...);
+#                          preflight rejects a reserved one up front.
 #   GITEA_ADMIN_PASSWORD   default: auto-generated (openssl rand), cached
 #                          locally and printed once.
 #   GITEA_DNS_RECORD       default "git" -> git.<DNS_ZONE>. Deliberately a
@@ -135,7 +137,7 @@ GITEA_REGION="${GITEA_REGION:-nyc3}"
 GITEA_DNS_RECORD="${GITEA_DNS_RECORD:-git}"
 GITEA_DROPLET_SIZE="${GITEA_DROPLET_SIZE:-s-2vcpu-4gb}"
 GITEA_DATA_VOLUME_GB="${GITEA_DATA_VOLUME_GB:-40}"
-GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-admin}"
+GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-gitea-admin}"
 GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-}"
 GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-}"
 GITEA_RUNNER_NAME="${GITEA_RUNNER_NAME:-gitea-host}"
@@ -181,6 +183,17 @@ preflight() {
     [ -n "$val" ] || fail "missing env var: $v"
   done
   [ -r "$SSH_PRIVATE_KEY" ] || fail "SSH private key not readable: $SSH_PRIVATE_KEY"
+
+  # Gitea refuses to create a user whose name is on its reserved list, and it
+  # only says so at creation time — which is step 9, long after a droplet has
+  # been provisioned and paid for. Catch the likely picks here instead, in
+  # --check. Gitea's own list is the authority and grows across versions, so
+  # this is a courtesy check, not a mirror of it: an unlisted reserved name
+  # still fails later with Gitea's own "name is reserved" message.
+  case " admin api assets attachments avatar avatars captcha commits debug devtest error explore favicon.ico ghost gitea-actions issues login metrics milestones new notifications org pulls raw repo repo-avatars search ssh_info user v2 " in
+    *" $GITEA_ADMIN_USER "*)
+      fail "GITEA_ADMIN_USER='$GITEA_ADMIN_USER' is a name Gitea reserves — creating it fails with 'name is reserved'. Pick another (the default, 'gitea-admin', is fine)." ;;
+  esac
 
   doctl account get >/dev/null 2>&1 \
     || fail "doctl not authenticated — run: doctl auth init"
