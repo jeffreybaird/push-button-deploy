@@ -38,12 +38,16 @@
 # each detect prior completion rather than redo it (Gitea only shows a
 # token/password at CREATION time — re-running does not print a new one).
 #
-# UNVERIFIED AGAINST A LIVE INSTANCE: the exact `gitea admin`/`gitea actions`
-# CLI flags and output formats are written against Gitea's documented
-# behavior, not confirmed live (no instance existed to test against while
-# writing this). ensure_admin_token()/ensure_runner() parse CLI output
-# defensively and fail loud with the raw output if a parse doesn't match —
-# that's the first place to look if this needs adjusting for your version.
+# Provisioning through "Gitea is answering" (steps 1-8) is confirmed against
+# a live instance. The `gitea admin`/`gitea actions` CLI steps (9-11) are
+# still being verified as issues surface — one confirmed fix already folded
+# in: `docker compose exec` defaults to root, which the gitea binary refuses
+# to run as, hence `-u 1000` on every gitea CLI invocation below. If a later
+# step fails, `docker compose exec -u 1000 gitea gitea admin user --help` (or
+# `... actions --help`) on the droplet is the fastest way to check exact flag
+# names/output format against the actual image version running.
+# ensure_admin_token()/ensure_runner() parse CLI output defensively and fail
+# loud with the raw output if a parse doesn't match.
 #
 # Portable: BSD/macOS bash, grep, sed.
 set -euo pipefail
@@ -301,7 +305,13 @@ ensure_admin_user() {
   # The password is briefly a plain arg to the REMOTE process — Gitea's CLI
   # has no --password-stdin for this command. Narrow, accepted exposure (only
   # visible to `ps` on a droplet only you SSH into) — see file header.
-  out="$(remote_ssh "cd /root/gitea && docker compose exec -T gitea gitea admin user create --admin --username '$GITEA_ADMIN_USER' --password '$GITEA_ADMIN_PASSWORD' --email '$GITEA_ADMIN_EMAIL' --must-change-password=false" 2>&1)" || rc=$?
+  #
+  # -u 1000: `docker compose exec` defaults to root inside the container, but
+  # the gitea binary refuses to run as root ("Gitea is not supposed to be run
+  # as root") — confirmed against a live instance. 1000 matches the
+  # USER_UID/USER_GID the compose file sets for the git user; every gitea
+  # CLI invocation below needs the same flag for the same reason.
+  out="$(remote_ssh "cd /root/gitea && docker compose exec -T -u 1000 gitea gitea admin user create --admin --username '$GITEA_ADMIN_USER' --password '$GITEA_ADMIN_PASSWORD' --email '$GITEA_ADMIN_EMAIL' --must-change-password=false" 2>&1)" || rc=$?
   printf '%s\n' "$out" >> "$LOG_FILE"
   if [ "$rc" -ne 0 ]; then
     printf '%s' "$out" | grep -qi "already exists" \
@@ -325,10 +335,10 @@ ensure_admin_token() {
   # Scopes needed by scripts/provider.sh's Gitea calls: create/delete a repo,
   # and manage that repo's Actions secrets/variables. VERSION CAVEAT: exact
   # scope names are for Gitea's 1.20+ scoped-token system — check
-  # `docker compose exec gitea gitea admin user generate-access-token --help`
+  # `docker compose exec -u 1000 gitea gitea admin user generate-access-token --help`
   # against your version if this rejects the scope list.
   local out
-  out="$(remote_ssh "cd /root/gitea && docker compose exec -T gitea gitea admin user generate-access-token --username '$GITEA_ADMIN_USER' --token-name bootstrap --scopes write:repository,write:user,write:organization" 2>&1)" \
+  out="$(remote_ssh "cd /root/gitea && docker compose exec -T -u 1000 gitea gitea admin user generate-access-token --username '$GITEA_ADMIN_USER' --token-name bootstrap --scopes write:repository,write:user,write:organization" 2>&1)" \
     || fail "gitea admin user generate-access-token failed: $out"
   printf '%s\n' "$out" >> "$LOG_FILE"
 
@@ -368,7 +378,7 @@ ensure_runner() {
 
   log "runner: generating a registration token"
   local out token
-  out="$(remote_ssh "cd /root/gitea && docker compose exec -T gitea gitea actions generate-runner-token" 2>&1)" \
+  out="$(remote_ssh "cd /root/gitea && docker compose exec -T -u 1000 gitea gitea actions generate-runner-token" 2>&1)" \
     || fail "gitea actions generate-runner-token failed: $out"
   printf '%s\n' "$out" >> "$LOG_FILE"
   token="$(printf '%s\n' "$out" | tail -1 | tr -d '[:space:]')"

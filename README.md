@@ -395,16 +395,23 @@ record, and **the data volume** (every repo, the Gitea DB, all of it). It
 does not touch any app deployed through the instance, or the state bucket.
 
 **Verify against your instance before relying on this in production.** Gitea's
-Actions API has evolved across releases, and this integration was written
-against its REST/CLI documentation rather than a live instance —
-`scripts/provider.sh`'s `ci_run_row`/`ci_diagnose_dump` (Actions run-status
-parsing) and `ci_dispatch_deploy` (workflow dispatch), plus
-`bootstrap-gitea.sh`'s `ensure_admin_token`/`ensure_runner` (Gitea CLI output
-parsing), are flagged in-code as the parts most likely to need adjusting for
-your version. A reasonable first run: `./bootstrap-gitea.sh --check`, then a
-full run, then `GIT_PROVIDER=gitea FRAMEWORK=zola ./bootstrap.sh --check`
-against it (smallest surface — no database, no registry) before a full app
-bootstrap.
+Actions API has evolved across releases. `bootstrap-gitea.sh` through "Gitea
+is answering" (provisioning, Docker, the compose stack) is confirmed against
+a live instance — two real issues that only showed up there are already
+fixed: `infra-gitea/cloud-init.yaml` has to be pure ASCII (an em-dash broke
+DO's cloud-init YAML parser and silently discarded the whole config, so
+Docker never installed), and every `gitea admin`/`gitea actions` CLI call
+needs `docker compose exec -u 1000` (exec defaults to root; the gitea binary
+refuses to run as root). Past that point — `scripts/provider.sh`'s
+`ci_run_row`/`ci_diagnose_dump` (Actions run-status parsing) and
+`ci_dispatch_deploy` (workflow dispatch), plus the rest of
+`bootstrap-gitea.sh`'s own `ensure_admin_token`/`ensure_runner` (CLI output
+parsing) — is still being verified as issues surface; both fail loud with
+the raw output when a parse doesn't match, which is the fastest way to spot
+what needs adjusting. A reasonable first run: `./bootstrap-gitea.sh --check`,
+then a full run, then `GIT_PROVIDER=gitea FRAMEWORK=zola ./bootstrap.sh
+--check` against it (smallest surface — no database, no registry) before a
+full app bootstrap.
 
 **No PR staging environments yet.** The staging workflow ships as a template
 under `app/.github/workflows/` and has no `app/.gitea/workflows/` counterpart,
