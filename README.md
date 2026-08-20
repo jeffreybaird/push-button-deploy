@@ -425,9 +425,12 @@ the CLI reports the instance as not-installed no matter what — `/api/healthz`
 answering doesn't catch this, since it's a liveness check, not an install
 check; that same file must leave `START_SSH_SERVER` off, because the image
 already runs sshd on port 22 inside the container and the two racing for it
-left Gitea crash-looping; and the admin username cannot be `admin`, which
+left Gitea crash-looping; the admin username cannot be `admin`, which
 Gitea reserves (the default is now `gitea-admin`, and `--check` rejects a
-reserved name up front). Past that point — `scripts/provider.sh`'s
+reserved name up front); and the runner's `GITEA_INSTANCE_URL` must be the
+**public** URL rather than a compose-internal one, since job containers run
+on the host daemon on their own network and are handed that address as their
+clone URL. Past that point — `scripts/provider.sh`'s
 `ci_run_row`/`ci_diagnose_dump` (Actions run-status parsing) and
 `ci_dispatch_deploy` (workflow dispatch), plus the rest of
 `bootstrap-gitea.sh`'s own `ensure_admin_token`/`ensure_runner` (CLI output
