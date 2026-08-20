@@ -91,7 +91,11 @@ services:
       # can be left stale/empty on every later restart.
       - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_REGISTRATION_TOKEN:-}
       - GITEA_RUNNER_NAME=${GITEA_RUNNER_NAME:-gitea-host}
+      # act_runner reads its config from this path; see the file for why the
+      # built-in Actions cache server has to be off in this topology.
+      - CONFIG_FILE=/config.yaml
     volumes:
+      - ./act_runner-config.yaml:/config.yaml:ro
       - /mnt/gitea-data/runner:/data
       # Job containers run as SIBLINGS on the HOST's Docker daemon (socket
       # bind-mount), not nested Docker-in-Docker — simpler and avoids running

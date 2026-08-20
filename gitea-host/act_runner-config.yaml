@@ -1,0 +1,26 @@
+# act_runner configuration. Only settings that must differ from the defaults
+# appear here; act_runner fills in everything else.
+
+cache:
+  # act_runner ships its own Actions cache server, which is what backs
+  # actions/cache -- used by BOTH deploy templates (the Phoenix one caches
+  # deps/_build directly, the Sinatra one via ruby/setup-ruby's
+  # bundler-cache: true).
+  #
+  # It advertises a callback address for job containers to fetch from, and
+  # auto-detects that address. That detection cannot work in this topology:
+  # the runner is itself a container, while job containers are SIBLINGS on a
+  # separate per-task network created by the runner, so whatever address the
+  # runner sees for itself is not routable from them. actions/cache then
+  # blocks retrying an unreachable host, and the job hangs -- confirmed live,
+  # where a Sinatra build stopped dead immediately after printing its cache
+  # key and never resumed.
+  #
+  # Disabled rather than repointed. With no cache service advertised,
+  # actions/cache reports caching unavailable and the step proceeds, so
+  # builds still work; they just re-resolve dependencies every run. Making
+  # the cache actually WORK means publishing the cache port out of the runner
+  # container and advertising an address the job network can reach -- worth
+  # doing, but it needs a live instance to verify against rather than another
+  # unverified guess, and a slow build beats a hung one in the meantime.
+  enabled: false

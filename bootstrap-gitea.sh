@@ -69,6 +69,12 @@
 #   - the runner's GITEA_INSTANCE_URL must be the PUBLIC url: job containers
 #     run on the host daemon on their own network, are handed that address as
 #     their clone URL, and cannot resolve a compose-internal hostname.
+#   - act_runner's built-in Actions cache server is off
+#     (gitea-host/act_runner-config.yaml) for the same routing reason: it
+#     advertises a callback address job containers cannot reach, and
+#     actions/cache hangs on it rather than failing.
+#   - cloud-init adds a 2G swapfile, because an OOM in a CI build otherwise
+#     takes the co-located git server down with it.
 # If a later step fails, `docker compose
 # exec -u 1000 gitea gitea admin user --help` (or
 # names/output format against the actual image version running.
@@ -301,6 +307,7 @@ remote_scp() { scp -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new "$@
 copy_gitea_files() {
   remote_ssh "mkdir -p /root/gitea"
   remote_scp "$SCRIPT_DIR/gitea-host/docker-compose.yaml" "$SCRIPT_DIR/gitea-host/Caddyfile" \
+    "$SCRIPT_DIR/gitea-host/act_runner-config.yaml" \
     root@"$GITEA_IP":/root/gitea/
 }
 
