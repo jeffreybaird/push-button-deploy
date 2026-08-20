@@ -31,10 +31,16 @@ variable "droplet_size" {
       sinatra  - bundle install, rspec, Docker build of a Ruby image: s-1vcpu-2gb
       phoenix  - mix test + a Postgres service container + a multi-stage
                  Elixir release build: s-2vcpu-4gb
+    The default suits ZOLA ONLY. A sinatra or phoenix build on 1GB will
+    exhaust RAM, and because the runner is co-located with Gitea the OOM
+    killer takes the git server down with it (confirmed live). cloud-init
+    adds a 2G swapfile, which turns that into a slow build rather than a
+    dead box - but swap is a safety net, not a substitute for sizing.
+
     The default is the small end deliberately: sizing UP is a painless
     CPU/RAM-only resize, sizing DOWN is not (DigitalOcean cannot shrink a
-    disk - see resize_disk in main.tf). Start here, bump it when a heavier
-    framework actually arrives.
+    disk - see resize_disk in main.tf). Start here, bump it BEFORE the first
+    build of a heavier framework.
   EOT
   type        = string
   default     = "s-1vcpu-1gb"
