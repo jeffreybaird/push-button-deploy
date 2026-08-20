@@ -66,6 +66,9 @@
 #   - every gitea CLI call needs `-u 1000` (exec defaults to root, which the
 #     gitea binary refuses to run as) and `--config /data/gitea/conf/app.ini`
 #     (points it at the config the entrypoint generated).
+#   - the runner's GITEA_INSTANCE_URL must be the PUBLIC url: job containers
+#     run on the host daemon on their own network, are handed that address as
+#     their clone URL, and cannot resolve a compose-internal hostname.
 # If a later step fails, `docker compose
 # exec -u 1000 gitea gitea admin user --help` (or
 # names/output format against the actual image version running.
@@ -447,8 +450,26 @@ ensure_admin_token() {
 # an existing registration, check `docker compose exec runner ls /data` and
 # adjust the path below.
 ensure_runner() {
-  local already
+  local already registered_addr
   already="$(remote_ssh "[ -f /mnt/gitea-data/runner/.runner ] && echo yes || echo no")"
+
+  # Registration bakes the instance URL into .runner, and THAT address is what
+  # job containers are handed as their clone/API URL. If it no longer matches
+  # the URL this script would register with, every checkout fails inside the
+  # job even though the runner itself polls happily — so treat a drifted
+  # address as "not registered" and redo it. Parsed with sed rather than jq:
+  # the droplet only ever gets Docker installed, jq is a LOCAL requirement.
+  if [ "$already" = "yes" ]; then
+    registered_addr="$(remote_ssh "sed -nE 's/.*\"address\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p' /mnt/gitea-data/runner/.runner 2>/dev/null" || true)"
+    # Unparseable (empty) fails OPEN: leave a working runner alone rather than
+    # tearing it down over a format this cannot read.
+    if [ -n "$registered_addr" ] && [ "$registered_addr" != "$GITEA_URL" ]; then
+      warn "runner is registered against '$registered_addr' but should be '$GITEA_URL' — re-registering (job containers get this address, and the old one is unreachable from them)"
+      remote_ssh "cd /root/gitea && docker compose rm -sf runner >/dev/null 2>&1; rm -f /mnt/gitea-data/runner/.runner"
+      already="no"
+    fi
+  fi
+
   if [ "$already" = "yes" ]; then
     log "runner: already registered — ensuring it's running"
     remote_ssh "cd /root/gitea && docker compose up -d runner"

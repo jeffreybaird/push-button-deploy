@@ -75,10 +75,16 @@ services:
     image: gitea/act_runner:latest
     restart: unless-stopped
     environment:
-      # Internal service address, not the public domain: the runner talks to
-      # Gitea directly over the compose network, so it never depends on
-      # public DNS/TLS being up (and works before the first cert issues).
-      - GITEA_INSTANCE_URL=http://gitea:3000
+      # MUST be the PUBLIC url, not the compose-internal http://gitea:3000.
+      # The runner itself could reach that (it shares Gitea's compose
+      # network), but it launches job containers on the HOST daemon via the
+      # socket below, onto their own per-task network where the name `gitea`
+      # does not resolve. This address is what those containers are handed as
+      # the clone/API URL, so an internal one fails every checkout with
+      # "Could not resolve host: gitea" (confirmed live). Registration bakes
+      # it into /data/.runner, so ensure_runner() re-registers when it drifts
+      # from this value.
+      - GITEA_INSTANCE_URL=https://${GITEA_DOMAIN}
       # Only consumed on FIRST start, to register — see bootstrap-gitea.sh's
       # register_runner(). Once /data/.runner exists on the volume below, the
       # image's entrypoint skips registration and just runs the daemon; this
