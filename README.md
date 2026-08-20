@@ -139,7 +139,7 @@ Optional (defaults in parentheses):
 | `GITEA_URL` | **Gitea only** — base URL of the instance, e.g. `https://git.example.com`. Required. |
 | `GITEA_TOKEN` | **Gitea only** — personal access token. Required. |
 | `GITEA_OWNER` | **Gitea only** — user/org the repo is created under. Optional: unset, it's whichever account `GITEA_TOKEN` authenticates as. |
-| `GITEA_RUNNER_IP` | **Gitea only** — stable IP/CIDR of the self-hosted Actions runner, allow-listed once in Terraform. Required. |
+| `GITEA_RUNNER_IP` | **Gitea only** — the address the runner's *outbound* traffic comes from, allow-listed once in Terraform. Bare IP or CIDR; comma-separate for more than one. Required. Note this is the runner host's egress IP, **not** a reserved/floating IP attached to it — see [Gitea support](#gitea-support). |
 
 ## Application framework
 
@@ -339,6 +339,25 @@ GitHub-Actions-syntax-compatible either way. Set it once, before the first
 
 Required Gitea-only env: `GITEA_URL`, `GITEA_TOKEN`, `GITEA_RUNNER_IP` (`GITEA_OWNER` is optional — see the table above). All four are documented in `.env.example`.
 
+**`GITEA_RUNNER_IP` is an egress address, and a reserved IP is not one.**
+Attaching a DigitalOcean reserved (floating) IP to a droplet
+[doesn't replace or change its original public IP](https://docs.digitalocean.com/products/networking/reserved-ips/how-to/outbound-traffic/),
+and outbound connections keep using that original address unless you manually
+re-point the droplet's default gateway at its anchor IP. So the address Gitea
+is *served on* and the address its runner *connects out from* are two different
+things, and only the second one belongs in a firewall rule. Get it with:
+
+```bash
+ssh root@<your-gitea-host> 'curl -s https://api.ipify.org; echo'
+```
+
+`bootstrap-gitea.sh` prints the right value (the `gitea_egress_ip` Terraform
+output). It **changes when the droplet is replaced**, while the reserved IP
+deliberately doesn't — so after a `--replace-droplet`, update `GITEA_RUNNER_IP`
+and re-run `./bootstrap.sh` for each app to refresh its firewall. The symptom
+of a stale value is a deploy job whose `Configure SSH` step takes exactly 5s
+(`ssh-keyscan`'s timeout) and then fails on the first `ssh`/`scp`.
+
 **Minimum Gitea version: 1.24.** This is a hard floor, not a recommendation —
 it's the first release carrying both Actions API routes bootstrap depends on:
 
@@ -381,7 +400,7 @@ What it does: provisions one dedicated droplet (`infra-gitea/` — its own
 Terraform root, applied directly rather than copied into an app repo, since
 there's exactly one Gitea instance, not one per app) running Gitea and its
 Actions runner **co-located** — simplest and cheapest, and it makes
-`GITEA_RUNNER_IP` just that droplet's own IP, allow-listed once. Gitea's data
+`GITEA_RUNNER_IP` just that droplet's own egress IP, allow-listed once. Gitea's data
 (SQLite DB, git repo objects, Actions logs) lives on a separate persistent
 block-storage volume, not the droplet's root disk, so a droplet recreation
 (resize, image bump) doesn't lose it — but that volume is **not itself
@@ -398,7 +417,7 @@ end it prints exactly what to add to `.env` for `./bootstrap.sh`:
 GIT_PROVIDER=gitea
 GITEA_URL=https://git.example.com
 GITEA_TOKEN=...
-GITEA_RUNNER_IP=<droplet-ip>/32
+GITEA_RUNNER_IP=<droplet-egress-ip>/32
 ```
 
 Idempotent like `bootstrap.sh`: re-running detects what's already done (an

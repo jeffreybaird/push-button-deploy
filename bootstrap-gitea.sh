@@ -280,6 +280,8 @@ tf_gitea() {
     terraform -chdir="$GITEA_TF_DIR" apply -auto-approve -input=false
   fi
   GITEA_IP="$(terraform -chdir="$GITEA_TF_DIR" output -raw gitea_ip)"
+  # Distinct from GITEA_IP on purpose — see the gitea_egress_ip output comment.
+  GITEA_EGRESS_IP="$(terraform -chdir="$GITEA_TF_DIR" output -raw gitea_egress_ip 2>/dev/null || true)"
   GITEA_DOMAIN="$(terraform -chdir="$GITEA_TF_DIR" output -raw domain)"
   GITEA_URL="https://$GITEA_DOMAIN"
 }
@@ -521,9 +523,14 @@ confirm_summary() {
 GIT_PROVIDER=gitea
 GITEA_URL=$GITEA_URL
 GITEA_TOKEN=$GITEA_TOKEN
-GITEA_RUNNER_IP=$GITEA_IP/32
+GITEA_RUNNER_IP=${GITEA_EGRESS_IP:-$GITEA_IP}/32
 
 Admin login: $GITEA_URL  user: $GITEA_ADMIN_USER  password: (see $PASSWORD_CACHE)
+
+NOTE: GITEA_RUNNER_IP is the droplet's OUTBOUND address ($GITEA_EGRESS_IP), not
+the reserved IP Gitea is served on ($GITEA_IP) — a reserved IP is not what a
+droplet dials out from. It is what each app's firewall allows SSH from, so if
+you ever replace this droplet, re-run ./bootstrap.sh for each app to refresh it.
 EOF
 }
 

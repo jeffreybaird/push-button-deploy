@@ -803,6 +803,29 @@ detect_cidr() {
 }
 
 # Provision the droplet + firewall (reads persistent state via remote_state).
+# GITEA_RUNNER_IP -> the JSON list infra-app/firewall.tf wants. Accepts a
+# comma-separated list, because "the runner's IP" is not always one address: a
+# second runner, or a droplet reconfigured to egress over its reserved IP
+# (which is NOT the default — see infra-gitea/outputs.tf gitea_egress_ip),
+# both need more than one entry. A bare address is treated as a /32 rather
+# than rejected: `1.2.3.4` is what people type, and silently emitting invalid
+# HCL for it would surface as a confusing Terraform error instead.
+# Empty (or GitHub) yields [], which firewall.tf's `dynamic` block reads as
+# "add no rule at all".
+gitea_runner_cidr_json() {
+  is_gitea || { printf '[]'; return 0; }
+  local out="" entry
+  local IFS=,
+  for entry in $GITEA_RUNNER_IP; do
+    entry="$(printf '%s' "$entry" | tr -d '[:space:]')"
+    [ -n "$entry" ] || continue
+    case "$entry" in *[!0-9./]*) fail "GITEA_RUNNER_IP has a non-IPv4 entry: '$entry' (expected e.g. 203.0.113.9 or 203.0.113.9/32, comma-separated for more than one)" ;; esac
+    case "$entry" in *"/"*) ;; *) entry="$entry/32" ;; esac
+    out="$out${out:+,}\"$entry\""
+  done
+  printf '[%s]' "$out"
+}
+
 tf_app() {
   export TF_VAR_do_token="$DIGITALOCEAN_ACCESS_TOKEN"
   export TF_VAR_ssh_key_name="$SSH_KEY_NAME"
@@ -813,7 +836,7 @@ tf_app() {
   # once, rather than punching a per-run firewall hole the way the GitHub-
   # hosted-runner path does (see app/.gitea/workflows/*.yml). Empty on the
   # GitHub path — zero behavior change for existing deploys.
-  export TF_VAR_gitea_runner_cidr="$( is_gitea && printf '["%s"]' "$GITEA_RUNNER_IP" || printf '[]' )"
+  export TF_VAR_gitea_runner_cidr="$(gitea_runner_cidr_json)"
 
   log "terraform: infra/app"
   backend_init "$APP_TF_DIR"
