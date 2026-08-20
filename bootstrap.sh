@@ -57,6 +57,18 @@
 #   DOCR_REGISTRY  name for a new DO registry if none exists. Default: PROJECT_NAME.
 #   STATE_BUCKET   Spaces bucket for Terraform state. Default: <PROJECT_NAME>-tfstate.
 #   SPACES_REGION  region for the state bucket (must offer Spaces). Default: REGION.
+#   GIT_PROVIDER   'github' (default) or 'gitea' (self-hosted). See GITEA_* below.
+#     GITEA_URL         base URL of the instance, e.g. https://git.example.com.
+#                       Required when GIT_PROVIDER=gitea.
+#     GITEA_TOKEN       personal access token (repo create/delete, Actions
+#                       secrets/variables). Required when GIT_PROVIDER=gitea.
+#     GITEA_OWNER       user or org the repo is created under. Optional — unset,
+#                       it's whichever account GITEA_TOKEN authenticates as (the
+#                       same implicit-current-user behavior `gh` gives GitHub).
+#     GITEA_RUNNER_IP   stable IP/CIDR of the self-hosted Actions runner,
+#                       allow-listed once in Terraform (infra-app/firewall.tf)
+#                       instead of the GitHub path's per-run firewall punch.
+#                       Required when GIT_PROVIDER=gitea.
 #
 # The app owns its infrastructure: the Terraform roots in this repo are
 # templates, copied once into <app_dir>/infra/{state,persistent,app} and applied
@@ -68,12 +80,12 @@
 # Required environment (the deploy's single source of truth) — export in the
 # shell OR put in a gitignored .env beside this script (auto-sourced, see
 # .env.example):
-#   DIGITALOCEAN_ACCESS_TOKEN   DO API token (terraform, doctl, DOCR, gh secret)
+#   DIGITALOCEAN_ACCESS_TOKEN   DO API token (terraform, doctl, DOCR, CI secret)
 #   DNSIMPLE_TOKEN              DNSimple API token (terraform)
 #   DNSIMPLE_ACCOUNT           DNSimple account id (terraform)
 #   DNS_ZONE                   apex zone, e.g. lennonbaird.com
 #   SSH_KEY_NAME               name of an SSH key already uploaded to DO
-#   SSH_PRIVATE_KEY            path to the matching private key (becomes a gh secret)
+#   SSH_PRIVATE_KEY            path to the matching private key (becomes a CI secret)
 #   SPACES_ACCESS_KEY_ID       Spaces access key (Terraform state bucket, story 7.4)
 #   SPACES_SECRET_ACCESS_KEY   Spaces secret key
 #
@@ -139,7 +151,13 @@ is_static()  { is_zola; }
 # back from Terraform after the apply and is empty when staging is off — which is
 # also what an app whose infra/ copy predates this feature reads as, so it simply
 # keeps deploying production and nothing breaks.
-wants_staging()   { [ "${ENABLE_STAGING:-true}" = true ] && ! is_static; }
+#
+# GITHUB ONLY, for now: the staging workflow exists as a template under
+# app/.github/workflows/ and has no app/.gitea/workflows/ counterpart, so a Gitea
+# app has nothing to run a PR environment WITH. Provisioning the staging name and
+# database anyway would bill for a DNS record and a database no pipeline ever
+# touches, so the whole feature is off on that path until the workflow is ported.
+wants_staging()   { [ "${ENABLE_STAGING:-true}" = true ] && ! is_static && is_github; }
 staging_enabled() { [ -n "${STAGING_DOMAIN:-}" ]; }
 
 # Tenant mode: deploy onto a droplet another app already owns (--host, or
@@ -154,6 +172,13 @@ staging_enabled() { [ -n "${STAGING_DOMAIN:-}" ]; }
 # are isolated from each other without any of that.
 HOST_APP_DIR="${HOST_APP_DIR:-}"
 is_tenant() { [ -n "$HOST_APP_DIR" ]; }
+
+# Code-hosting + CI/CD provider selector. 'github' (default) drives every step
+# with the `gh` CLI and GitHub Actions, unchanged. 'gitea' talks to a
+# self-hosted Gitea instance's REST API instead (scripts/provider.sh, sourced
+# below after .env — same reasoning as FRAMEWORK/DATABASE_BACKEND: it applies
+# a default/coercion, so it must not resolve before a .env value could win).
+# is_github/is_gitea are defined there, next to the resolution.
 
 # Numbered step banner — the heartbeat of a run. If output stops after a step
 # banner, THAT step is where it stopped.
@@ -271,6 +296,15 @@ case "$ENABLE_STAGING" in
   *) fail "ENABLE_STAGING must be 'true' or 'false' (got '$ENABLE_STAGING')" ;;
 esac
 
+# shellcheck source=scripts/provider.sh
+. "$SCRIPT_DIR/scripts/provider.sh"
+
+# Staging has no Gitea workflow yet (see wants_staging). Silently dropping an
+# explicit request for it would be the one case where the user is owed a word.
+if [ "$ENABLE_STAGING" = true ] && is_gitea; then
+  warn "GIT_PROVIDER=gitea has no staging workflow yet — no PR environment will be built, and no staging DNS name or database will be provisioned"
+fi
+
 # Terraform roots. The ones in THIS repo are templates: every app gets its own
 # copy under <app_dir>/infra/ (scripts/sync-infra.sh) and Terraform runs from
 # that copy, so an app's infrastructure is versioned with the app and can be
@@ -299,12 +333,20 @@ mkdir -p "$TF_PLUGIN_CACHE_DIR"
 # Framework-specific local tooling: Phoenix generates + prepares the app with
 # `mix`; Sinatra scaffolds with bash and only needs `openssl` (fresh session
 # secret) — the Ruby build itself happens in Docker/CI, not locally.
-REQUIRED_BINS="git terraform doctl gh curl ssh scp dig"
+REQUIRED_BINS="git terraform doctl curl ssh scp dig"
 # Zola needs nothing extra locally: the scaffold is plain bash and the build runs
 # in CI, so there is no `zola` binary to require.
 if is_sinatra; then REQUIRED_BINS="$REQUIRED_BINS openssl"
 elif is_phoenix; then REQUIRED_BINS="$REQUIRED_BINS mix"; fi
+# gh drives the GitHub path end to end; the Gitea path talks REST over curl
+# (already required) and leans on jq for safe JSON bodies + run-status parsing.
+if is_github; then REQUIRED_BINS="$REQUIRED_BINS gh"
+elif is_gitea; then REQUIRED_BINS="$REQUIRED_BINS jq"; fi
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
+# GITEA_OWNER is deliberately NOT required: unset, the repo is created under
+# whichever account GITEA_TOKEN authenticates as (see ci_auth_check) — the same
+# implicit-current-user behavior gh already gives the GitHub path.
+if is_gitea; then REQUIRED_ENV="$REQUIRED_ENV GITEA_URL GITEA_TOKEN GITEA_RUNNER_IP"; fi
 
 # ---- story 6.1: preflight ----------------------------------------------------
 # Checks run in order and fail fast, naming the FIRST gap (AC 6.1).
@@ -368,8 +410,7 @@ preflight() {
   doctl account get >/dev/null 2>&1 \
     || fail "doctl not authenticated — run: doctl auth init"
 
-  gh auth status >/dev/null 2>&1 \
-    || fail "gh not authenticated — run: gh auth login"
+  ci_auth_check
 
   # The SSH key the droplet will trust must already exist in the DO account.
   # Capture the listing first: a transient API failure must not masquerade as
@@ -504,111 +545,12 @@ sync_infra() {
   [ -d "$STATE_TF_DIR" ] || fail "sync-infra did not create $STATE_TF_DIR"
 }
 
-# Ensure the Spaces state bucket exists (story 7.4). This tiny root keeps
-# LOCAL state on purpose — the bucket can't store the state that creates it.
-ensure_state_bucket() {
-  # The s3 backend + remote_state reads authenticate with the AWS env names.
-  export AWS_ACCESS_KEY_ID="$SPACES_ACCESS_KEY_ID"
-  export AWS_SECRET_ACCESS_KEY="$SPACES_SECRET_ACCESS_KEY"
-
-  STATE_REGION="${SPACES_REGION:-$REGION}"
-  STATE_BUCKET="${STATE_BUCKET:-${PROJECT_NAME}-tfstate}"
-  STATE_ENDPOINT="https://${STATE_REGION}.digitaloceanspaces.com"
-
-  export TF_VAR_do_token="$DIGITALOCEAN_ACCESS_TOKEN"
-  export TF_VAR_spaces_access_id="$SPACES_ACCESS_KEY_ID"
-  export TF_VAR_spaces_secret_key="$SPACES_SECRET_ACCESS_KEY"
-  export TF_VAR_bucket_name="$STATE_BUCKET"
-  export TF_VAR_region="$STATE_REGION"
-
-  log "terraform: infra-state (Spaces bucket '$STATE_BUCKET' in $STATE_REGION)"
-  log "init infra-state (output in $LOG_FILE)..."
-  quiet terraform -chdir="$STATE_TF_DIR" init -input=false
-
-  # This root keeps LOCAL state (the bucket can't store the state that creates
-  # it) — per-project workspaces, or a second project silently inherits the
-  # first project's bucket in the shared state file.
-  quiet terraform -chdir="$STATE_TF_DIR" workspace select -or-create "$PROJECT_NAME"
-
-  # Adopt a bucket that exists but isn't in this workspace's state yet (e.g.
-  # created by the direct-API fallback below, or a previous half-run) — apply
-  # would otherwise die on BucketAlreadyExists.
-  if ! terraform -chdir="$STATE_TF_DIR" state list 2>/dev/null | grep -q . && bucket_visible; then
-    log "importing existing bucket '$STATE_BUCKET' into infra-state ($PROJECT_NAME workspace)"
-    quiet terraform -chdir="$STATE_TF_DIR" import -input=false \
-      digitalocean_spaces_bucket.tfstate "${STATE_REGION},${STATE_BUCKET}"
-  fi
-
-  terraform -chdir="$STATE_TF_DIR" apply -auto-approve -input=false
-
-  # The bucket must answer the S3 API before any backend references it. An
-  # unsigned request to a private bucket returns 403 once it exists, 404 while
-  # it doesn't. Two failure modes feed this: plain propagation lag, and a DO
-  # provider bug observed in the wild where apply reports the bucket created
-  # (and refreshes cleanly!) while the S3 API keeps 404ing — for that one we
-  # fall back to creating the bucket via the S3 API directly.
-  if ! wait_bucket_visible 18; then
-    warn "terraform reports bucket '$STATE_BUCKET' but the S3 API 404s it — creating it via the S3 API directly"
-    quiet curl -fsS -o /dev/null --max-time 15 -X PUT \
-      --aws-sigv4 "aws:amz:${STATE_REGION}:s3" \
-      --user "${SPACES_ACCESS_KEY_ID}:${SPACES_SECRET_ACCESS_KEY}" \
-      "${STATE_ENDPOINT}/${STATE_BUCKET}/"
-    printf '<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>' \
-      | quiet curl -fsS -o /dev/null --max-time 15 -X PUT \
-          --aws-sigv4 "aws:amz:${STATE_REGION}:s3" \
-          --user "${SPACES_ACCESS_KEY_ID}:${SPACES_SECRET_ACCESS_KEY}" \
-          -T - "${STATE_ENDPOINT}/${STATE_BUCKET}/?versioning"
-    wait_bucket_visible 6 \
-      || fail "state bucket $STATE_BUCKET still not visible after direct creation — check Spaces status, then re-run"
-  fi
-  log "state bucket ready: $STATE_BUCKET"
-}
-
-# True once the bucket answers the S3 API (200/403 = exists, 404 = not yet).
-bucket_visible() {
-  local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-    "https://${STATE_BUCKET}.${STATE_REGION}.digitaloceanspaces.com/" || true)"
-  [ "$code" = "200" ] || [ "$code" = "403" ]
-}
-
-wait_bucket_visible() { # $1: attempts, 5s apart
-  local i
-  for i in $(seq 1 "$1"); do
-    bucket_visible && return 0
-    log "  bucket not visible yet (attempt $i/$1)"
-    sleep 5
-  done
-  return 1
-}
-
-# Point a root at the Spaces backend and init. -force-copy migrates any
-# existing local state into the bucket on first contact (idempotent after).
-# $2 (optional): state key, for roots that don't pin one in backend.tf. The host
-# roots each own a fixed key because they are alone in their bucket; tenants
-# share the HOST's bucket, so every tenant needs a key of its own.
-backend_init() {
-  # A cached backend from a previous project may point at a bucket that no
-  # longer exists (torn down) — init would try to migrate state OUT of it and
-  # die on the 404. If the cached bucket differs from the current one, drop
-  # the cache and start clean.
-  local cached
-  cached="$(sed -nE 's/.*"bucket": ?"([^"]+)".*/\1/p' "$1/.terraform/terraform.tfstate" 2>/dev/null | head -1 || true)"
-  if [ -n "$cached" ] && [ "$cached" != "$STATE_BUCKET" ]; then
-    log "backend: cached bucket '$cached' != '$STATE_BUCKET' — reinitializing $(basename "$1")"
-    rm -rf "$1/.terraform"
-  fi
-  cat > "$1/backend.hcl" <<EOF
-bucket    = "$STATE_BUCKET"
-endpoints = { s3 = "$STATE_ENDPOINT" }
-EOF
-  if [ -n "${2:-}" ]; then
-    printf 'key       = "%s"\n' "$2" >> "$1/backend.hcl"
-  fi
-  log "backend: init $(basename "$1") against $STATE_BUCKET (may download providers; output in $LOG_FILE)..."
-  quiet terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl
-  log "backend: $(basename "$1") initialized"
-}
+# Spaces state-bucket bootstrap (ensure_state_bucket, bucket_visible,
+# wait_bucket_visible, backend_init) — factored into scripts/tfstate.sh so
+# bootstrap-gitea.sh can share it rather than duplicate the fallback-creation
+# logic (see that file's header comment for why it's worth sharing).
+# shellcheck source=scripts/tfstate.sh
+. "$SCRIPT_DIR/scripts/tfstate.sh"
 
 # Read the staging outputs back from a root that was just applied.
 #
@@ -861,12 +803,40 @@ detect_cidr() {
 }
 
 # Provision the droplet + firewall (reads persistent state via remote_state).
+# GITEA_RUNNER_IP -> the JSON list infra-app/firewall.tf wants. Accepts a
+# comma-separated list, because "the runner's IP" is not always one address: a
+# second runner, or a droplet reconfigured to egress over its reserved IP
+# (which is NOT the default — see infra-gitea/outputs.tf gitea_egress_ip),
+# both need more than one entry. A bare address is treated as a /32 rather
+# than rejected: `1.2.3.4` is what people type, and silently emitting invalid
+# HCL for it would surface as a confusing Terraform error instead.
+# Empty (or GitHub) yields [], which firewall.tf's `dynamic` block reads as
+# "add no rule at all".
+gitea_runner_cidr_json() {
+  is_gitea || { printf '[]'; return 0; }
+  local out="" entry
+  local IFS=,
+  for entry in $GITEA_RUNNER_IP; do
+    entry="$(printf '%s' "$entry" | tr -d '[:space:]')"
+    [ -n "$entry" ] || continue
+    case "$entry" in *[!0-9./]*) fail "GITEA_RUNNER_IP has a non-IPv4 entry: '$entry' (expected e.g. 203.0.113.9 or 203.0.113.9/32, comma-separated for more than one)" ;; esac
+    case "$entry" in *"/"*) ;; *) entry="$entry/32" ;; esac
+    out="$out${out:+,}\"$entry\""
+  done
+  printf '[%s]' "$out"
+}
+
 tf_app() {
   export TF_VAR_do_token="$DIGITALOCEAN_ACCESS_TOKEN"
   export TF_VAR_ssh_key_name="$SSH_KEY_NAME"
   export TF_VAR_ssh_cidrs="$SSH_CIDRS_JSON"
   export TF_VAR_state_bucket="$STATE_BUCKET"
   export TF_VAR_state_endpoint="$STATE_ENDPOINT"
+  # Gitea's self-hosted Actions runner has a stable IP: allow-list it here,
+  # once, rather than punching a per-run firewall hole the way the GitHub-
+  # hosted-runner path does (see app/.gitea/workflows/*.yml). Empty on the
+  # GitHub path — zero behavior change for existing deploys.
+  export TF_VAR_gitea_runner_cidr="$(gitea_runner_cidr_json)"
 
   log "terraform: infra/app"
   backend_init "$APP_TF_DIR"
@@ -1037,6 +1007,16 @@ copy_deploy_files() {
 # environment's own volume, and the archive-to-Spaces loop is switched off. The
 # Postgres stack needs neither — it has no such services, and its staging
 # isolation is a separate database in the same cluster.
+# Copy the staging workflow, but only from a template set that HAS one. Keeps
+# prep_app's two call sites identical across providers instead of making each of
+# them re-derive which provider ships what.
+copy_staging_workflow() { # $1 template basename, $2 template dir, $3 dest dir
+  local tpl="$SCRIPT_DIR/$2/$1"
+  wants_staging || return 0
+  [ -f "$tpl" ] || return 0
+  cp "$tpl" "$APP_DIR/$3/staging.yml"
+}
+
 copy_staging_files() {
   wants_staging || return 0
   cp "$SCRIPT_DIR/deploy/compose.staging.yaml"   "$APP_DIR/deploy/compose.staging.yaml"
@@ -1046,15 +1026,24 @@ copy_staging_files() {
 # Generate release files (Phoenix), enforce DB TLS, drop in the pipeline files.
 # Order matters: gen.release BEFORE copying our Dockerfile (it writes its own).
 prep_app() {
+  # Workflow files live at .github/workflows/ for GitHub Actions or
+  # .gitea/workflows/ for Gitea Actions — same destination BASENAME either way
+  # (deploy.yml/rollback.yml), just a different directory and a different
+  # source template set (app/.gitea/workflows/ drops the GitHub-runner-specific
+  # firewall hole-punch steps; see that directory's README note).
+  local wf_dir tpl_wf_dir
+  if is_gitea; then wf_dir=".gitea/workflows"; tpl_wf_dir="app/.gitea/workflows"
+  else              wf_dir=".github/workflows"; tpl_wf_dir="app/.github/workflows"; fi
+
   if is_zola; then
     # Nothing to compile, no image to build, no release task: a static site's
     # whole pipeline is `zola build` plus a file copy. No Dockerfile and no
     # compose.yaml are written on purpose — this app runs no containers of its
     # own; the only container involved is the droplet's shared Caddy.
     log "preparing site: pipeline files (Zola)"
-    mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
-    cp "$SCRIPT_DIR/app/.github/workflows/deploy.zola.yml"   "$APP_DIR/.github/workflows/deploy.yml"
-    cp "$SCRIPT_DIR/app/.github/workflows/rollback.zola.yml" "$APP_DIR/.github/workflows/rollback.yml"
+    mkdir -p "$APP_DIR/$wf_dir" "$APP_DIR/deploy"
+    cp "$SCRIPT_DIR/$tpl_wf_dir/deploy.zola.yml"   "$APP_DIR/$wf_dir/deploy.yml"
+    cp "$SCRIPT_DIR/$tpl_wf_dir/rollback.zola.yml" "$APP_DIR/$wf_dir/rollback.yml"
     copy_deploy_files
     return 0
   fi
@@ -1064,10 +1053,10 @@ prep_app() {
     cp "$SCRIPT_DIR/app/Dockerfile.ruby"    "$APP_DIR/Dockerfile"
     cp "$SCRIPT_DIR/app/.dockerignore.ruby" "$APP_DIR/.dockerignore"
     pin_ruby
-    mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
-    cp "$SCRIPT_DIR/app/.github/workflows/deploy.ruby.yml"   "$APP_DIR/.github/workflows/deploy.yml"
-    cp "$SCRIPT_DIR/app/.github/workflows/rollback.ruby.yml" "$APP_DIR/.github/workflows/rollback.yml"
-    cp "$SCRIPT_DIR/app/.github/workflows/staging.ruby.yml"  "$APP_DIR/.github/workflows/staging.yml"
+    mkdir -p "$APP_DIR/$wf_dir" "$APP_DIR/deploy"
+    cp "$SCRIPT_DIR/$tpl_wf_dir/deploy.ruby.yml"   "$APP_DIR/$wf_dir/deploy.yml"
+    cp "$SCRIPT_DIR/$tpl_wf_dir/rollback.ruby.yml" "$APP_DIR/$wf_dir/rollback.yml"
+    copy_staging_workflow staging.ruby.yml "$tpl_wf_dir" "$wf_dir"
     copy_deploy_files
     # Sinatra is SQLite-only: Litestream sidecar + restore, no TLS to patch.
     cp "$SCRIPT_DIR/deploy/compose.sinatra.yaml" "$APP_DIR/deploy/compose.yaml"
@@ -1084,10 +1073,10 @@ prep_app() {
   cp "$SCRIPT_DIR/app/Dockerfile"     "$APP_DIR/Dockerfile"
   pin_toolchain
   cp "$SCRIPT_DIR/app/.dockerignore"  "$APP_DIR/.dockerignore"
-  mkdir -p "$APP_DIR/.github/workflows" "$APP_DIR/deploy"
-  cp "$SCRIPT_DIR/app/.github/workflows/deploy.yml"   "$APP_DIR/.github/workflows/deploy.yml"
-  cp "$SCRIPT_DIR/app/.github/workflows/rollback.yml" "$APP_DIR/.github/workflows/rollback.yml"
-  cp "$SCRIPT_DIR/app/.github/workflows/staging.yml"  "$APP_DIR/.github/workflows/staging.yml"
+  mkdir -p "$APP_DIR/$wf_dir" "$APP_DIR/deploy"
+  cp "$SCRIPT_DIR/$tpl_wf_dir/deploy.yml"   "$APP_DIR/$wf_dir/deploy.yml"
+  cp "$SCRIPT_DIR/$tpl_wf_dir/rollback.yml" "$APP_DIR/$wf_dir/rollback.yml"
+  copy_staging_workflow staging.yml "$tpl_wf_dir" "$wf_dir"
   copy_deploy_files
   if is_sqlite; then
     # SQLite compose carries the Litestream sidecar + restore; no managed DB
@@ -1102,55 +1091,81 @@ prep_app() {
   "$SCRIPT_DIR/scripts/ensure-release-task.sh" "$APP_DIR"
 }
 
-# Ensure the app dir is a git repo with a GitHub origin (create private if
+# Ensure the app dir is a git repo with a code-host origin (create private if
 # absent), and push an initial commit of the app as-generated. The pipeline
 # files land in a SEPARATE commit later (commit_push), so history separates
 # "what the generator made" from "what the pipeline wired in".
 ensure_repo() {
   ( cd "$APP_DIR"
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 || git init -q -b main
-    if git remote get-url origin >/dev/null 2>&1 || gh repo view >/dev/null 2>&1; then
-      :
+
+    # Ask the PROVIDER whether the repo exists — never the local remote. An
+    # origin outlives the repo it points at (deleted by hand, or the whole
+    # instance rebuilt), so treating "origin is configured" as proof of
+    # existence skipped creation and left the push below to die on a 404.
+    if repo_exists; then
+      log "repo '$APP_NAME' already exists on the code host"
     else
-      log "creating private GitHub repo '$APP_NAME'"
-      gh repo create "$APP_NAME" --source=. --private --remote=origin
+      # Any origin at this point references something that is gone: stale by
+      # definition. Drop it so repo_create can wire a correct one.
+      if git remote get-url origin >/dev/null 2>&1; then
+        warn "origin points at a repo that no longer exists — recreating it"
+        git remote remove origin
+      fi
+      log "creating private $( is_gitea && printf Gitea || printf GitHub ) repo '$APP_NAME'"
+      repo_create
+    fi
+
+    # repo_create wires origin, but only on the path where it did the
+    # creating. A repo that already existed while the local remote did not
+    # (fresh directory, or a hand-run `git remote remove origin`) needs one.
+    if ! git remote get-url origin >/dev/null 2>&1; then
+      remote_url="$(repo_remote_url)"
+      [ -n "$remote_url" ] \
+        || fail "repo '$APP_NAME' exists on the code host but its clone URL could not be determined"
+      log "wiring origin -> $remote_url"
+      git remote add origin "$remote_url"
     fi
     if ! git rev-parse HEAD >/dev/null 2>&1; then
       log "initial commit (app as generated)"
       git add -A
       git commit -q -m 'initial commit'
     fi
-    git push -q -u origin main
+    provider_git_push -q -u origin main
   )
 }
 
 # Seed CI secrets/vars. Secrets piped via stdin so ecto:// values aren't mangled.
-seed_github() {
-  log "seeding GitHub secrets + variables"
+seed_ci() {
+  log "seeding CI secrets + variables"
   ( cd "$APP_DIR"
-    printf '%s' "$DIGITALOCEAN_ACCESS_TOKEN" | gh secret set DIGITALOCEAN_ACCESS_TOKEN
-    gh secret set SSH_PRIVATE_KEY < "$SSH_PRIVATE_KEY"
+    printf '%s' "$DIGITALOCEAN_ACCESS_TOKEN" | secret_set DIGITALOCEAN_ACCESS_TOKEN
+    secret_set SSH_PRIVATE_KEY < "$SSH_PRIVATE_KEY"
     # Session/signing secret. Phoenix ships a generator; Sinatra reads it as the
     # Rack session secret, so any 64-byte hex works (openssl). A static site has
     # no session, no cookie and no server-side code — it gets no secret at all.
     if is_static; then
       :
     elif is_sinatra; then
-      openssl rand -hex 64                     | gh secret set SECRET_KEY_BASE
+      openssl rand -hex 64                     | secret_set SECRET_KEY_BASE
     else
-      mix phx.gen.secret                       | gh secret set SECRET_KEY_BASE
+      mix phx.gen.secret                       | secret_set SECRET_KEY_BASE
     fi
     # A static site pushes no image, so it needs no registry (and burns no
     # repository against the registry's tier limit).
-    is_static || gh variable set DOCR_REGISTRY -b "$REG"
-    gh variable set DOMAIN        -b "$DOMAIN"
-    gh variable set DROPLET_HOST  -b "$APP_IP"
-    gh variable set FIREWALL_ID   -b "$FW_ID"
+    is_static || var_set DOCR_REGISTRY "$REG"
+    var_set DOMAIN        "$DOMAIN"
+    var_set DROPLET_HOST  "$APP_IP"
+    # Gitea's runner IP is statically allow-listed in Terraform
+    # (infra-app/firewall.tf, gitea_runner_cidr) instead of punched per-run, so
+    # the Gitea workflow templates never reference FIREWALL_ID — seeding it
+    # would just be unused config.
+    is_gitea || var_set FIREWALL_ID "$FW_ID"
     # Keeps this app's stack directory, compose project, Caddy site file and
     # network aliases distinct from every other app on the same droplet.
-    gh variable set APP_SLUG      -b "$APP_SLUG"
+    var_set APP_SLUG      "$APP_SLUG"
     # deploy.yml branches its .env / file delivery on this.
-    gh variable set DATABASE_BACKEND -b "$DATABASE_BACKEND"
+    var_set DATABASE_BACKEND "$DATABASE_BACKEND"
 
     if is_static; then
       # No .env is written for a static site: nothing it ships is secret.
@@ -1158,16 +1173,16 @@ seed_github() {
     elif is_sqlite; then
       # SQLite: no DB URL/CA. The Spaces keypair (Litestream replica auth) and the
       # replica target travel as secrets/vars; deploy.yml writes them into .env.
-      gh variable set DATABASE_PATH   -b "$DATABASE_PATH"
-      printf '%s' "$SPACES_ACCESS_KEY_ID"     | gh secret set LITESTREAM_ACCESS_KEY_ID
-      printf '%s' "$SPACES_SECRET_ACCESS_KEY" | gh secret set LITESTREAM_SECRET_ACCESS_KEY
-      gh variable set BACKUP_BUCKET   -b "$BACKUP_BUCKET"
-      gh variable set BACKUP_ENDPOINT -b "$BACKUP_ENDPOINT"
-      gh variable set BACKUP_REGION   -b "$BACKUP_REGION"
-      gh variable set BACKUP_PATH     -b "$BACKUP_PATH"
+      var_set DATABASE_PATH   "$DATABASE_PATH"
+      printf '%s' "$SPACES_ACCESS_KEY_ID"     | secret_set LITESTREAM_ACCESS_KEY_ID
+      printf '%s' "$SPACES_SECRET_ACCESS_KEY" | secret_set LITESTREAM_SECRET_ACCESS_KEY
+      var_set BACKUP_BUCKET   "$BACKUP_BUCKET"
+      var_set BACKUP_ENDPOINT "$BACKUP_ENDPOINT"
+      var_set BACKUP_REGION   "$BACKUP_REGION"
+      var_set BACKUP_PATH     "$BACKUP_PATH"
     else
-      printf '%s' "$DATABASE_URL"               | gh secret set DATABASE_URL
-      printf '%s' "$DATABASE_CA_CERT"           | gh secret set DATABASE_CA_CERT
+      printf '%s' "$DATABASE_URL"               | secret_set DATABASE_URL
+      printf '%s' "$DATABASE_CA_CERT"           | secret_set DATABASE_CA_CERT
     fi
 
     # ---- PR staging environment ------------------------------------------------
@@ -1177,7 +1192,7 @@ seed_github() {
     # is derived from APP_SLUG in the workflow, and the staging stack reuses
     # DATABASE_PATH, DOCR_REGISTRY, DROPLET_HOST and FIREWALL_ID.
     if staging_enabled; then
-      gh variable set STAGING_DOMAIN -b "$STAGING_DOMAIN"
+      var_set STAGING_DOMAIN "$STAGING_DOMAIN"
       # No staging signing secret is seeded here on purpose: staging.yml derives
       # one from SECRET_KEY_BASE at deploy time (one-way, fixed label), so the
       # environment signs with a key that is not production's without anyone
@@ -1186,14 +1201,14 @@ seed_github() {
       # Postgres: the staging environment's own database in the same cluster, so
       # a PR's migrations can never run against production's.
       if [ -n "${STAGING_DATABASE_URL:-}" ]; then
-        printf '%s' "$STAGING_DATABASE_URL" | gh secret set STAGING_DATABASE_URL
+        printf '%s' "$STAGING_DATABASE_URL" | secret_set STAGING_DATABASE_URL
       fi
     else
       # Staging was turned off (or never on). The variable is the workflow's only
       # switch, so leaving a stale one behind would keep deploying to a name
       # Terraform has just removed from DNS. Absent already? Then there is
       # nothing to remove and the failure is expected.
-      gh variable delete STAGING_DOMAIN >/dev/null 2>&1 || true
+      var_delete STAGING_DOMAIN
     fi
   )
 }
@@ -1205,18 +1220,20 @@ seed_github() {
 # nothing and so pushes nothing, which fires no `push` event and starts no
 # deploy. Left there, the next step would poll the PREVIOUS run and report its
 # already-fixed failure as this run's verdict, and no amount of re-running could
-# ever go green. So: when nothing reached GitHub, dispatch the workflow.
+# ever go green. So: when nothing reached the code host, dispatch the workflow.
 commit_push() {
   log "commit + push (triggers first deploy via CI)"
   local before after
   before="$(git -C "$APP_DIR" rev-parse origin/main 2>/dev/null || echo none)"
-  git -C "$APP_DIR" add -A
-  if git -C "$APP_DIR" diff --cached --quiet; then
-    log "nothing new to commit"
-  else
-    git -C "$APP_DIR" commit -q -m "chore: wire push-button deploy pipeline"
-  fi
-  git -C "$APP_DIR" push -u origin main
+  ( cd "$APP_DIR"
+    git add -A
+    if git diff --cached --quiet; then
+      log "nothing new to commit"
+    else
+      git commit -q -m "chore: wire push-button deploy pipeline"
+    fi
+    provider_git_push -u origin main
+  )
   after="$(git -C "$APP_DIR" rev-parse origin/main)"
   HEAD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
 
@@ -1231,8 +1248,7 @@ commit_push() {
   case "$(run_state)" in
     ""|completed*)
       log "nothing pushed — dispatching deploy.yml so this run redeploys main"
-      ( cd "$APP_DIR" && gh workflow run deploy.yml --ref main ) \
-        || fail "could not dispatch deploy.yml (gh workflow run) — trigger it by hand: gh workflow run deploy.yml --ref main"
+      ci_dispatch_deploy
       DEPLOY_TRIGGERED=1 ;;
     *)
       log "a deploy for this commit is already running — waiting on it"
@@ -1243,19 +1259,15 @@ commit_push() {
 # ---- story 6.3: confirm liveness ----------------------------------------------
 
 # The newest deploy run for the commit we just pushed, as "id status conclusion".
-# Empty until GitHub registers a run.
+# Empty until the provider registers a run. (ci_run_row, scripts/provider.sh)
 run_row() {
-  ( cd "$APP_DIR" \
-    && gh run list --workflow deploy.yml --commit "$HEAD_SHA" --limit 1 \
-         --json databaseId,status,conclusion \
-         --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"' 2>/dev/null
-  ) || true
+  ci_run_row
 }
 
 latest_run_id() { local r; r="$(run_row)"; printf '%s' "${r%% *}"; }
 
-# The state of OUR deploy, as "status conclusion". GitHub takes a few seconds to
-# register a freshly pushed or dispatched run, and in that window the newest run
+# The state of OUR deploy, as "status conclusion". A provider takes a few seconds
+# to register a freshly pushed or dispatched run, and in that window the newest run
 # for this commit is still the previous attempt — whose "completed failure"
 # would otherwise end the bootstrap instantly with a verdict about a problem
 # that has already been fixed. Report "not registered yet" (empty) until the id
@@ -1278,9 +1290,8 @@ run_state() {
 diagnose() {
   {
     printf '\nbootstrap: NOT LIVE — %s\n' "$1"
-    printf '\n--- 1. GitHub Actions (deploy workflow) ---\n'
-    ( cd "$APP_DIR" && gh run list --workflow deploy.yml --limit 3 ) \
-      || echo "(gh run list failed)"
+    printf '\n--- 1. CI Actions (deploy workflow) ---\n'
+    ci_diagnose_dump
     printf '\n--- 2. DNS: dig +short %s (expect %s) ---\n' "$DOMAIN" "$APP_IP"
     dig +short "$DOMAIN" || true
     printf '\n--- 3. Caddy logs (last 40 lines) — SHARED across every app on this droplet ---\n'
@@ -1298,7 +1309,7 @@ diagnose() {
     ssh -i "$SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
       root@"$APP_IP" "$probe; cat /root/caddy/sites/$APP_SLUG.caddy" 2>&1 \
       || echo "(app stack not on the droplet yet — the deploy has not reached it)"
-    printf '\nnext: gh run watch (in %s); after a fix, re-run ./bootstrap.sh (idempotent)\n' "$APP_DIR"
+    printf '\nnext: %s; after a fix, re-run ./bootstrap.sh (idempotent)\n' "$(ci_watch_hint)"
   } >&2
   exit 1
 }
@@ -1318,14 +1329,14 @@ confirm_live() {
     state="$(run_state)"
     case "$state" in
       "completed failure"|"completed cancelled"|"completed timed_out")
-        diagnose "deploy FAILED — CI run concluded '${state#completed }'. See run log: gh run view --log-failed" ;;
+        diagnose "deploy FAILED — CI run concluded '${state#completed }'. See run log: $(ci_log_hint)" ;;
     esac
     [ "$waited" -lt "$timeout" ] \
       || case "$state" in
            "completed success")
              diagnose "deploy succeeded but HTTPS not answering after ${timeout}s — likely DNS propagation or Let's Encrypt issuance; see dig/Caddy below" ;;
            *)
-             diagnose "not ready yet (CI still running after ${timeout}s — NOT a failure). Keep watching: gh run watch" ;;
+             diagnose "not ready yet (CI still running after ${timeout}s — NOT a failure). Keep watching: $(ci_watch_hint)" ;;
          esac
     # heartbeat every 60s so a long CI build never reads as a hang
     if [ $((waited % 60)) -eq 0 ] && [ "$waited" -gt 0 ]; then
@@ -1342,7 +1353,7 @@ provision() {
   step "preflight checks";                          preflight
   step "ensure app exists (generate if missing)";   ensure_app
   step "parse app metadata";                        parse_meta
-  step "GitHub repo + initial commit";              ensure_repo
+  step "code host repo + initial commit";           ensure_repo
   step "sync Terraform roots into the app (infra/)"; sync_infra
 
   if is_tenant; then
@@ -1363,7 +1374,7 @@ provision() {
   step "wait for droplet Docker daemon";            wait_droplet_ready
   step "grant DB schema privileges";                grant_db_schema
   step "prepare app: release/TLS/pipeline files";   prep_app
-  step "seed GitHub secrets + variables";           seed_github
+  step "seed CI secrets + variables";               seed_ci
   step "commit + push pipeline (first deploy)";     commit_push
   step "poll until live";                           confirm_live
   if is_tenant; then

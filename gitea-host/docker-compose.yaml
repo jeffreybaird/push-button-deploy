@@ -1,0 +1,123 @@
+# Gitea server + its Actions runner, co-located on one droplet (see README
+# "Gitea support"). Copied to the droplet and started by bootstrap-gitea.sh —
+# nothing here is baked into an image; config/secrets arrive via the .env file
+# written alongside this at deploy time (same locked decision the app
+# pipelines follow: nothing secret in cloud-init or the image).
+#
+# All persistent state (Gitea's SQLite DB, git repo objects, Actions logs, the
+# runner's own registration) lives under the ATTACHED DATA VOLUME
+# (/mnt/gitea-data, mounted by cloud-init.yaml) — not in Docker-managed
+# volumes — so it survives a container/droplet recreation as long as the
+# Terraform-managed volume itself isn't destroyed.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - GITEA_DOMAIN=${GITEA_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/gitea-data/caddy_data:/data
+      - /mnt/gitea-data/caddy_config:/config
+    depends_on:
+      - gitea
+
+  gitea:
+    # 1.24 is a FLOOR, not a preference — it is the first release with both
+    # Actions API routes bootstrap.sh needs. Verified against each release
+    # branch's swagger spec:
+    #
+    #   endpoint                             1.22  1.23  1.24
+    #   /actions/secrets, /actions/variables  yes   yes   yes
+    #   /actions/tasks           (run poll)    no   yes   yes
+    #   /actions/workflows/{id}/dispatches     no    no   yes
+    #
+    # On 1.22 the secret/variable seeding still worked, so bootstrap got all
+    # the way to the deploy step before dying on a 404 for a route that never
+    # existed (confirmed live). scripts/provider.sh now checks /api/v1/version
+    # at preflight so a too-old instance says so up front.
+    #
+    # Newer releases exist (1.27 is current) and are fine to move to; this
+    # pins the verified floor rather than tracking latest. Upgrading is in
+    # place — data lives on the attached volume and Gitea migrates on start —
+    # but jumping several minors at once is worth a volume snapshot first.
+    image: gitea/gitea:1.24
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=sqlite3
+      - GITEA__server__DOMAIN=${GITEA_DOMAIN}
+      - GITEA__server__ROOT_URL=https://${GITEA_DOMAIN}/
+      # Git-over-SSH is served by the OpenSSH daemon the gitea/gitea image
+      # already runs on :22 inside the container -- NOT by Gitea's own built-in
+      # Go SSH server. Setting START_SSH_SERVER=true makes both try to bind
+      # :22 and whichever loses the race dies fatally; confirmed live, where
+      # it left the container crash-looping ("Failed to start SSH server:
+      # listen tcp :22: bind: address already in use") after a recreate
+      # happened to let sshd win. Explicitly FALSE rather than just omitted:
+      # app.ini persists on the data volume and the entrypoint only rewrites
+      # keys it is given, so an omitted key would keep its old true value.
+      - GITEA__server__START_SSH_SERVER=false
+      # The port EXTERNAL clients use, i.e. the host side of the 2222:22
+      # mapping below. Only affects the clone URLs Gitea displays.
+      - GITEA__server__SSH_PORT=2222
+      # Actions is OFF by default in Gitea — this is what makes the CI half
+      # of "Gitea support" actually work at all.
+      - GITEA__actions__ENABLED=true
+      # This instance has exactly one operator (you). Self-service signup on
+      # a freshly internet-exposed git host is not a default worth risking.
+      - GITEA__service__DISABLE_REGISTRATION=true
+      # REQUIRED for a headless, env-var-driven setup: without this, Gitea
+      # considers itself not-installed regardless of a valid app.ini being
+      # present, and the web install wizard sits at "/" waiting for someone
+      # to click through it by hand. /api/healthz answers fine either way
+      # (it's a liveness check, not an install check) — confirmed live: the
+      # gitea CLI's MustInstalled() check is what actually enforces this,
+      # and it failed until this was added.
+      - GITEA__security__INSTALL_LOCK=true
+    volumes:
+      - /mnt/gitea-data/gitea:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      # Git-over-SSH only — HTTP(S) is reached through Caddy, not published
+      # directly. Host 2222 avoids colliding with the droplet's own sshd on 22.
+      - "2222:22"
+
+  runner:
+    image: gitea/act_runner:latest
+    restart: unless-stopped
+    environment:
+      # MUST be the PUBLIC url, not the compose-internal http://gitea:3000.
+      # The runner itself could reach that (it shares Gitea's compose
+      # network), but it launches job containers on the HOST daemon via the
+      # socket below, onto their own per-task network where the name `gitea`
+      # does not resolve. This address is what those containers are handed as
+      # the clone/API URL, so an internal one fails every checkout with
+      # "Could not resolve host: gitea" (confirmed live). Registration bakes
+      # it into /data/.runner, so ensure_runner() re-registers when it drifts
+      # from this value.
+      - GITEA_INSTANCE_URL=https://${GITEA_DOMAIN}
+      # Only consumed on FIRST start, to register — see bootstrap-gitea.sh's
+      # register_runner(). Once /data/.runner exists on the volume below, the
+      # image's entrypoint skips registration and just runs the daemon; this
+      # can be left stale/empty on every later restart.
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_REGISTRATION_TOKEN:-}
+      - GITEA_RUNNER_NAME=${GITEA_RUNNER_NAME:-gitea-host}
+      # act_runner reads its config from this path; see the file for why the
+      # built-in Actions cache server has to be off in this topology.
+      - CONFIG_FILE=/config.yaml
+    volumes:
+      - ./act_runner-config.yaml:/config.yaml:ro
+      - /mnt/gitea-data/runner:/data
+      # Job containers run as SIBLINGS on the HOST's Docker daemon (socket
+      # bind-mount), not nested Docker-in-Docker — simpler and avoids running
+      # the runner itself as --privileged.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - gitea

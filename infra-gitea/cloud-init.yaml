@@ -1,0 +1,26 @@
+#cloud-config
+# Installs Docker Engine + the compose plugin, and mounts the persistent data
+# volume Terraform attaches (main.tf: digitalocean_volume.gitea_data) at
+# /mnt/gitea-data. No secrets, no Gitea config here - those arrive over SSH at
+# deploy time (same locked decision infra-app's cloud-init makes).
+#
+# The device is found by glob rather than a hardcoded name/path: exactly one
+# extra block device is ever attached to this droplet (DO's own convention
+# exposes it at /dev/disk/by-id/scsi-0DO_Volume_<name>), so matching the glob
+# is unambiguous and needs no Terraform templating into this file.
+package_update: true
+package_upgrade: false
+runcmd:
+  - [sh, -c, "curl -fsSL https://get.docker.com | sh"]
+  - [systemctl, enable, --now, docker]
+  - [mkdir, -p, /mnt/gitea-data]
+  - [sh, -c, "dev=$(ls /dev/disk/by-id/scsi-0DO_Volume_* 2>/dev/null | head -1); if [ -n \"$dev\" ]; then mount -o discard,defaults,noatime \"$dev\" /mnt/gitea-data; fi"]
+  - [sh, -c, "dev=$(ls /dev/disk/by-id/scsi-0DO_Volume_* 2>/dev/null | head -1); if [ -n \"$dev\" ] && ! grep -q gitea-data /etc/fstab; then echo \"$dev /mnt/gitea-data ext4 defaults,nofail,discard 0 2\" >> /etc/fstab; fi"]
+  # Swap, because the co-located runner builds real images here. Without it a
+  # bundler native-gem compile (or an Elixir release build) exhausts RAM and
+  # the OOM killer takes the box down WITH Gitea on it - confirmed live on a
+  # 1GB droplet building a Ruby image. Swap turns that failure into a slow
+  # build instead of a dead git server. Sized 2G: enough headroom for a
+  # container build without eating the 25G root disk.
+  - [sh, -c, "if [ ! -f /swapfile ]; then fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile; fi"]
+  - [sh, -c, "grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab"]

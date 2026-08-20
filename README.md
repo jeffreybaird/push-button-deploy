@@ -18,11 +18,11 @@ If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for t
 | TLS | Caddy with automatic Let's Encrypt issuance + renewal |
 | Database | DigitalOcean Managed Postgres, private-VPC only, TLS **verified** against the cluster CA (`verify_peer`) |
 | DNS | A record at DNSimple pointing at a reserved IP that survives droplet recreation |
-| Images | Built on GitHub's amd64 runners, pushed to DO Container Registry, SHA-pinned |
+| Images | Built on amd64 CI runners (GitHub-hosted, or your own for Gitea — see [Gitea support](#gitea-support)), pushed to DO Container Registry, SHA-pinned |
 | Deploys | Every push to `main`: test (gate) → build → migrate (gated) → health-checked blue/green swap (zero downtime) |
 | Staging | Every PR against `main`: a full environment on the same droplet at `<app>-stg.<zone>`, destroyed when the PR closes (see [Pull-request staging environments](#pull-request-staging-environments)) |
 | Tests | `mix test` against a Postgres 17 service container; red tests block the build and deploy |
-| Rollback | `gh workflow run rollback.yml -f tag=<previous sha>` — pins a prior image, no rebuild |
+| Rollback | Pins a prior image, no rebuild — `gh workflow run rollback.yml -f tag=<previous sha>` (GitHub) or the Actions tab (Gitea) |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
 | Terraform state | Versioned DO Spaces bucket (S3-compatible backend) |
 | Secrets | Never in cloud-init or droplet metadata — they arrive over SSH at deploy time |
@@ -65,7 +65,7 @@ The droplet runs an `app_blue`/`app_green` pair (exactly one live at a time) beh
 
 Caddy is **host-owned, not app-owned**: one instance per droplet, in `/root/caddy`, importing a site file per app. Each app's stack lives in `/root/apps/<slug>/` as its own compose project with its own volumes, and the two colors publish `<slug>-blue` / `<slug>-green` aliases on a shared `edge` network for Caddy to dial. That is what makes a second app on the same droplet possible; with one app it is simply the same thing with one site file.
 
-Port 22 is closed to the world. CI punches a temporary `/32` hole for its own runner IP at the start of each deploy and revokes it in an `always()` step.
+Port 22 is closed to the world. On the default GitHub path, CI punches a temporary `/32` hole for its own (GitHub-hosted, unpredictable) runner IP at the start of each deploy and revokes it in an `always()` step. On the Gitea path (`GIT_PROVIDER=gitea`), the self-hosted Actions runner has a stable IP instead, so it's allow-listed once in Terraform (`GITEA_RUNNER_IP`) rather than punched per-run — see [Gitea support](#gitea-support).
 
 ## Prerequisites
 
@@ -76,7 +76,8 @@ Port 22 is closed to the world. CI punches a temporary `/32` hole for its own ru
 | `git` | repo + pushes | xcode-select / brew |
 | `terraform` >= 1.6 | provisioning | `brew install terraform` |
 | `doctl` | DO registry + firewall ops | `brew install doctl` |
-| `gh` | repo creation, secrets, run status | `brew install gh` |
+| `gh` | **GitHub only** (default) — repo creation, secrets, run status | `brew install gh` |
+| `jq` | **Gitea only** (`GIT_PROVIDER=gitea`) — safe JSON bodies + run-status parsing against the Gitea REST API | `brew install jq` |
 | Elixir + `mix` | **Phoenix only** — app generation, deps, secret generation | `brew install elixir` |
 | `phx_new` archive | **Phoenix only** — generating the app (needed when the target dir is empty) | `mix archive.install hex phx_new` |
 | `openssl` | **Sinatra only** — session-secret generation (the Ruby build runs in Docker/CI, so no local Ruby is required) | preinstalled on macOS |
@@ -93,8 +94,9 @@ Docker is **not** required locally — images build in CI.
    - `doctl auth init` (paste the API token).
 2. **DNSimple**
    - A zone (domain) hosted there, an API token, and your numeric account ID (visible in the URL or account page).
-3. **GitHub**
-   - `gh auth login` with permission to create repos and set secrets/variables.
+3. **Code hosting + CI/CD** — `GIT_PROVIDER` picks which (default `github`; see [Gitea support](#gitea-support) for the other).
+   - **GitHub** (default): `gh auth login` with permission to create repos and set secrets/variables.
+   - **Gitea** (self-hosted, `GIT_PROVIDER=gitea`): a personal access token with repo create/delete and Actions secrets/variables scopes, and — because it also runs the pipeline (Gitea Actions) — a self-hosted runner registered against the instance, with a stable IP you can name in `GITEA_RUNNER_IP`.
 
 ### Environment variables
 
@@ -133,6 +135,11 @@ Optional (defaults in parentheses):
 | `STATE_BUCKET` | Spaces bucket for TF state (`<PROJECT_NAME>-tfstate`) — names are globally unique per region; override on collision |
 | `SPACES_REGION` | bucket region (`REGION`) — must be a region that offers Spaces |
 | `LIVE_TIMEOUT_SECS` | HTTPS liveness poll timeout (`900`) |
+| `GIT_PROVIDER` | `github` (default) or `gitea` (self-hosted). See [Gitea support](#gitea-support). |
+| `GITEA_URL` | **Gitea only** — base URL of the instance, e.g. `https://git.example.com`. Required. |
+| `GITEA_TOKEN` | **Gitea only** — personal access token. Required. |
+| `GITEA_OWNER` | **Gitea only** — user/org the repo is created under. Optional: unset, it's whichever account `GITEA_TOKEN` authenticates as. |
+| `GITEA_RUNNER_IP` | **Gitea only** — the address the runner's *outbound* traffic comes from, allow-listed once in Terraform. Bare IP or CIDR; comma-separate for more than one. Required. Note this is the runner host's egress IP, **not** a reserved/floating IP attached to it — see [Gitea support](#gitea-support). |
 
 ## Application framework
 
@@ -308,6 +315,181 @@ not a flag flip: move the rows through Ecto (both adapters encode their own
 types), place the file on the droplet's volume *before* the first SQLite deploy,
 and keep the cluster alive until you've verified the new one serves.
 
+## Gitea support
+
+`GIT_PROVIDER` picks the code host **and** the CI/CD engine — GitHub Actions and
+Gitea Actions both come from the same choice, since the deploy pipeline is
+GitHub-Actions-syntax-compatible either way. Set it once, before the first
+`./bootstrap.sh`, in `.env` or the environment.
+
+| | `github` (default) | `gitea` (self-hosted) |
+|---|---|---|
+| Repo host | github.com | your instance (`GITEA_URL`) |
+| Auth | `gh auth login` | `GITEA_TOKEN` (personal access token) |
+| Repo owner | whichever account `gh` is logged in as | whichever account `GITEA_TOKEN` authenticates as, or `GITEA_OWNER` if set (create under an org instead) |
+| CI engine | GitHub Actions, GitHub-hosted runners | Gitea Actions, a **self-hosted** runner you register against the instance |
+| Workflow files | `.github/workflows/` | `.gitea/workflows/` |
+| CI-runner SSH access | temporary `/32` hole punched per deploy (`doctl compute firewall add-rules`/`remove-rules`), because a GitHub-hosted runner's IP is unpredictable | `GITEA_RUNNER_IP` allow-listed **once**, statically, in Terraform (`infra-app/firewall.tf`) — the self-hosted runner has a known IP, so there's nothing to punch or revoke |
+| Local tool | `gh` | `curl` (already required) + `jq` |
+| Repo/secret/variable API | `gh repo`/`gh secret`/`gh variable` | the instance's REST API directly (`scripts/provider.sh`) |
+| Run status | `gh run list --json status,conclusion` | the instance's Actions task-listing API, normalized to the same shape |
+| Rollback trigger | `gh workflow run rollback.yml -f tag=...` | the repo's Actions tab, or `POST .../actions/workflows/rollback.yml/dispatches` |
+| PR staging environments | on by default (`ENABLE_STAGING`) | **not yet** — see below |
+| Repo deletion (`teardown.sh --delete-repo`) | needs the `delete_repo` OAuth scope (`gh auth refresh -s delete_repo`) | needs `GITEA_TOKEN` to carry delete rights on the repo |
+
+Required Gitea-only env: `GITEA_URL`, `GITEA_TOKEN`, `GITEA_RUNNER_IP` (`GITEA_OWNER` is optional — see the table above). All four are documented in `.env.example`.
+
+**`GITEA_RUNNER_IP` is an egress address, and a reserved IP is not one.**
+Attaching a DigitalOcean reserved (floating) IP to a droplet
+[doesn't replace or change its original public IP](https://docs.digitalocean.com/products/networking/reserved-ips/how-to/outbound-traffic/),
+and outbound connections keep using that original address unless you manually
+re-point the droplet's default gateway at its anchor IP. So the address Gitea
+is *served on* and the address its runner *connects out from* are two different
+things, and only the second one belongs in a firewall rule. Get it with:
+
+```bash
+ssh root@<your-gitea-host> 'curl -s https://api.ipify.org; echo'
+```
+
+`bootstrap-gitea.sh` prints the right value (the `gitea_egress_ip` Terraform
+output). It **changes when the droplet is replaced**, while the reserved IP
+deliberately doesn't — so after a `--replace-droplet`, update `GITEA_RUNNER_IP`
+and re-run `./bootstrap.sh` for each app to refresh its firewall. The symptom
+of a stale value is a deploy job whose `Configure SSH` step takes exactly 5s
+(`ssh-keyscan`'s timeout) and then fails on the first `ssh`/`scp`.
+
+**Minimum Gitea version: 1.24.** This is a hard floor, not a recommendation —
+it's the first release carrying both Actions API routes bootstrap depends on:
+
+| endpoint | used for | 1.22 | 1.23 | 1.24 |
+|---|---|---|---|---|
+| `/actions/secrets`, `/actions/variables` | seeding CI config | ✅ | ✅ | ✅ |
+| `/actions/tasks` | polling the deploy run to confirm LIVE | ❌ | ✅ | ✅ |
+| `/actions/workflows/{id}/dispatches` | redeploying without a new commit | ❌ | ❌ | ✅ |
+
+Secret and variable seeding works on older releases, so a too-old instance
+gets most of the way through a bootstrap before failing on a 404 for a route
+that was never there. `ci_auth_check` therefore reads `/api/v1/version` during
+preflight and stops with the version as the reason. If you provisioned with
+`bootstrap-gitea.sh`, the pinned tag in `gitea-host/docker-compose.yaml` is
+already ≥ 1.24; re-running that script upgrades in place (data is on the
+attached volume, and Gitea migrates on start). Take a volume snapshot first if
+you're jumping several minor versions at once.
+
+**Why the runner IP is static, not punched.** The GitHub path's hole-punch
+exists because GitHub-hosted runners have no fixed IP — a fresh one is
+assigned per job. A self-hosted Gitea Actions runner doesn't have that
+problem: it's a machine you control, with an IP you already know, so it's
+simpler and no less secure to allow-list it once in `infra-app/firewall.tf`
+(`gitea_runner_cidr`, wired from `GITEA_RUNNER_IP`) than to reimplement a
+punch/revoke dance that exists to solve a problem the Gitea path doesn't have.
+
+### Bootstrapping your own Gitea
+
+`GIT_PROVIDER=gitea` needs an actual instance and a registered Actions runner
+to talk to. `bootstrap-gitea.sh` stands both up, reusing the same
+DigitalOcean/DNSimple/Spaces credentials `bootstrap.sh` already needs — one
+`.env` covers both scripts.
+
+```bash
+./bootstrap-gitea.sh --check   # verify prerequisites
+./bootstrap-gitea.sh           # provision + configure + start
+```
+
+What it does: provisions one dedicated droplet (`infra-gitea/` — its own
+Terraform root, applied directly rather than copied into an app repo, since
+there's exactly one Gitea instance, not one per app) running Gitea and its
+Actions runner **co-located** — simplest and cheapest, and it makes
+`GITEA_RUNNER_IP` just that droplet's own egress IP, allow-listed once. Gitea's data
+(SQLite DB, git repo objects, Actions logs) lives on a separate persistent
+block-storage volume, not the droplet's root disk, so a droplet recreation
+(resize, image bump) doesn't lose it — but that volume is **not itself
+replicated anywhere** (unlike an app's SQLite file, which Litestream streams
+continuously — a multi-file git repo store doesn't fit that model). Snapshot
+it yourself for a real backup story.
+
+It also creates the one-time admin account and API token
+(`GITEA_ADMIN_EMAIL` is the only new required env var — see the script's
+header for the full list of optional ones) and registers the runner. At the
+end it prints exactly what to add to `.env` for `./bootstrap.sh`:
+
+```
+GIT_PROVIDER=gitea
+GITEA_URL=https://git.example.com
+GITEA_TOKEN=...
+GITEA_RUNNER_IP=<droplet-egress-ip>/32
+```
+
+Idempotent like `bootstrap.sh`: re-running detects what's already done (an
+existing admin user, an already-registered runner) rather than redoing it —
+important here specifically because Gitea only ever shows a token or the
+generated admin password **once**, at creation; the script caches both
+locally (`.gitea-admin-token`, `.gitea-admin-password`, gitignored) so a
+re-run doesn't need to mint new ones.
+
+`./teardown-gitea.sh` destroys it — droplet, firewall, reserved IP, DNS
+record, and **the data volume** (every repo, the Gitea DB, all of it). It
+does not touch any app deployed through the instance, or the state bucket.
+
+**Resizing.** Change `GITEA_DROPLET_SIZE` and re-run. Sizing *up* is an
+in-place CPU/RAM resize. Sizing *down* is refused by DigitalOcean — a plan
+with a smaller disk gets `This size is not available because it has a
+smaller disk`, even with `resize_disk = false`, and snapshots don't help
+(a snapshot can only create a droplet with a disk at least as large). Use:
+
+```bash
+./bootstrap-gitea.sh --replace-droplet
+```
+
+That recreates the droplet rather than resizing it, which is safe by design
+here: the data volume (Gitea's DB and repos, Caddy's certs, the runner's
+registration) and the reserved IP are separate resources, and cloud-init
+mounts the volume without formatting it. You keep your repos, accounts,
+issued certificates, runner registration and IP; only Docker and the pulled
+images are rebuilt, which the rest of the run does anyway.
+
+**Verify against your instance before relying on this in production.** Gitea's
+Actions API has evolved across releases. `bootstrap-gitea.sh` through "Gitea
+is answering" (provisioning, Docker, the compose stack) is confirmed against
+a live instance — real issues that only showed up there are already fixed:
+`infra-gitea/cloud-init.yaml` has to be pure ASCII (an em-dash broke DO's
+cloud-init YAML parser and silently discarded the whole config, so Docker
+never installed); every `gitea admin`/`gitea actions` CLI call needs
+`docker compose exec -u 1000` (exec defaults to root; the gitea binary
+refuses to run as root); `gitea-host/docker-compose.yaml` needs
+`GITEA__security__INSTALL_LOCK=true` for a headless env-var-driven setup, or
+the CLI reports the instance as not-installed no matter what — `/api/healthz`
+answering doesn't catch this, since it's a liveness check, not an install
+check; that same file must leave `START_SSH_SERVER` off, because the image
+already runs sshd on port 22 inside the container and the two racing for it
+left Gitea crash-looping; the admin username cannot be `admin`, which
+Gitea reserves (the default is now `gitea-admin`, and `--check` rejects a
+reserved name up front); and the runner's `GITEA_INSTANCE_URL` must be the
+**public** URL rather than a compose-internal one, since job containers run
+on the host daemon on their own network and are handed that address as their
+clone URL. Past that point — `scripts/provider.sh`'s
+`ci_run_row`/`ci_diagnose_dump` (Actions run-status parsing) and
+`ci_dispatch_deploy` (workflow dispatch), plus the rest of
+`bootstrap-gitea.sh`'s own `ensure_admin_token`/`ensure_runner` (CLI output
+parsing) — is still being verified as issues surface; both fail loud with
+the raw output when a parse doesn't match, which is the fastest way to spot
+what needs adjusting. A reasonable first run: `./bootstrap-gitea.sh --check`,
+then a full run, then `GIT_PROVIDER=gitea FRAMEWORK=zola ./bootstrap.sh
+--check` against it (smallest surface — no database, no registry) before a
+full app bootstrap.
+
+**No PR staging environments yet.** The staging workflow ships as a template
+under `app/.github/workflows/` and has no `app/.gitea/workflows/` counterpart,
+so a Gitea app has nothing to build a PR environment with. Rather than
+provision a staging DNS name and database that no pipeline would ever touch,
+`bootstrap.sh` turns the whole feature off on this path (and says so once, if
+you asked for it explicitly with `ENABLE_STAGING=true`). Porting the workflow
+is the only thing missing — the Terraform, the Caddy routing and
+`deploy/staging-down.sh` are all provider-agnostic already.
+
+Everything else — Terraform roots, blue/green swap, database backends, several
+apps on one droplet — works identically regardless of `GIT_PROVIDER`.
+
 ## Several apps on one droplet
 
 A droplet sized for one small app is usually sized for three. To put a second app
@@ -378,7 +560,7 @@ The app name is the directory basename (must be a valid Elixir app name: `lower_
 
 1. **Preflight** — same checks as `--check`.
 2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude skill docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `./scripts/inject-skill-docs.sh <app_dir>`.
-3. **GitHub repo** — `git init` if needed, create a private repo, and push an `initial commit` of the app as generated. (No workflows exist yet, so this push triggers nothing.)
+3. **Code host repo** — `git init` if needed, create a private repo (GitHub or Gitea per `GIT_PROVIDER`), and push an `initial commit` of the app as generated. (No workflows exist yet, so this push triggers nothing.)
 4. **State bucket** — create the Spaces bucket; both real roots `init` against it (any pre-existing local state migrates in automatically).
 5. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), DNS record.
 6. **Registry** — reuse the account's DO Container Registry or create one (free starter tier).
@@ -386,7 +568,7 @@ The app name is the directory basename (must be a valid Elixir app name: `lower_
 8. **Wait** until the droplet answers `docker info` over SSH (a responsive daemon, not just the binary).
 9. **Grant** the app DB user `CREATE`/`USAGE` on schema `public` (PG15+ default-deny), via the droplet — the only host the DB firewall trusts.
 10. **Prepare the app** — deps, `phx.gen.release`, release migration task, *verified* DB TLS config, Dockerfile, compose stack, deploy + rollback workflows.
-11. **Seed GitHub** — secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID`). Unless staging is off, also `STAGING_DOMAIN` (and `STAGING_DATABASE_URL` on Postgres) — that variable is what arms the staging workflow. Staging needs no secret of its own: its signing key is derived in CI.
+11. **Seed CI secrets + variables** — secrets (`DIGITALOCEAN_ACCESS_TOKEN`, `SSH_PRIVATE_KEY`, `DATABASE_URL`, `DATABASE_CA_CERT`, fresh `SECRET_KEY_BASE`) and variables (`DOCR_REGISTRY`, `DOMAIN`, `DROPLET_HOST`, `FIREWALL_ID` on the GitHub path only — see [Gitea support](#gitea-support)). On GitHub, unless staging is off, also `STAGING_DOMAIN` (and `STAGING_DATABASE_URL` on Postgres) — that variable is what arms the staging workflow. Staging needs no secret of its own: its signing key is derived in CI.
 12. **Commit + push** the pipeline files — which triggers the first deploy through the exact pipeline every later push uses: tests (Postgres service container) → image build → migration gate → blue/green swap.
 13. **Poll `https://<domain>`** until live. On failure it prints ordered diagnostics (Actions status, `dig`, Caddy logs) and tells you whether the deploy *failed* or just *isn't ready yet*.
 
@@ -397,10 +579,10 @@ The script is **idempotent**: fix whatever it complained about and re-run; every
 | Want | Do |
 |---|---|
 | Deploy | `git push` to `main` (in the app repo) |
-| Watch a deploy | `gh run watch` |
-| Get a staging environment | open a PR against `main`; it deploys to `<app>-stg.<zone>` and is destroyed when the PR closes |
+| Watch a deploy | `gh run watch` (GitHub) — Gitea: the repo's Actions tab, or `bootstrap:` prints a direct URL on failure |
+| Get a staging environment | **GitHub only** — open a PR against `main`; it deploys to `<app>-stg.<zone>` and is destroyed when the PR closes |
 | Destroy a staging environment by hand | `ssh root@<reserved-ip> "APP_SLUG=<slug>-stg bash /root/caddy/staging-down.sh"` |
-| Roll back | `gh workflow run rollback.yml -f tag=<previous commit sha>` |
+| Roll back | `gh workflow run rollback.yml -f tag=<previous commit sha>` (GitHub) — Gitea: run the `rollback` workflow from the Actions tab (`tag` input), or `POST .../actions/workflows/rollback.yml/dispatches` |
 | Change the infrastructure | edit `<app_dir>/infra/…`, commit, `./bootstrap.sh <app_dir>` (idempotent, applies all three roots) |
 | Recreate the droplet | `terraform -chdir=<app_dir>/infra/app destroy && ./bootstrap.sh <app_dir>` — DB, IP, DNS, certs survive. **Redeploy every tenant afterwards** (`gh workflow run deploy.yml` in each): their stacks live on that droplet |
 | Add another app to the droplet | `./bootstrap.sh --host <app_dir> <other_app_dir>` |
@@ -420,6 +602,15 @@ For manual Terraform runs, `cd` into the app and export the same env vars plus `
   (`zola`) sites push no image and use no repository.
 - Reserved IP: free while assigned
 - Plus your DNSimple subscription.
+- **If self-hosting Gitea** (`bootstrap-gitea.sh`, optional — GitHub is free
+  and needs none of this): droplet `s-1vcpu-1gb` ~$6 + a 40GB data volume ~$4
+  + its own reserved IP (free while assigned). No managed Postgres, no
+  container registry — Gitea uses SQLite and no image of its own is built.
+  Gitea itself is tiny; the droplet size is really a **CI sizing** decision,
+  since the co-located runner builds every app you deploy through it —
+  `zola` fits the default, `sinatra` wants ~`s-1vcpu-2gb` (~$12), and
+  `phoenix` (mix test + a Postgres service container + an Elixir release
+  build) wants ~`s-2vcpu-4gb` (~$24). Set `GITEA_DROPLET_SIZE` to bump it.
 
 ## Troubleshooting
 
@@ -450,7 +641,7 @@ terraform -chdir=<app_dir>/infra/persistent destroy
 terraform -chdir=<app_dir>/infra/state destroy
 ```
 
-Also delete the container registry (`doctl registry delete`) and the GitHub repo if you're done with them.
+Also delete the container registry (`doctl registry delete`) and the code-host repo (`teardown.sh --delete-repo`, or by hand) if you're done with them.
 
 ## Security notes
 

@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+# Applied directly, in place, by bootstrap-gitea.sh — never copied per-project
+# the way infra-app/infra-persistent are.
+do_token         = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+dnsimple_token   = "dnsimple_u_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+dnsimple_account = "12345"
+dns_zone         = "example.com"
+ssh_key_name     = "my-deploy-key"      # name of an SSH key already in the DO account
+ssh_cidrs        = ["203.0.113.4/32"]   # your IP/range allowed to admin-SSH (port 22)
+
+# Optional overrides:
+# project_name   = "gitea-infra"
+# region         = "nyc3"
+# dns_record     = "git"                # git.example.com
+# droplet_size   = "s-1vcpu-1gb"   # bump for heavier CI; see variables.tf
+# droplet_image  = "ubuntu-24-04-x64"
+# data_volume_gb = 40

@@ -11,9 +11,11 @@
 #   ./teardown.sh [--yes] [--delete-repo] [app_dir]
 #
 #   --yes          skip the type-the-project-name confirmation
-#   --delete-repo  also delete the GitHub repo (needs `gh auth refresh -s delete_repo`)
+#   --delete-repo  also delete the code-host repo (GitHub needs
+#                  `gh auth refresh -s delete_repo`; Gitea needs GITEA_TOKEN
+#                  to carry delete rights — see GIT_PROVIDER in bootstrap.sh)
 #   app_dir        the app directory (default: .) — holds the app's own Terraform
-#                  roots under infra/, and names the registry/GitHub repo
+#                  roots under infra/, and names the registry/code-host repo
 #
 # The roots destroyed are the APP'S copies (<app_dir>/infra/), the same ones
 # bootstrap.sh applied. Apps bootstrapped before infra/ existed fall back to
@@ -26,7 +28,7 @@
 # bucket belong to the host and are never touched.
 #
 # NOT touched: the DO registry itself, the SSH key in DO, the DNSimple zone,
-# the local app directory, and (without --delete-repo) the GitHub repo with
+# the local app directory, and (without --delete-repo) the code-host repo with
 # its secrets/variables.
 #
 # prevent_destroy guards (DB cluster, state bucket) are lifted via Terraform
@@ -74,8 +76,17 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   unset _envtmp _k _line _was
 fi
 
+# Same provider abstraction bootstrap.sh uses (GIT_PROVIDER, is_github/
+# is_gitea, repo_delete, ...) — sourced here rather than inherited, since
+# teardown.sh doesn't source bootstrap.sh. Needs fail()/log()/have(), already
+# defined above.
+# shellcheck source=scripts/provider.sh
+. "$SCRIPT_DIR/scripts/provider.sh"
+
 REQUIRED_BINS="terraform doctl curl"
+if is_gitea; then REQUIRED_BINS="$REQUIRED_BINS jq"; fi
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
+if is_gitea; then REQUIRED_ENV="$REQUIRED_ENV GITEA_URL GITEA_TOKEN"; fi
 
 # ---- argument parsing ----------------------------------------------------------
 ASSUME_YES=0
@@ -192,7 +203,7 @@ if [ "$TENANT" = 1 ]; then
   printf '  - its route from the shared Caddy (/root/caddy/sites/%s.caddy)\n' "$SLUG"
   printf '  - its PR staging environment, if one is up (/root/apps/%s-stg + its route)\n' "$SLUG"
   if [ -n "$APP_NAME" ] && [ "$STATIC" != 1 ]; then printf '  - registry repository %s\n' "$APP_NAME"; fi
-  if [ "$DELETE_REPO" = 1 ]; then printf '  - GitHub repository (--delete-repo)\n'; fi
+  if [ "$DELETE_REPO" = 1 ]; then printf '  - %s repository (--delete-repo)\n' "$( is_gitea && printf Gitea || printf GitHub )"; fi
   printf '  NOT touched: the droplet, its other apps, the reserved IP, the state bucket.\n'
   [ "$STATIC" = 1 ] \
     || printf '  NOT touched: this app%s Litestream replica in Spaces (litestream/%s/) — delete it by hand if you want the data gone.\n' "'s" "$PROJECT_NAME"
@@ -239,9 +250,9 @@ if [ "$TENANT" = 1 ]; then
   fi
 
   if [ "$DELETE_REPO" = 1 ]; then
-    have gh || fail "gh required for --delete-repo"
-    ( cd "$APP_DIR" && gh repo delete --yes ) \
-      || fail "gh repo delete failed — it needs the delete_repo scope: gh auth refresh -h github.com -s delete_repo"
+    is_github && { have gh || fail "gh required for --delete-repo"; }
+    ci_auth_check
+    ( cd "$APP_DIR" && repo_delete )
   fi
 
   # The bucket belongs to the host and stays; so does this tenant's now-empty
@@ -268,6 +279,7 @@ export TF_VAR_dns_zone="$DNS_ZONE"
 export TF_VAR_dns_record="${DNS_RECORD:-}"
 export TF_VAR_ssh_key_name="${SSH_KEY_NAME:-}"
 export TF_VAR_ssh_cidrs='["127.0.0.1/32"]'   # destroy needs the var, not the value
+export TF_VAR_gitea_runner_cidr='[]'          # ditto — destroy doesn't care what it was
 export TF_VAR_state_bucket="$STATE_BUCKET"
 export TF_VAR_state_endpoint="$STATE_ENDPOINT"
 export TF_VAR_spaces_access_id="$SPACES_ACCESS_KEY_ID"
@@ -365,11 +377,11 @@ rm -f "$STATE_TF_DIR/teardown_override.tf"
 terraform -chdir="$STATE_TF_DIR" workspace select default >/dev/null 2>&1 || true
 terraform -chdir="$STATE_TF_DIR" workspace delete "$PROJECT_NAME" >/dev/null 2>&1 || true
 
-# ---- 5. GitHub repo (opt-in) ----------------------------------------------------------
+# ---- 5. code-host repo (opt-in) ----------------------------------------------------------
 if [ "$DELETE_REPO" = 1 ]; then
-  have gh || fail "gh required for --delete-repo"
-  ( cd "$APP_DIR" && gh repo delete --yes ) \
-    || fail "gh repo delete failed — it needs the delete_repo scope: gh auth refresh -h github.com -s delete_repo"
+  is_github && { have gh || fail "gh required for --delete-repo"; }
+  ci_auth_check
+  ( cd "$APP_DIR" && repo_delete )
 fi
 
 # ---- local leftovers -------------------------------------------------------------------
@@ -379,4 +391,4 @@ fi
 rm -f "$PERS_DIR/backend.hcl" "$APP_TF_DIR/backend.hcl"
 rm -rf "$PERS_DIR/.terraform" "$APP_TF_DIR/.terraform" "$STATE_TF_DIR/.terraform"
 rm -f "$STATE_TF_DIR/terraform.tfstate" "$STATE_TF_DIR/terraform.tfstate.backup"
-log "done. NOT touched: DO registry, DO SSH key, DNSimple zone, local app dir$( [ "$DELETE_REPO" = 1 ] || printf ', GitHub repo (use --delete-repo)' )"
+log "done. NOT touched: DO registry, DO SSH key, DNSimple zone, local app dir$( [ "$DELETE_REPO" = 1 ] || printf ', %s repo (use --delete-repo)' "$( is_gitea && printf Gitea || printf GitHub )" )"
