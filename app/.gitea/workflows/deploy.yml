@@ -144,8 +144,19 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ gitea.sha }}
             ${{ steps.meta.outputs.image }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No `cache-from/cache-to: type=gha` here, unlike the GitHub
+          # workflows. That backend talks to the Actions Cache service, which
+          # act_runner deliberately does not run in this topology (see
+          # gitea-host/act_runner-config.yaml for why). buildx does not degrade
+          # gracefully when it is missing the way `actions/cache` does -- it
+          # fails the whole build on the 404, and because the 404 body is not
+          # JSON the error is the unhelpful "failed to parse error response
+          # 404: Not found. : invalid character 'N'" (confirmed live).
+          #
+          # The build therefore starts cold every run. If that gets slow, the
+          # fix is a registry-backed cache (`cache-to: type=registry,ref=
+          # <image>:buildcache,mode=max`), which needs no cache service -- at
+          # the cost of extra storage in your container registry.
 
   # Deliver the new image to the droplet and restart the stack. Runs only after
   # build succeeds.
