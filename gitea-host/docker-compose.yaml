@@ -27,7 +27,25 @@ services:
       - gitea
 
   gitea:
-    image: gitea/gitea:1.22
+    # 1.24 is a FLOOR, not a preference — it is the first release with both
+    # Actions API routes bootstrap.sh needs. Verified against each release
+    # branch's swagger spec:
+    #
+    #   endpoint                             1.22  1.23  1.24
+    #   /actions/secrets, /actions/variables  yes   yes   yes
+    #   /actions/tasks           (run poll)    no   yes   yes
+    #   /actions/workflows/{id}/dispatches     no    no   yes
+    #
+    # On 1.22 the secret/variable seeding still worked, so bootstrap got all
+    # the way to the deploy step before dying on a 404 for a route that never
+    # existed (confirmed live). scripts/provider.sh now checks /api/v1/version
+    # at preflight so a too-old instance says so up front.
+    #
+    # Newer releases exist (1.27 is current) and are fine to move to; this
+    # pins the verified floor rather than tracking latest. Upgrading is in
+    # place — data lives on the attached volume and Gitea migrates on start —
+    # but jumping several minors at once is worth a volume snapshot first.
+    image: gitea/gitea:1.24
     restart: unless-stopped
     environment:
       - USER_UID=1000

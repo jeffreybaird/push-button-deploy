@@ -326,6 +326,11 @@ EOF
 
 start_core_services() {
   write_gitea_env ""
+  # `pull` explicitly: `up -d` only fetches an image it does not already have
+  # locally, so a re-run after the compose file moves WITHIN a floating tag
+  # (1.24 -> a later 1.24.x) would silently keep the old one. A tag change is
+  # picked up either way; this is what makes patch updates land too.
+  remote_ssh "cd /root/gitea && docker compose pull caddy gitea"
   remote_ssh "cd /root/gitea && docker compose up -d caddy gitea"
 }
 

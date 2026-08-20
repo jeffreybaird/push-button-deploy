@@ -79,6 +79,37 @@ gitea_api_status() { # $1 method, $2 path, $3 body (optional)
 # GITEA_TOKEN each get repos under their own account with no config change.
 # GITEA_OWNER, if set, overrides this (create under an org instead of the
 # token's own user).
+# Minimum Gitea version this tool can drive. NOT arbitrary -- it is exactly
+# where the two Actions endpoints bootstrap depends on appear. Verified against
+# the swagger spec of each release branch:
+#
+#   endpoint                              1.22  1.23  1.24
+#   /actions/secrets, /actions/variables   yes   yes   yes
+#   /actions/tasks            (ci_run_row)  no   yes   yes
+#   /actions/workflows/{id}/dispatches      no    no   yes
+#
+# Below 1.24 the secret/variable seeding still succeeds, so a too-old instance
+# gets all the way to the deploy step before dying on a 404 from a route that
+# was never there -- which reads as a broken deploy rather than a version
+# problem. Hence checking it up front, in ci_auth_check, where the fix is one
+# line of docker-compose.yaml away.
+GITEA_MIN_VERSION="1.24"
+
+# Numeric major.minor.patch compare, awk rather than `sort -V` (not portable to
+# the BSD sort on macOS). Trailing build metadata on the version -- Gitea
+# reports things like "1.24.0+dev-123-gabc" -- is dropped by awk's +0 coercion.
+gitea_version_at_least() { # $1 have, $2 want -> 0 if have >= want
+  awk -v have="$1" -v want="$2" 'BEGIN {
+    n = split(have, h, "."); m = split(want, w, ".")
+    for (i = 1; i <= 3; i++) {
+      hv = (i <= n ? h[i] + 0 : 0); wv = (i <= m ? w[i] + 0 : 0)
+      if (hv > wv) exit 0
+      if (hv < wv) exit 1
+    }
+    exit 0
+  }'
+}
+
 ci_auth_check() {
   if is_github; then
     gh auth status >/dev/null 2>&1 || fail "gh not authenticated — run: gh auth login"
@@ -88,6 +119,19 @@ ci_auth_check() {
   [ -n "$GITEA_AUTH_LOGIN" ] \
     || fail "Gitea auth failed — check GITEA_URL/GITEA_TOKEN ($GITEA_URL/api/v1/user)"
   GITEA_OWNER_RESOLVED="${GITEA_OWNER:-$GITEA_AUTH_LOGIN}"
+
+  local ver
+  ver="$(gitea_api GET /version 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true)"
+  [ -n "$ver" ] \
+    || fail "Gitea did not report a version ($GITEA_URL/api/v1/version) — cannot confirm it is at least $GITEA_MIN_VERSION"
+  gitea_version_at_least "$ver" "$GITEA_MIN_VERSION" \
+    || fail "Gitea $ver is too old — this tool needs at least $GITEA_MIN_VERSION.
+  Below $GITEA_MIN_VERSION the Actions API has no /actions/tasks (run polling) and no
+  /actions/workflows/{id}/dispatches (redeploy trigger), so a deploy can be
+  started but never confirmed. Secrets and variables work either way, which is
+  why this only surfaces at the deploy step without this check.
+  Fix: bump the gitea image tag in gitea-host/docker-compose.yaml and re-run
+  ./bootstrap-gitea.sh (data lives on the volume; the upgrade is in place)."
 }
 
 # Does the repo exist ON THE HOST? Named explicitly rather than inferred from
@@ -216,11 +260,10 @@ var_delete() {
 # triggered anything, so a stale conclusion from an earlier attempt is never
 # mistaken for this invocation's verdict (see run_state in bootstrap.sh).
 #
-# GITEA CAVEAT: /actions/tasks is the broadest-compatible run-listing endpoint
-# across recent Gitea releases. Newer Gitea also exposes a more GitHub-shaped
-# /actions/workflows/{id}/runs endpoint that may suit your version better —
-# verify against the actual target instance (README: "Gitea support") before
-# relying on this for anything beyond bootstrap's own liveness poll.
+# GITEA CAVEAT: /actions/tasks does not exist before Gitea 1.23 (ci_auth_check
+# enforces a 1.24 floor, so this is reachable). It is also documented not to
+# report runs still in "waiting" — a just-triggered run can be invisible here
+# for a beat, which is why the caller polls rather than reading once.
 ci_run_row() {
   if is_github; then
     ( cd "$APP_DIR" \
@@ -230,19 +273,34 @@ ci_run_row() {
     ) || true
     return 0
   fi
-  local row id status
+  local raw row id status
+  # Split into two guarded steps rather than one `gitea_api | jq` pipeline
+  # whose ASSIGNMENT carries the `|| true`. Observed live: against a Gitea too
+  # old to have /actions/tasks, curl got an HTML 404, jq failed to parse it,
+  # and bootstrap.sh's ERR trap printed "unexpected failure ... (running: jq
+  # -r --arg sha ...)" twice — for a case this function handles and returns
+  # cleanly from. (Non-fatal: the run continued to the next step.)
+  #
+  # I could not reproduce that on bash 5, where `|| true` on the assignment
+  # suppresses the trap as expected; the report came from macOS, so a bash 3.2
+  # ERR-trap difference is the suspect but is NOT confirmed. This shape does
+  # not depend on knowing: every command that can fail is the left operand of
+  # its own `||`, which is the form bash documents as exempt, and the non-JSON
+  # body is now rejected before jq ever sees it.
+  raw="$(gitea_api GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/tasks" 2>/dev/null || true)"
+  [ -n "$raw" ] || return 0
   # Response shape isn't certain across Gitea versions (bare array vs
   # {"workflow_runs": [...]}) — `.workflow_runs // .` looks like it'd handle
   # both, but jq's `//` only falls back on null/false, NOT on the type error
   # that `.workflow_runs` raises when the input is already an array. Check the
   # type explicitly instead of leaning on `//` for this.
-  row="$(gitea_api GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/tasks" 2>/dev/null \
+  row="$(printf '%s' "$raw" \
     | jq -r --arg sha "$HEAD_SHA" '
         (if type == "array" then . else (.workflow_runs // []) end) as $runs
         | [$runs[]? | select(.head_sha == $sha)]
         | sort_by(.run_number // .id) | last
         | "\(.id // "")\t\(.status // "")"
-      ' 2>/dev/null)" || true
+      ' 2>/dev/null || true)"
   id="${row%%	*}"
   status="${row#*	}"
   [ -n "$id" ] || return 0
@@ -288,11 +346,10 @@ ci_diagnose_dump() {
     ( cd "$APP_DIR" && gh run list --workflow deploy.yml --limit 3 ) || echo "(gh run list failed)"
     return 0
   fi
-  gitea_api GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/tasks?limit=3" 2>/dev/null \
-    | jq -r '
+  { gitea_api GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/tasks?limit=3" 2>/dev/null || true; } \
+    | { jq -r '
         (if type == "array" then . else (.workflow_runs // []) end) as $runs
         | $runs[:3][]
         | "\(.id)\t\(.status)\t\((.head_sha // "")[0:8])\t\(.run_started_at // .created_at // "")"
-      ' \
-    || echo "(gitea actions task list failed)"
+      ' 2>/dev/null || echo "(gitea actions task list failed)"; }
 }

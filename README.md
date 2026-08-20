@@ -339,6 +339,24 @@ GitHub-Actions-syntax-compatible either way. Set it once, before the first
 
 Required Gitea-only env: `GITEA_URL`, `GITEA_TOKEN`, `GITEA_RUNNER_IP` (`GITEA_OWNER` is optional — see the table above). All four are documented in `.env.example`.
 
+**Minimum Gitea version: 1.24.** This is a hard floor, not a recommendation —
+it's the first release carrying both Actions API routes bootstrap depends on:
+
+| endpoint | used for | 1.22 | 1.23 | 1.24 |
+|---|---|---|---|---|
+| `/actions/secrets`, `/actions/variables` | seeding CI config | ✅ | ✅ | ✅ |
+| `/actions/tasks` | polling the deploy run to confirm LIVE | ❌ | ✅ | ✅ |
+| `/actions/workflows/{id}/dispatches` | redeploying without a new commit | ❌ | ❌ | ✅ |
+
+Secret and variable seeding works on older releases, so a too-old instance
+gets most of the way through a bootstrap before failing on a 404 for a route
+that was never there. `ci_auth_check` therefore reads `/api/v1/version` during
+preflight and stops with the version as the reason. If you provisioned with
+`bootstrap-gitea.sh`, the pinned tag in `gitea-host/docker-compose.yaml` is
+already ≥ 1.24; re-running that script upgrades in place (data is on the
+attached volume, and Gitea migrates on start). Take a volume snapshot first if
+you're jumping several minor versions at once.
+
 **Why the runner IP is static, not punched.** The GitHub path's hole-punch
 exists because GitHub-hosted runners have no fixed IP — a fresh one is
 assigned per job. A self-hosted Gitea Actions runner doesn't have that
