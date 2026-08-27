@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+#
+# pbd — push-button deploy: stand up an app, its repo and its pipeline.
+#
+# This file parses arguments and routes to a subcommand. It does no work of its
+# own: each command lives in lib/pbd/<command>.sh and is sourced only when it is
+# the one being run, so a teardown never loads bootstrap's helpers (both define
+# log/warn/fail, and only one of them should win).
+#
+#   pbd bootstrap ~/src/myapp        provision + wire + deploy
+#   pbd check ~/src/myapp            verify prerequisites, provision nothing
+#   pbd teardown ~/src/myapp         destroy what bootstrap created
+#   pbd gitea bootstrap              stand up a self-hosted Gitea + runner
+#
+# Exit codes: 0 fine, 1 it ran and failed, 2 you typed it wrong.
+#
+# Portable: BSD/macOS bash 3.2, grep, sed.
+set -euo pipefail
+
+# WHERE THE TOOL'S FILES ARE. This has to happen before anything is sourced,
+# and it cannot be done by the library it is looking for, so the symlink walk
+# lives here and nowhere else.
+#
+# On a PATH, `pbd` is usually a symlink into an install prefix — Homebrew's
+# bin/pbd points at libexec/bin/pbd — and it is the TARGET's directory that has
+# lib/ and the templates beside it. Following the chain is the difference
+# between an installed pbd working and it looking for its library in
+# /opt/homebrew/bin.
+_pbd_self="${BASH_SOURCE[0]}"
+while [ -L "$_pbd_self" ]; do
+  _pbd_dir="$(cd -P "$(dirname "$_pbd_self")" && pwd)"
+  _pbd_self="$(readlink "$_pbd_self")"
+  case "$_pbd_self" in /*) ;; *) _pbd_self="$_pbd_dir/$_pbd_self" ;; esac
+done
+_pbd_root="$(cd -P "$(dirname "$_pbd_self")/.." && pwd)"
+
+# Recorded before resolution, so `pbd config` can say whether the root is the
+# one that shipped with this binary or one you pointed it at.
+PBD_ROOT_FROM_ENV="${PBD_ROOT:+yes}"
+
+# shellcheck source=../lib/pbd/common.sh
+. "${PBD_ROOT:-$_pbd_root}/lib/pbd/common.sh" 2>/dev/null \
+  || { printf 'pbd: installation looks incomplete: no lib/pbd/common.sh under '"'"'%s'"'"'.
+       Set PBD_ROOT to a push-button-deploy checkout, or reinstall.\n' "${PBD_ROOT:-$_pbd_root}" >&2
+       exit 1; }
+pbd_resolve_root "$_pbd_root"
+unset _pbd_self _pbd_dir _pbd_root
+
+pbd_usage() {
+  cat <<USAGE
+pbd $(pbd_version) — stand up an app, its repo and its pipeline.
+
+Usage:
+  pbd [options] <command> [command options] [app_dir]
+
+Commands:
+  bootstrap [app_dir]     provision the infrastructure, create the repo, wire
+                          the pipeline and deploy. app_dir defaults to .
+  check [app_dir]         verify prerequisites and exit; provisions nothing.
+                          The same thing as \`pbd bootstrap --check\`
+  teardown [app_dir]      destroy what bootstrap created, in reverse order
+  gitea <bootstrap|teardown>
+                          the self-hosted code host: stand up (or destroy) a
+                          Gitea instance and its Actions runner, which
+                          GIT_PROVIDER=gitea then deploys through
+  config                  print the resolved paths — where pbd found its
+                          templates, its state and your env file
+  help [command]          the full options for a command
+  version                 print the version
+
+Options (before the command):
+  --env-file PATH         read configuration from PATH instead of searching.
+                          Same as PBD_ENV_FILE
+  -h, --help              this message
+  -v, --version           print the version
+
+Examples:
+  pbd bootstrap ~/src/myapp                a Phoenix app on a droplet, over HTTPS
+  pbd bootstrap --cli ruby ~/src/mytool    a Ruby command-line program
+  pbd bootstrap --no-droplet ~/src/mylib   a reusable package
+  pbd check ~/src/myapp                    what is missing before any of that
+  pbd teardown --delete-repo ~/src/myapp   destroy it, repo included
+
+Configuration lives in an env file (see .env.example) — searched for at
+\$PBD_ENV_FILE, then \${XDG_CONFIG_HOME:-~/.config}/pbd/env, then \$PBD_ROOT/.env.
+Anything already set in your shell beats the file. \`pbd config\` says which one
+was used.
+USAGE
+}
+
+# ---- command dispatch ----------------------------------------------------------
+# Each entry names a module under lib/pbd/ and the function it exposes. Sourcing
+# is deferred to here so that only the command being run is loaded.
+pbd_run_command() { # $1 module basename, $2 function, rest: the command's own args
+  local module="$1" fn="$2"; shift 2
+  # Every module writes a transcript the moment it is sourced, so the state
+  # directory has to exist before the source line — including on the help path,
+  # which reaches a module without going through a full run.
+  pbd_resolve_state_dir
+  [ -f "$PBD_ROOT/lib/pbd/$module.sh" ] \
+    || fail "installation looks incomplete: lib/pbd/$module.sh is missing from $PBD_ROOT"
+  # shellcheck source=/dev/null
+  . "$PBD_ROOT/lib/pbd/$module.sh"
+  "$fn" "$@"
+}
+
+pbd_config() {
+  printf 'version      %s\n' "$(pbd_version)"
+  if [ -n "${PBD_ROOT_FROM_ENV:-}" ]; then
+    printf 'root         %s (from PBD_ROOT)\n' "$PBD_ROOT"
+  else
+    printf 'root         %s\n' "$PBD_ROOT"
+  fi
+  printf 'state        %s\n' "$PBD_STATE_DIR"
+  if [ -n "${PBD_ENV_FILE_LOADED:-}" ]; then
+    printf 'env file     %s\n' "$PBD_ENV_FILE_LOADED"
+  else
+    printf 'env file     (none found — configuration comes from the environment)\n'
+    printf '             looked at: %s, %s\n' \
+      "${XDG_CONFIG_HOME:-$HOME/.config}/pbd/env" "$PBD_ROOT/.env"
+  fi
+}
+
+# `pbd help <command>` is `pbd <command> --help`, which each command already
+# answers for itself.
+pbd_help() {
+  case "${1:-}" in
+    "")                pbd_usage ;;
+    bootstrap|check)   pbd_run_command bootstrap pbd_cmd_bootstrap --help ;;
+    teardown)          pbd_run_command teardown  pbd_cmd_teardown  --help ;;
+    gitea)             pbd_gitea --help ;;
+    config|version|help) pbd_usage ;;
+    *)                 die_usage pbd_usage "no such command: $1" ;;
+  esac
+}
+
+pbd_gitea_usage() {
+  cat <<USAGE
+pbd gitea — the self-hosted code host that GIT_PROVIDER=gitea deploys through.
+
+Usage:
+  pbd gitea bootstrap [--check] [--replace-droplet]
+  pbd gitea teardown [--yes]
+
+  bootstrap   provision a droplet running Gitea + its Actions runner, on its own
+              infrastructure (infra-gitea/), and configure both
+  teardown    destroy that droplet and everything under it — every repository it
+              hosts included
+
+Run \`pbd gitea bootstrap --help\` for the full options.
+USAGE
+}
+
+pbd_gitea() {
+  case "${1:-}" in
+    bootstrap) shift; pbd_run_command gitea-bootstrap pbd_cmd_gitea_bootstrap "$@" ;;
+    teardown)  shift; pbd_run_command gitea-teardown  pbd_cmd_gitea_teardown  "$@" ;;
+    -h|--help) pbd_gitea_usage; exit 0 ;;
+    "")        pbd_gitea_usage >&2; exit 2 ;;
+    *)         die_usage pbd_gitea_usage "no such gitea command: $1 (expected bootstrap or teardown)" ;;
+  esac
+}
+
+main() {
+  # Global options, before the command. Everything after the command belongs to
+  # the command — pbd never eats an argument its subcommand meant to see.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --env-file)
+        [ -n "${2:-}" ] || die_usage pbd_usage "--env-file needs a path"
+        PBD_ENV_FILE="$2"; export PBD_ENV_FILE; shift 2 ;;
+      --env-file=*) PBD_ENV_FILE="${1#--env-file=}"; export PBD_ENV_FILE; shift ;;
+      -h|--help)    pbd_usage; exit 0 ;;
+      -v|--version) printf 'pbd %s\n' "$(pbd_version)"; exit 0 ;;
+      --)           shift; break ;;
+      -*)           die_usage pbd_usage "unknown option: $1" ;;
+      *)            break ;;
+    esac
+  done
+
+  [ $# -gt 0 ] || { pbd_usage >&2; exit 2; }
+
+  local cmd="$1"; shift
+
+  # Version and config answer without touching the user's configuration; every
+  # other command needs the state directory and the env file first.
+  case "$cmd" in
+    version) printf 'pbd %s\n' "$(pbd_version)"; return 0 ;;
+    help)    pbd_help "${1:-}"; return 0 ;;
+  esac
+
+  pbd_resolve_state_dir
+  pbd_load_env
+
+  case "$cmd" in
+    bootstrap) pbd_run_command bootstrap pbd_cmd_bootstrap "$@" ;;
+    # Sugar, and the more discoverable spelling of the flag: `pbd check` is the
+    # first thing to run against a new machine.
+    check)     pbd_run_command bootstrap pbd_cmd_bootstrap --check "$@" ;;
+    teardown)  pbd_run_command teardown  pbd_cmd_teardown  "$@" ;;
+    gitea)     pbd_gitea "$@" ;;
+    config)    pbd_config ;;
+    *)         die_usage pbd_usage "no such command: $cmd" ;;
+  esac
+}
+
+main "$@"

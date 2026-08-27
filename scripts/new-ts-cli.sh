@@ -361,7 +361,7 @@ Every push runs \`.github/workflows/ci.yml\` (or \`.gitea/workflows/ci.yml\`):
 typecheck, build, tests, and a smoke test of the built command.
 
 This project provisions no infrastructure — no droplet, no DNS, no database.
-It was created with \`bootstrap.sh --cli typescript\`.
+It was created with \`pbd bootstrap --cli typescript\`.
 EOF
 
 log "scaffolded $APP_DIR (typescript cli): src/cli.ts, src/index.ts, package.json"

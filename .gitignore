@@ -12,12 +12,16 @@ backend.hcl
 
 infra-app/terraform.tfvars.bak
 infra-persistent/terraform.tfvars.bak
-bootstrap.log
-teardown.log
 terraform.tfvars.bak
 
-# bootstrap-gitea.sh's cached admin credentials (generated once; re-run reuses
-# them rather than regenerating — Gitea only shows a token/password at
-# creation time, so losing this file means creating a new one by hand).
+# Run transcripts and cached credentials now live in the state directory
+# ($XDG_STATE_HOME/pbd, or PBD_STATE_DIR — `pbd config` prints it), outside any
+# checkout. These entries cover the copies a pre-CLI checkout still has: the
+# logs, and the Gitea admin credentials, which are generated once and shown by
+# Gitea only at creation time. A run moves the credentials into the state
+# directory rather than minting a second admin account.
+bootstrap.log
+bootstrap-gitea.log
+teardown.log
 .gitea-admin-token
 .gitea-admin-password
