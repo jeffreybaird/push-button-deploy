@@ -1,0 +1,62 @@
+# CI for a droplet-free Elixir LIBRARY (FRAMEWORK=mix). Copied into the project
+# repo by the bootstrap as .github/workflows/ci.yml.
+#
+# This is the whole pipeline. There is no deploy job because there is nothing to
+# deploy to: a library has no droplet, no DNS, no image and no database — which
+# is why the bootstrap that created it needed no DigitalOcean credentials at
+# all. `bootstrap.sh --no-droplet` builds this.
+#
+# The toolchain comes from .tool-versions in the repo, which erlef/setup-beam
+# reads directly — bumping Elixir or OTP is a commit to the project, never an
+# edit to this file.
+#
+# Required repo config: none. That is the point.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Re-run against main without pushing a commit — the bootstrap uses this when
+  # a re-run finds nothing to commit and so fires no push event.
+  workflow_dispatch:
+
+# A superseded run tells you nothing a newer one won't: cancel, don't queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+
+      - name: Cache deps and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ hashFiles('.tool-versions', 'mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      # Formatting first: it is the fastest check and the one most likely to
+      # fail, so a red run says why in seconds rather than after a full compile.
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      # A warning in a library is a bug in someone else's build.
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test

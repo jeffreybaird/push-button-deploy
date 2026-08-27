@@ -21,6 +21,13 @@
 # bootstrap.sh applied. Apps bootstrapped before infra/ existed fall back to
 # this repo's infra-* directories.
 #
+# DROPLET-FREE APPS (those whose .app-type names a type that provisions no
+# droplet — a CLI, a library, and the gems/hex packages/OTP apps that will join
+# them) have NOTHING to destroy. They created no bucket, no cluster, no droplet,
+# no DNS record and no registry repository, so this script has only the code-host
+# repo to offer to delete, and demands none of the DigitalOcean, DNSimple or
+# Spaces credentials the rest of it needs.
+#
 # TENANT APPS (those with an infra/tenant/ root — apps deployed onto a droplet
 # another app owns) take a different, much smaller path: their DNS record, their
 # stack + volumes under /root/apps/<slug> on the droplet, and their route out of
@@ -83,6 +90,11 @@ fi
 # shellcheck source=scripts/provider.sh
 . "$SCRIPT_DIR/scripts/provider.sh"
 
+# The app-type registry, for the one question this script asks it: does the app
+# being torn down own any infrastructure at all? (needs_droplet, below.)
+# shellcheck source=scripts/app-types.sh
+. "$SCRIPT_DIR/scripts/app-types.sh"
+
 REQUIRED_BINS="terraform doctl curl"
 if is_gitea; then REQUIRED_BINS="$REQUIRED_BINS jq"; fi
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
@@ -106,6 +118,33 @@ if [ -d "$APP_DIR" ]; then APP_DIR="$(cd "$APP_DIR" && pwd)"; fi
 # Destroy the app's OWN Terraform roots — the ones bootstrap.sh applied, which
 # may carry local edits. Apps predating <app_dir>/infra/ still have their roots
 # only in this repo, so fall back to those.
+# What the app IS, as bootstrap.sh recorded it. Apps created before .app-type
+# existed have none — and every one of them is a deployed service, which is
+# exactly what the default says, so nothing about them changes.
+APP_TYPE="$(tr -d '[:space:]' < "$APP_DIR/.app-type" 2>/dev/null || true)"
+APP_TYPE="${APP_TYPE:-service}"
+[ -n "$(app_type_row "$APP_TYPE")" ] \
+  || fail "$APP_DIR/.app-type names an unknown app type '$APP_TYPE' (known: $(printf '%s' "$APP_TYPE_TABLE" | cut -d'|' -f1 | tr '\n' ' '))"
+
+# A DROPLET-FREE app owns no infrastructure at all, so the only thing this
+# script can destroy is the code-host repo — and the only credentials it needs
+# are the code host's. Same rule bootstrap.sh applies when it creates one.
+NO_INFRA=0
+if ! needs_droplet; then
+  NO_INFRA=1
+  REQUIRED_BINS="curl"
+  REQUIRED_ENV=""
+  if is_gitea; then
+    REQUIRED_BINS="$REQUIRED_BINS jq"
+    REQUIRED_ENV="GITEA_URL GITEA_TOKEN"
+  else
+    # --delete-repo is the whole of what this path can do, and on GitHub `gh` is
+    # what does it. Missing, ci_auth_check would report it as an auth failure.
+    REQUIRED_BINS="$REQUIRED_BINS gh"
+  fi
+  log "app type '$APP_TYPE': provisions no infrastructure, so there is none to destroy"
+fi
+
 # A TENANT app has exactly one root and owns no shared infrastructure: it runs
 # on a droplet another app provisioned. Tearing it down must therefore remove
 # its DNS record, its stack + volumes on the droplet and its route through the
@@ -113,7 +152,12 @@ if [ -d "$APP_DIR" ]; then APP_DIR="$(cd "$APP_DIR" && pwd)"; fi
 # destroy a droplet, a database and a bucket this app never owned.
 TENANT=0
 TENANT_TF_DIR="$APP_DIR/infra/tenant"
-if [ -d "$TENANT_TF_DIR" ]; then
+if [ "$NO_INFRA" = 1 ]; then
+  # Skip root detection entirely. Falling through to the fallback below would
+  # point this script at THIS repo's Terraform templates and offer to destroy
+  # infrastructure belonging to whatever project their state happens to hold.
+  :
+elif [ -d "$TENANT_TF_DIR" ]; then
   TENANT=1
   REQUIRED_ENV="$REQUIRED_ENV SSH_PRIVATE_KEY"
   log "using the app's tenant root: $TENANT_TF_DIR (this app shares another app's droplet)"
@@ -160,6 +204,33 @@ fi
 if [ -z "${PROJECT_NAME:-}" ]; then
   [ -n "$APP_NAME" ] || fail "PROJECT_NAME not set and no app at $APP_DIR to derive it from"
   PROJECT_NAME="$(printf '%s' "$APP_NAME" | tr '_' '-')"
+fi
+
+# ---- droplet-free teardown (self-contained; exits) -------------------------------
+# There is exactly one thing that was created: the repo. Everything else this
+# script knows how to destroy was never provisioned.
+if [ "$NO_INFRA" = 1 ]; then
+  if [ "$DELETE_REPO" != 1 ]; then
+    log "nothing to destroy: '$PROJECT_NAME' is a $APP_TYPE — no droplet, no database, no DNS record, no state bucket, no registry repository."
+    log "the only thing bootstrap.sh created is the code-host repo; delete it with --delete-repo (the local directory is never touched)."
+    exit 0
+  fi
+
+  [ -n "$APP_NAME" ] \
+    || fail "--delete-repo needs the repo's name, and there is no app at $APP_DIR to read it from"
+  log "TEARDOWN of $APP_TYPE '$PROJECT_NAME':"
+  printf '  - %s repository %s (--delete-repo)\n' "$( is_gitea && printf Gitea || printf GitHub )" "$APP_NAME"
+  printf '  - nothing else: this app provisioned no infrastructure\n'
+  if [ "$ASSUME_YES" != 1 ]; then
+    printf 'Type the project name (%s) to confirm: ' "$PROJECT_NAME"
+    read -r answer
+    [ "$answer" = "$PROJECT_NAME" ] || fail "confirmation did not match — aborting (nothing deleted)"
+  fi
+  ci_auth_check
+  log "deleting the $( is_gitea && printf Gitea || printf GitHub ) repo"
+  ( cd "$APP_DIR" && repo_delete )
+  log "done. The local directory at $APP_DIR is untouched."
+  exit 0
 fi
 
 # ---- tenant teardown (self-contained; exits) --------------------------------------

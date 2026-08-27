@@ -1,0 +1,100 @@
+# CI for a droplet-free RUBY CLI (FRAMEWORK=ruby-cli). Copied into the project
+# repo by the bootstrap as .gitea/workflows/ci.yml. `bootstrap.sh --cli ruby`
+# builds this.
+#
+# The GIT_PROVIDER=gitea counterpart of ../.github/workflows/ci.ruby-cli.yml.
+# Same pipeline against the `gitea.` context; this one touches no droplet and
+# needs no DigitalOcean credential, so there is no firewall hole-punch to drop.
+#
+# Two jobs: test (the gate) -> package (the artifact). There is no deploy job
+# because a CLI has nowhere to be deployed to — no droplet, no DNS, no image,
+# no database. What it has instead is a gem that puts a command on someone's
+# PATH, so this pipeline's job is to build one and prove it runs.
+#
+# The Ruby version comes from .ruby-version in the repo, which setup-ruby reads
+# directly — bumping Ruby is a commit to the project, never an edit to this file.
+#
+# Required repo config: none. That is the point.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  # Re-run against main without pushing a commit — the bootstrap uses this when
+  # a re-run finds nothing to commit and so fires no push event.
+  workflow_dispatch:
+
+# A superseded run tells you nothing a newer one won't: cancel, don't queue.
+concurrency:
+  group: ci-${{ gitea.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Red specs block the package entirely: package needs this job.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version-file: .ruby-version
+          bundler-cache: true
+
+      - name: Run the specs
+        run: bundle exec rspec
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version-file: .ruby-version
+          bundler-cache: true
+
+      # .app-name is written by the scaffold and names both the gem and the
+      # executable, so it is the one place this workflow has to look.
+      - name: Read the command's name
+        id: meta
+        run: |
+          app=$(tr -d '[:space:]' < .app-name)
+          if [ -z "$app" ]; then
+            echo "::error::.app-name is empty — cannot tell what the command is called"; exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Build the gem
+        id: build
+        run: |
+          gem build "${{ steps.meta.outputs.app }}.gemspec"
+          gem_file=$(ls -1 "${{ steps.meta.outputs.app }}"-*.gem | head -1)
+          echo "gem=$gem_file" >> "$GITHUB_OUTPUT"
+
+      # Prove the thing runs the way a user will get it — installed, from the
+      # PATH, not from the checkout. A gem that builds but whose executable
+      # cannot find its own library is exactly the failure worth catching here.
+      - name: Smoke-test the installed command
+        run: |
+          gem install --no-document "./${{ steps.build.outputs.gem }}"
+          "${{ steps.meta.outputs.app }}" --version
+          "${{ steps.meta.outputs.app }}" --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.app }}-gem
+          path: ${{ steps.build.outputs.gem }}
+          if-no-files-found: error
+
+      # NO RELEASE UPLOAD ON THIS PATH, deliberately. Gitea's runners ship no
+      # `gh`, and attaching a file to a release means calling Gitea's own API
+      # with a token that carries release-write scope — which the automatic
+      # per-run token is not guaranteed to have. Rather than emit a step that
+      # fails on half the instances it lands on, the tag push builds and keeps
+      # the artifact like any other run, and publishing a release stays manual.
+      # Porting it is the same gap the staging workflow has (see the README's
+      # Gitea section).

@@ -10,6 +10,23 @@ One command takes you from an **empty directory** to a **freshly generated Phoen
 
 If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. If it already contains an app (a `mix.exs` for Phoenix, a `Gemfile` for Sinatra, a `config.toml` for Zola), that app is used as-is — so you can point it at output from your own generator instead.
 
+**Not everything worth building is a website.** `--cli` and `--no-droplet` build a command-line
+program or a reusable package instead: same repo creation, same pipeline wiring, same one
+command — but no droplet, no DNS, no database, and no DigitalOcean credentials required at all.
+Pick the CLI's language on the same flag. See [App types](#app-types).
+
+```bash
+./bootstrap.sh --cli ruby       ~/src/mytool   # also: elixir, bash, typescript
+./bootstrap.sh --cli typescript ~/src/myothertool
+./bootstrap.sh --no-droplet     ~/src/mylib    # a package, built and tested by CI
+```
+
+Every CLI it generates is a **command**, not a script you configure by exporting variables:
+
+```bash
+mytool --format json hello there    # not FORMAT=json ./mytool.sh hello there
+```
+
 ## What you get
 
 | Concern | Implementation |
@@ -85,6 +102,13 @@ Port 22 is closed to the world. On the default GitHub path, CI punches a tempora
 
 Docker is **not** required locally — images build in CI.
 
+The table above is for a **service** (the default app type). The droplet-free types
+(`--cli`, `--no-droplet` — see [App types](#app-types)) need only `git`, `curl` and the code
+host's tool (`gh`, or `jq` for Gitea): no Terraform, no `doctl`, no SSH, and **no local runtime
+of the language you pick** — every one of those scaffolds is written in bash and built in CI, so
+`./bootstrap.sh --cli typescript` works on a machine with no Node installed. The credentials
+below are likewise service-only; a droplet-free run needs none of them.
+
 ### Accounts and credentials (one-time setup)
 
 1. **DigitalOcean**
@@ -140,6 +164,154 @@ Optional (defaults in parentheses):
 | `GITEA_TOKEN` | **Gitea only** — personal access token. Required. |
 | `GITEA_OWNER` | **Gitea only** — user/org the repo is created under. Optional: unset, it's whichever account `GITEA_TOKEN` authenticates as. |
 | `GITEA_RUNNER_IP` | **Gitea only** — the address the runner's *outbound* traffic comes from, allow-listed once in Terraform. Bare IP or CIDR; comma-separate for more than one. Required. Note this is the runner host's egress IP, **not** a reserved/floating IP attached to it — see [Gitea support](#gitea-support). |
+
+## App types
+
+What gets built is chosen on two axes. **The app type** is the *shape* of the thing — and
+therefore what infrastructure it needs. **The language** is what it is written in, within that
+shape. A Ruby CLI and a Ruby web app are different things of the same language, which is why
+both axes matter.
+
+```bash
+./bootstrap.sh --cli ruby ~/src/mytool     # or --cli=ruby, or --cli --lang ruby
+./bootstrap.sh --help                      # the full list, rendered from the registry
+```
+
+Each `(type, language)` pair also has a **framework** name — `ruby-cli`, `sinatra`, `zola` —
+which is what `FRAMEWORK` takes. Framework names are unique across types, so naming one on its
+own also picks the type (`FRAMEWORK=zola` still means a service, exactly as before). A bare
+language does not: `FRAMEWORK=ruby` is ambiguous and says so.
+
+| | `--service` (default) | `--cli` | `--no-droplet` (alias `--library`) |
+|---|---|---|---|
+| What it is | a web app served over HTTPS | a command-line program | a reusable package |
+| Languages | `elixir`, `ruby`, `static` | `elixir`, `ruby`, `bash`, `typescript` | `elixir` |
+| Frameworks | `phoenix`, `sinatra`, `zola` | `escript`, `ruby-cli`, `bash-cli`, `ts-cli` | `mix` |
+| Droplet, DNS, TLS | yes | **none** | **none** |
+| Database | `postgres` / `sqlite` / none | **none** | **none** |
+| Container registry | yes (except `zola`) | **none** | **none** |
+| PR staging | yes (except `zola`) | **none** | **none** |
+| Credentials needed | DO + DNSimple + Spaces + SSH | **code host only** | **code host only** |
+| Local tools | `mix` for Phoenix | `git`, `curl` | `git`, `curl` |
+| Pipeline | `.github/workflows/deploy.yml` | `.github/workflows/ci.yml` | `.github/workflows/ci.yml` |
+| The bootstrap ends when | `https://<domain>` answers | CI goes green | CI goes green |
+| Teardown | droplet, DB, DNS, bucket, registry | nothing exists to destroy | nothing exists to destroy |
+
+The droplet-free types are a genuinely smaller run: eight steps instead of sixteen, no
+Terraform, no `doctl`, no SSH, and `preflight` asks for the code host and nothing else. You can
+stand up a CLI on a laptop that has never heard of DigitalOcean.
+
+```bash
+./bootstrap.sh --cli ruby ~/src/mytool
+# ==> app: mytool (Mytool) [cli/ruby-cli, ruby] — repo + CI only, no infrastructure
+# ==> preparing cli (ruby): CI workflow only (nothing is deployed anywhere)
+# ==> CI GREEN: ci.yml passed
+# ==> done. cli 'mytool' built and green — no infrastructure was provisioned, so
+#     there is nothing to bill and nothing to tear down.
+```
+
+`--no-droplet` is a **constraint**, not a type of its own. On its own it builds the default
+droplet-free type (a library). Alongside `--cli` it is already satisfied and does nothing.
+Against `--service` it fails rather than half-applying — "deploy my Phoenix app without a
+server" and "build me a library instead" are different requests, and guessing between them
+would hand you an app you didn't ask for.
+
+```
+$ ./bootstrap.sh --no-droplet --service
+bootstrap: --no-droplet conflicts with app type 'service' (a web app on its own droplet, ...).
+       A 'service' is served from a droplet — there is no droplet-free variant of it.
+       Drop the type flag (--no-droplet on its own builds a library), or name a
+       droplet-free type: --cli, --library
+```
+
+### CLIs: `--cli <language>`
+
+**Every one is a command, not a script.** The thing that makes a CLI worth generating is the
+part people skip: real argument parsing. Each scaffold builds on its language's standard option
+parser, and each supports the same surface —
+
+```bash
+mytool --format json hello there     # not FORMAT=json ./mytool.sh hello there
+mytool --format=json hello there     # = also works
+mytool -f json                       # short flags
+mytool -- --format                   # -- ends the options
+mytool --help ; mytool --version     # and exit 0
+mytool --nope ; echo $?              # => 2, a usage error, distinct from 1
+```
+
+**Every one is a library with a thin executable on top**, which is the other half of the answer:
+the work lives in an importable module, and the CLI layer only translates arguments into calls
+to it. So the same code is `require "mytool"` / `import { … } from "mytool"` /
+`. lib/mytool/core.sh` *and* a command on your PATH — and the tests exercise the library
+directly rather than by spawning a process.
+
+| `--cli …` | Parser | Library / entry point | Installs as | CI |
+|---|---|---|---|---|
+| `elixir` (default) | Elixir `OptionParser` | `lib/<name>.ex` / `lib/<name>/cli.ex` | `mix escript.build` → one file | format, warnings-as-errors, `mix test`, escript built + smoke-tested |
+| `ruby` | `OptionParser` (stdlib) | `lib/<name>.rb` / `exe/<name>` | `gem install <name>` | `rspec`, gem built, installed and smoke-tested |
+| `bash` | a long/short/`--k=v` loop | `lib/<name>/core.sh` / `bin/<name>` | a symlink on your PATH | `shellcheck -x`, the suite, PATH smoke test |
+| `typescript` | `node:util` `parseArgs` | `src/index.ts` / `src/cli.ts` | `npm i -g <name>` | typecheck, `node --test`, package built, installed and smoke-tested |
+
+Two of them have **zero runtime dependencies** (bash needs nothing; TypeScript's parser and test
+runner are both stdlib, and `typescript` is the only devDependency). Ruby's parser is stdlib
+too. None of the four needs a local toolchain to *scaffold* — like the Sinatra and Zola
+scaffolds, they are written by hand in bash and built in CI, so `./bootstrap.sh --cli
+typescript` works on a machine with no Node installed.
+
+Each pins its toolchain in a file CI reads directly — `.tool-versions`, `.ruby-version`,
+`.node-version` — so bumping a runtime is a commit to the project, never an edit to a workflow.
+The Elixir pins come from `app/Dockerfile`'s ARGs, so this repo has one place to bump them.
+
+On a tag push (`v*`) the built artifact — escript, `.gem`, npm tarball — is attached to a GitHub
+release, so `git tag v1.2.3 && git push --tags` is the whole publish procedure. Pushing to
+RubyGems or npm is deliberately *not* automated: that needs a credential the repo doesn't hold,
+so the release carries the file and you push it. See [Gitea support](#gitea-support) for what
+differs there.
+
+### Libraries: `--no-droplet`
+
+`mix` — an Elixir library: the same project as the escript CLI without the CLI layer, plus
+`description`/`package` metadata already stubbed in `mix.exs`, so publishing is a
+`mix hex.publish` rather than a rewrite. CI is `mix format --check-formatted` →
+`mix compile --warnings-as-errors` → `mix test`.
+
+Gems, hex packages and OTP apps are the next rows here — see below.
+
+### Adding a language or a type
+
+Gems, hex packages and OTP apps belong under `--no-droplet`, and the registry exists so that
+adding one is a data change rather than a rewrite. Everything droplet-free in `bootstrap.sh` is
+gated on **capabilities** (`needs_droplet`, `has_database`), never on a type name — so a gem
+added later walks the paths a CLI already walks.
+
+[`scripts/app-types.sh`](scripts/app-types.sh) holds two tables. To add a language to a type:
+
+1. Add a row to `APP_STACK_TABLE`: its type, a framework name, its language, the file that
+   proves an app already exists there, the scaffold script to run, and the workflow templates
+   to copy (`src:dest` pairs).
+2. Write the scaffold script under `scripts/`.
+3. Add its `ci.<framework>.yml` under `app/.github/workflows/` and `app/.gitea/workflows/`.
+
+That's the whole change — no branch in `bootstrap.sh` moves. Three of the four CLI languages
+were added exactly this way, and the table carries the next three rows commented out as a
+worked example:
+
+```
+library|gem|ruby|-|<name>.gemspec|new-gem.sh|ci.gem.yml:ci.yml|Ruby gem
+library|hex|elixir|-|mix.exs|new-mix-app.sh --hex|ci.hex.yml:ci.yml|Elixir library published to Hex
+library|otp|elixir|-|mix.exs|new-mix-app.sh --sup|ci.otp.yml:ci.yml|OTP application (supervision tree)
+```
+
+The only place a language is allowed to imply anything beyond its own row is `parse_meta`, which
+keys on it to decide where the app's name comes from (`mix.exs`, or the directory, camelized or
+not) — a property every stack of one language shares.
+
+A whole new *type* (a different shape, with different infrastructure needs) is a row in
+`APP_TYPE_TABLE`: its flag, whether it needs a droplet, whether it may have a database, and
+which workflow its pipeline lives in. Its stacks are just the `APP_STACK_TABLE` rows naming it,
+and the first of them is its default. The `--<type>` flag is matched against the table too, so
+`bootstrap.sh`'s argument parser needs no new case arm either — including for
+`--<type> <language>`.
 
 ## Application framework
 
@@ -384,6 +556,18 @@ simpler and no less secure to allow-list it once in `infra-app/firewall.tf`
 (`gitea_runner_cidr`, wired from `GITEA_RUNNER_IP`) than to reimplement a
 punch/revoke dance that exists to solve a problem the Gitea path doesn't have.
 
+**Droplet-free app types work here, minus release uploads.** `--cli` and
+`--no-droplet` ship a `.gitea/workflows/ci.yml` for every language, identical
+to the GitHub one but for the `gitea.` context — no droplet is involved, so
+there is no hole-punch to drop and no DigitalOcean credential to hold. The one
+thing missing is the tag-push step that attaches the built escript, `.gem` or
+npm tarball to a release: Gitea's runners ship no `gh`, and its release API
+wants a token that the automatic per-run token is not guaranteed to carry.
+Rather than emit a step that fails on half the instances it lands on, a tag
+push builds and keeps the artifact like any other run, and cutting the release
+stays manual. Same gap as the staging workflow, and the same fix when someone
+wants it.
+
 ### Bootstrapping your own Gitea
 
 `GIT_PROVIDER=gitea` needs an actual instance and a registered Actions runner
@@ -554,7 +738,21 @@ Two things to know when sharing a droplet:
 
 # Or, onto a droplet that already serves ~/src/myapp:
 ./bootstrap.sh --host ~/src/myapp ~/src/myotherapp
+
+# Or build something that isn't a website at all — no droplet, no DNS,
+# no database, and no DigitalOcean credentials required. --cli takes the
+# language (elixir, ruby, bash, typescript):
+./bootstrap.sh --cli ruby   ~/src/mytool
+./bootstrap.sh --no-droplet ~/src/mylib
+
+# The full type + language list:
+./bootstrap.sh --help
 ```
+
+The steps below describe a **service** — the default. A droplet-free type
+([App types](#app-types)) runs eight of them: preflight, generate, parse, repo, prepare (the CI
+workflow, and nothing else), seed (nothing to seed), commit + push, and poll until CI concludes.
+Steps 4–9 have nothing to do, because nothing was provisioned.
 
 The app name is the directory basename (must be a valid Elixir app name: `lower_snake_case`). What the run does, in order:
 
@@ -627,6 +825,18 @@ stack and volumes under `/root/apps/<slug>`, any staging environment left under
 `/root/apps/<slug>-stg`, and its routes out of the shared Caddy. The droplet and
 its other apps are untouched. (Its Litestream replica in Spaces is left behind —
 delete `litestream/<project>/` by hand if you want the data gone.)
+
+A **droplet-free** app has nothing to tear down — it created no bucket, no cluster, no droplet,
+no DNS record and no registry repository. `teardown.sh` says so and stops, and demands none of
+the DigitalOcean, DNSimple or Spaces credentials the rest of it needs. `--delete-repo` still
+deletes the code-host repo; the local directory is never touched either way. (The app records
+what it is in `.app-type`; apps created before that file existed are treated as services, which
+is what they are.)
+
+```bash
+./teardown.sh ~/src/mytool                 # "nothing to destroy" — and it means it
+./teardown.sh --delete-repo ~/src/mytool   # the repo, and only the repo
+```
 
 ```bash
 # Everything, in the right order, with confirmation (data loss!):

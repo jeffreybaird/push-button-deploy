@@ -1,0 +1,80 @@
+# CI for a droplet-free BASH CLI (FRAMEWORK=bash-cli). Copied into the project
+# repo by the bootstrap as .github/workflows/ci.yml. `bootstrap.sh --cli bash`
+# builds this.
+#
+# ONE JOB, because a shell tool has no build step: the repository IS the
+# artifact. What CI can do is prove the thing is sound — shellcheck over every
+# script, then the suite, which runs the real executable and asserts on its
+# stdout and exit status.
+#
+# There is no deploy job either: a CLI has nowhere to be deployed to — no
+# droplet, no DNS, no image, no database.
+#
+# Nothing is installed to run the tests. test/run.sh is a plain script with no
+# framework behind it, which is why the suite behaves identically here, on a
+# laptop, and on a Gitea runner.
+#
+# Required repo config: none. That is the point.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  # Re-run against main without pushing a commit — the bootstrap uses this when
+  # a re-run finds nothing to commit and so fires no push event.
+  workflow_dispatch:
+
+# A superseded run tells you nothing a newer one won't: cancel, don't queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # .app-name is written by the scaffold and names the executable in bin/.
+      - name: Read the command's name
+        id: meta
+        run: |
+          app=$(tr -d '[:space:]' < .app-name)
+          if [ -z "$app" ]; then
+            echo "::error::.app-name is empty — cannot tell what the command is called"; exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      # Preinstalled on GitHub's runners; installed on the spot anywhere else,
+      # so this file works unchanged on a self-hosted or container runner.
+      - name: Ensure shellcheck
+        run: |
+          command -v shellcheck >/dev/null && exit 0
+          if command -v sudo >/dev/null; then SUDO=sudo; else SUDO=; fi
+          $SUDO apt-get update -qq
+          $SUDO apt-get install -y -qq shellcheck
+
+      # -x so it follows `. lib/<name>/core.sh` and checks the library in the
+      # same pass; the source directive in bin/<name> resolves from the repo
+      # root, which is where this runs.
+      - name: Lint
+        run: |
+          shellcheck -x "bin/${{ steps.meta.outputs.app }}" \
+                        lib/"${{ steps.meta.outputs.app }}"/*.sh \
+                        test/run.sh
+
+      - name: Run the suite
+        run: ./test/run.sh
+
+      # The suite already drives the executable, but this is the check that it
+      # works from a PATH entry rather than a relative path — the way anyone
+      # who installs it will actually invoke it.
+      - name: Smoke-test from the PATH
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$PWD/bin/${{ steps.meta.outputs.app }}" "$HOME/.local/bin/${{ steps.meta.outputs.app }}"
+          export PATH="$HOME/.local/bin:$PATH"
+          "${{ steps.meta.outputs.app }}" --version
+          "${{ steps.meta.outputs.app }}" --help > /dev/null

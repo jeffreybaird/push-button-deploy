@@ -1,0 +1,119 @@
+# CI for a droplet-free TYPESCRIPT CLI (FRAMEWORK=ts-cli). Copied into the
+# project repo by the bootstrap as .github/workflows/ci.yml.
+# `bootstrap.sh --cli typescript` builds this.
+#
+# Two jobs: test (the gate) -> package (the artifact). There is no deploy job
+# because a CLI has nowhere to be deployed to — no droplet, no DNS, no image,
+# no database. What it has instead is an npm package that puts a command on
+# someone's PATH, so this pipeline's job is to build one and prove it runs.
+#
+# The Node version comes from .node-version in the repo, which setup-node reads
+# directly — bumping Node is a commit to the project, never an edit to this file.
+#
+# `npm install` rather than `npm ci`, and no dependency cache: the scaffold
+# ships no package-lock.json, and there is exactly one devDependency to fetch.
+# Once you commit a lockfile, switch both jobs to `npm ci` and add
+# `cache: npm` to setup-node.
+#
+# Required repo config: none. That is the point.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  # Re-run against main without pushing a commit — the bootstrap uses this when
+  # a re-run finds nothing to commit and so fires no push event.
+  workflow_dispatch:
+
+# A superseded run tells you nothing a newer one won't: cancel, don't queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Red tests block the package entirely: package needs this job.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # Typecheck first: it is the fastest check and the one most likely to
+      # fail, so a red run says why in seconds rather than after a full build.
+      - name: Typecheck
+        run: npm run typecheck
+
+      # `npm test` builds, then runs node:test against the COMPILED output —
+      # so what the tests exercise is what the package ships.
+      - name: Run tests
+        run: npm test
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # Only the tag path writes anything (the release upload below); a branch
+      # push builds the tarball and stops.
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      # .app-name is written by the scaffold and names both the package and the
+      # command, so it is the one place this workflow has to look.
+      - name: Read the command's name
+        id: meta
+        run: |
+          app=$(tr -d '[:space:]' < .app-name)
+          if [ -z "$app" ]; then
+            echo "::error::.app-name is empty — cannot tell what the command is called"; exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Build the package
+        id: build
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          tarball=$(npm pack --silent)
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      # Prove the thing runs the way a user will get it — installed globally,
+      # from the PATH, not from the checkout. A package that builds but whose
+      # bin entry is wrong is exactly the failure worth catching here.
+      - name: Smoke-test the installed command
+        run: |
+          npm install -g "./${{ steps.build.outputs.tarball }}"
+          "${{ steps.meta.outputs.app }}" --version
+          "${{ steps.meta.outputs.app }}" --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.app }}-npm-package
+          path: ${{ steps.build.outputs.tarball }}
+          if-no-files-found: error
+
+      # Tag pushes only. The release is created if it does not exist yet, so
+      # `git tag v1.2.3 && git push --tags` is the whole publish procedure.
+      # (Publishing to the npm registry is deliberately NOT automated here —
+      # that needs a token this repo does not hold. `npm publish` the file.)
+      - name: Attach the tarball to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARBALL: ${{ steps.build.outputs.tarball }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber

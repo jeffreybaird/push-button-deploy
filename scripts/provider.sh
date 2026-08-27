@@ -20,6 +20,14 @@
 # Callers of the repo/secret/var/run shims must have $APP_NAME set first (and
 # $HEAD_SHA for ci_run_row); ci_auth_check must run before any of them (it
 # resolves $GITEA_OWNER_RESOLVED).
+#
+# CI_WORKFLOW names the app's pipeline in its own repo — what ci_run_row polls,
+# ci_dispatch_deploy starts and ci_diagnose_dump lists. It is 'deploy.yml' for a
+# deployed service and 'ci.yml' for the droplet-free app types, which have no
+# deploy to watch but do have a build to wait on; scripts/app-types.sh is where
+# each type declares its own. Defaulted here so teardown.sh, which sources this
+# file without the registry, still has a value.
+CI_WORKFLOW="${CI_WORKFLOW:-deploy.yml}"
 
 GIT_PROVIDER="${GIT_PROVIDER:-github}"
 case "$GIT_PROVIDER" in
@@ -267,7 +275,7 @@ var_delete() {
 ci_run_row() {
   if is_github; then
     ( cd "$APP_DIR" \
-      && gh run list --workflow deploy.yml --commit "$HEAD_SHA" --limit 1 \
+      && gh run list --workflow "$CI_WORKFLOW" --commit "$HEAD_SHA" --limit 1 \
            --json databaseId,status,conclusion \
            --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"' 2>/dev/null
     ) || true
@@ -314,23 +322,23 @@ ci_run_row() {
   esac
 }
 
-# Start deploy.yml against main WITHOUT a new commit. A bootstrap re-run that
-# fixed something outside git pushes nothing, so no push event fires and no
-# deploy starts; this is what gets one going. Both providers expose a workflow
-# dispatch, so neither path has to fake a commit to redeploy.
+# Start the app's workflow against main WITHOUT a new commit. A bootstrap re-run
+# that fixed something outside git pushes nothing, so no push event fires and no
+# run starts; this is what gets one going. Both providers expose a workflow
+# dispatch, so neither path has to fake a commit to re-run.
 ci_dispatch_deploy() {
   if is_github; then
-    ( cd "$APP_DIR" && gh workflow run deploy.yml --ref main ) \
-      || fail "could not dispatch deploy.yml (gh workflow run) — trigger it by hand: gh workflow run deploy.yml --ref main"
+    ( cd "$APP_DIR" && gh workflow run "$CI_WORKFLOW" --ref main ) \
+      || fail "could not dispatch $CI_WORKFLOW (gh workflow run) — trigger it by hand: gh workflow run $CI_WORKFLOW --ref main"
     return 0
   fi
   local code body
   body='{"ref":"main"}'
   code="$(gitea_api_status POST \
-    "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/workflows/deploy.yml/dispatches" "$body")" || true
+    "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/workflows/$CI_WORKFLOW/dispatches" "$body")" || true
   case "$code" in
     2??) return 0 ;;
-    *) fail "gitea: could not dispatch deploy.yml (HTTP ${code:-connection error}) — trigger it by hand from $GITEA_URL/$GITEA_OWNER_RESOLVED/$APP_NAME/actions" ;;
+    *) fail "gitea: could not dispatch $CI_WORKFLOW (HTTP ${code:-connection error}) — trigger it by hand from $GITEA_URL/$GITEA_OWNER_RESOLVED/$APP_NAME/actions" ;;
   esac
 }
 
@@ -343,7 +351,7 @@ ci_log_hint()   { is_gitea && printf '%s/%s/%s/actions' "$GITEA_URL" "$GITEA_OWN
 # Ordered diagnostics' first section (Actions status) — provider-specific list.
 ci_diagnose_dump() {
   if is_github; then
-    ( cd "$APP_DIR" && gh run list --workflow deploy.yml --limit 3 ) || echo "(gh run list failed)"
+    ( cd "$APP_DIR" && gh run list --workflow "$CI_WORKFLOW" --limit 3 ) || echo "(gh run list failed)"
     return 0
   fi
   { gitea_api GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/tasks?limit=3" 2>/dev/null || true; } \
