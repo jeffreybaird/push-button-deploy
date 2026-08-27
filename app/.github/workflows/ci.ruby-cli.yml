@@ -1,0 +1,105 @@
+# CI for a droplet-free RUBY CLI (FRAMEWORK=ruby-cli). Copied into the project
+# repo by the bootstrap as .github/workflows/ci.yml. `bootstrap.sh --cli ruby`
+# builds this.
+#
+# Two jobs: test (the gate) -> package (the artifact). There is no deploy job
+# because a CLI has nowhere to be deployed to — no droplet, no DNS, no image,
+# no database. What it has instead is a gem that puts a command on someone's
+# PATH, so this pipeline's job is to build one and prove it runs.
+#
+# The Ruby version comes from .ruby-version in the repo, which setup-ruby reads
+# directly — bumping Ruby is a commit to the project, never an edit to this file.
+#
+# Required repo config: none. That is the point.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  # Re-run against main without pushing a commit — the bootstrap uses this when
+  # a re-run finds nothing to commit and so fires no push event.
+  workflow_dispatch:
+
+# A superseded run tells you nothing a newer one won't: cancel, don't queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Red specs block the package entirely: package needs this job.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version-file: .ruby-version
+          bundler-cache: true
+
+      - name: Run the specs
+        run: bundle exec rspec
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # Only the tag path writes anything (the release upload below); a branch
+      # push builds the gem and stops.
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version-file: .ruby-version
+          bundler-cache: true
+
+      # .app-name is written by the scaffold and names both the gem and the
+      # executable, so it is the one place this workflow has to look.
+      - name: Read the command's name
+        id: meta
+        run: |
+          app=$(tr -d '[:space:]' < .app-name)
+          if [ -z "$app" ]; then
+            echo "::error::.app-name is empty — cannot tell what the command is called"; exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Build the gem
+        id: build
+        run: |
+          gem build "${{ steps.meta.outputs.app }}.gemspec"
+          gem_file=$(ls -1 "${{ steps.meta.outputs.app }}"-*.gem | head -1)
+          echo "gem=$gem_file" >> "$GITHUB_OUTPUT"
+
+      # Prove the thing runs the way a user will get it — installed, from the
+      # PATH, not from the checkout. A gem that builds but whose executable
+      # cannot find its own library is exactly the failure worth catching here.
+      - name: Smoke-test the installed command
+        run: |
+          gem install --no-document "./${{ steps.build.outputs.gem }}"
+          "${{ steps.meta.outputs.app }}" --version
+          "${{ steps.meta.outputs.app }}" --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.app }}-gem
+          path: ${{ steps.build.outputs.gem }}
+          if-no-files-found: error
+
+      # Tag pushes only. The release is created if it does not exist yet, so
+      # `git tag v1.2.3 && git push --tags` is the whole publish procedure.
+      # (Pushing to RubyGems is deliberately NOT automated here — that needs a
+      # credential this repo does not hold. `gem push` the attached file.)
+      - name: Attach the gem to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GEM: ${{ steps.build.outputs.gem }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "$GEM" --clobber

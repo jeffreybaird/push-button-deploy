@@ -75,10 +75,6 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
-    permissions:
-      # Only the tag path writes anything (the release upload below); a branch
-      # push builds the artifact and stops.
-      contents: write
     steps:
       - uses: actions/checkout@v6
 

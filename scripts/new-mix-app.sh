@@ -173,21 +173,46 @@ EOF
 } > "$APP_DIR/mix.exs"
 
 # ---- lib + test ------------------------------------------------------------------
+# The same library shape every other language's scaffold gets: functions that
+# take arguments and return values, knowing nothing about argv, stdout or exit
+# codes. The CLI layer (escript only, below) is a thin translation over this.
 cat > "$APP_DIR/lib/$APP_NAME.ex" <<EOF
 defmodule $APP_MODULE do
   @moduledoc """
   $APP_MODULE — replace this with what the $KIND actually does.
+
+  Keep the work in here, in plain functions. What makes a library usable from a
+  command line is that none of it knows there is one.
   """
+
+  @typedoc "Output shapes \`greet/2\` knows how to render."
+  @type format :: :text | :json
+
+  @formats [:text, :json]
+
+  @doc "The formats \`greet/2\` accepts, in the order a usage message should list them."
+  @spec formats() :: [format()]
+  def formats, do: @formats
 
   @doc """
-  A placeholder so the project compiles, runs and has something to test.
+  An example of the shape: takes what it needs, returns a string.
 
-      iex> $APP_MODULE.hello()
-      :world
+      iex> $APP_MODULE.greet(["world"])
+      "hello world"
+
+      iex> $APP_MODULE.greet(["you"], :json)
+      ~s({"greeting":"hello","subject":"you"})
 
   """
-  @spec hello() :: :world
-  def hello, do: :world
+  @spec greet([String.t()], format()) :: String.t()
+  def greet(words, format \\\\ :text)
+
+  def greet([], format), do: greet(["world"], format)
+
+  def greet(words, :text), do: "hello #{Enum.join(words, " ")}"
+
+  def greet(words, :json),
+    do: ~s({"greeting":"hello","subject":"#{Enum.join(words, " ")}"})
 end
 EOF
 
@@ -200,8 +225,16 @@ defmodule ${APP_MODULE}Test do
   use ExUnit.Case, async: true
   doctest $APP_MODULE
 
-  test "hello/0 answers" do
-    assert $APP_MODULE.hello() == :world
+  test "greet/1 joins the words it is given" do
+    assert $APP_MODULE.greet(["hi", "there"]) == "hello hi there"
+  end
+
+  test "greet/1 defaults to the world" do
+    assert $APP_MODULE.greet([]) == "hello world"
+  end
+
+  test "greet/2 renders json" do
+    assert $APP_MODULE.greet(["you"], :json) == ~s({"greeting":"hello","subject":"you"})
   end
 end
 EOF
@@ -210,7 +243,7 @@ if [ "$KIND" = escript ]; then
   cat > "$APP_DIR/lib/$APP_NAME/cli.ex" <<EOF
 defmodule $APP_MODULE.CLI do
   @moduledoc """
-  Command-line entry point for \`$APP_NAME\`, reached through the escript
+  Argument parsing, and nothing else — reached through the escript
   \`mix escript.build\` produces.
   """
 
@@ -231,44 +264,62 @@ defmodule $APP_MODULE.CLI do
   end
 
   @doc """
-  Parses \`argv\` and returns \`{output, exit_status}\`. Pure: it prints
-  nothing and halts nothing, so tests can call it directly.
+  Parses \`argv\` and returns \`{output, exit_status}\`. Pure: it prints nothing
+  and halts nothing, so tests can call it directly.
+
+  Status 2 is a usage error, the convention every shell tool follows —
+  distinguishable from "ran fine" (0) and "ran and failed" (1).
   """
-  @spec run([String.t()]) :: {String.t(), non_neg_integer()}
+  @spec run([String.t()]) :: {String.t(), 0 | 1 | 2}
   def run(argv) do
     case OptionParser.parse(argv,
-           strict: [help: :boolean, version: :boolean],
-           aliases: [h: :help, v: :version]
+           strict: [format: :string, help: :boolean, version: :boolean],
+           aliases: [f: :format, h: :help, v: :version]
          ) do
-      {[help: true], _, _} ->
-        {usage(), 0}
-
-      {[version: true], _, _} ->
-        {"$APP_NAME #{@version}", 0}
-
-      {_, [], []} ->
-        {usage(), 0}
-
-      {_, args, []} ->
-        {greet(args), 0}
+      {opts, args, []} ->
+        dispatch(opts, args)
 
       {_, _, invalid} ->
-        {"unknown option: #{Enum.map_join(invalid, ", ", &elem(&1, 0))}\\n\\n#{usage()}", 2}
+        usage_error("unknown option: " <> Enum.map_join(invalid, ", ", &elem(&1, 0)))
     end
   end
 
-  defp greet(args), do: "#{$APP_MODULE.hello()}: #{Enum.join(args, " ")}"
+  defp dispatch(opts, args) do
+    cond do
+      opts[:help] -> {usage(), 0}
+      opts[:version] -> {"$APP_NAME #{@version}", 0}
+      true -> render(opts[:format] || "text", args)
+    end
+  end
+
+  defp render(format, args) do
+    known = Enum.map($APP_MODULE.formats(), &Atom.to_string/1)
+
+    if format in known do
+      {$APP_MODULE.greet(args, String.to_existing_atom(format)), 0}
+    else
+      usage_error("unknown format: #{format} (expected #{Enum.join(known, " or ")})")
+    end
+  end
+
+  defp usage_error(message), do: {"#{message}\n\n#{usage()}", 2}
 
   defp usage do
     """
-    $APP_NAME #{@version}
+    $APP_NAME #{@version} — TODO: one sentence describing what it does.
 
     Usage:
-      $APP_NAME [options] [args...]
+      $APP_NAME [options] [words...]
 
     Options:
-      -h, --help     print this message
-      -v, --version  print the version
+      -f, --format FORMAT   output format: #{Enum.join($APP_MODULE.formats(), " or ")} (default: text)
+      -h, --help            print this message
+      -v, --version         print the version
+
+    Examples:
+      $APP_NAME hello there
+      $APP_NAME --format json hello there
+      $APP_NAME -f json -- --not-a-flag
     """
     |> String.trim_trailing()
   end
@@ -292,17 +343,40 @@ defmodule $APP_MODULE.CLITest do
   end
 
   test "no arguments is not an error" do
-    assert {_, 0} = CLI.run([])
+    assert {"hello world", 0} = CLI.run([])
   end
 
-  test "an unknown option exits non-zero and says which" do
+  test "positional arguments reach the library" do
+    assert {"hello hi there", 0} = CLI.run(["hi", "there"])
+  end
+
+  test "--format takes a value with a space" do
+    assert {output, 0} = CLI.run(["--format", "json", "you"])
+    assert output =~ ~s("subject":"you")
+  end
+
+  test "--format=value works too" do
+    assert {output, 0} = CLI.run(["--format=json", "you"])
+    assert output =~ ~s("subject":"you")
+  end
+
+  test "the short flag works" do
+    assert {output, 0} = CLI.run(["-f", "json"])
+    assert output =~ ~s("subject":"world")
+  end
+
+  test "-- ends the options" do
+    assert {"hello --format", 0} = CLI.run(["--", "--format"])
+  end
+
+  test "an unknown option exits 2 and says which" do
     assert {output, 2} = CLI.run(["--nope"])
     assert output =~ "--nope"
   end
 
-  test "arguments reach the app" do
-    assert {output, 0} = CLI.run(["hi", "there"])
-    assert output =~ "hi there"
+  test "an unknown format exits 2" do
+    assert {output, 2} = CLI.run(["--format", "yaml"])
+    assert output =~ "yaml"
   end
 end
 EOF

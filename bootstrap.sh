@@ -7,11 +7,12 @@
 #   ./bootstrap.sh --host <host_app_dir> [app_dir]
 #                                      # deploy onto a droplet that ALREADY serves
 #                                      # <host_app_dir>'s app (a "tenant")
-#   ./bootstrap.sh --cli [app_dir]     # build a command-line program instead —
+#   ./bootstrap.sh --cli <lang> [app_dir]
+#                                      # build a command-line program instead —
 #                                      # repo + CI, no droplet and no credentials
 #   ./bootstrap.sh --no-droplet [app_dir]
 #                                      # build a reusable package the same way
-#   ./bootstrap.sh --help              # the full type + framework list
+#   ./bootstrap.sh --help              # the full type + language list
 #
 # APP TYPES. What gets built is chosen on two axes, both defined in
 # scripts/app-types.sh and both listed by --help:
@@ -23,6 +24,22 @@
 #                        executable; nothing is provisioned and nothing served.
 #   --no-droplet         a reusable package (alias: --library). CI tests and
 #                        builds it; nothing is provisioned and nothing served.
+#
+# ...and a LANGUAGE within the type — the second axis, and the one that matters
+# most for a CLI, whose stacks differ only by it:
+#
+#   ./bootstrap.sh --cli ruby ~/src/mytool        # or --cli=ruby, or --lang ruby
+#   ./bootstrap.sh --cli bash ~/src/mytool
+#   ./bootstrap.sh --cli typescript ~/src/mytool
+#   ./bootstrap.sh --cli elixir ~/src/mytool      # the default for --cli
+#
+# EVERY CLI IS A COMMAND, not a script with environment variables in front of
+# it. Each scaffold ships real argument parsing over its language's standard
+# option parser — `mytool --format json hello`, `--format=json`, short flags,
+# `--`, `--help`, `--version`, positional arguments, and exit codes (2 for a
+# usage error, so a caller can tell "you typed it wrong" from "it failed"). And
+# each is a library with a thin executable on top, so the same code is both
+# importable and runnable.
 #
 # --no-droplet is a CONSTRAINT rather than a type of its own: on its own it
 # builds a package, alongside --cli it is already satisfied, and against
@@ -61,14 +78,20 @@
 # Optional config (env, with defaults):
 #   APP_TYPE          'service' (default), 'cli' or 'library' — the same choice
 #                     the flags above make, for a .env. See scripts/app-types.sh.
-#   FRAMEWORK         the stack WITHIN the app type; each one belongs to exactly
-#                     one type, so naming a framework alone also picks the type.
-#                     service: 'phoenix' (default), 'sinatra' or 'zola'.
-#                     'sinatra' is SQLite-only and forces DATABASE_BACKEND=sqlite;
-#                     'zola' is a STATIC site with no database at all
-#                     (DATABASE_BACKEND=none) and no container image.
-#                     cli: 'escript'. library: 'mix'. Both are droplet-free and
-#                     have no data layer of any kind. Chosen once per project.
+#   LANGUAGE          the language within the app type — the same choice --lang
+#                     and `--cli <lang>` make. service: 'elixir' (default),
+#                     'ruby' or 'static'. cli: 'elixir' (default), 'ruby',
+#                     'bash' or 'typescript'. library: 'elixir'.
+#   FRAMEWORK         the stack within the app type, by its own name rather than
+#                     its language; unique across types, so naming one alone also
+#                     picks the type. service: 'phoenix' (default), 'sinatra' or
+#                     'zola'. 'sinatra' is SQLite-only and forces
+#                     DATABASE_BACKEND=sqlite; 'zola' is a STATIC site with no
+#                     database at all (DATABASE_BACKEND=none) and no container
+#                     image. cli: 'escript' (default), 'ruby-cli', 'bash-cli' or
+#                     'ts-cli'. library: 'mix'. Everything outside 'service' is
+#                     droplet-free with no data layer of any kind. Chosen once
+#                     per project.
 #   DATABASE_BACKEND  'sqlite' (default) provisions no DB — the app keeps a
 #                     SQLite file on the droplet's local disk, replicated to
 #                     Spaces by Litestream. 'postgres' provisions a managed
@@ -501,7 +524,7 @@ preflight() {
       || fail "SSH key '$SSH_KEY_NAME' not found in DO account (doctl compute ssh-key list)"
   fi
 
-  echo "preflight: OK — all prerequisites present ($APP_TYPE/$FRAMEWORK)."
+  echo "preflight: OK — all prerequisites present ($APP_TYPE/$FRAMEWORK, $LANGUAGE)."
 }
 
 # ---- story 6.2: provision + wire + first deploy ------------------------------
@@ -513,10 +536,14 @@ preflight() {
 ensure_app() {
   local sig scaffold
   # Both questions — "is an app already here?" and "what generates one?" — are
-  # answered by the framework's registry row, so a framework added later needs
-  # no branch here.
-  sig="$(framework_signature "$FRAMEWORK")"
-  [ -n "$sig" ] || fail "no signature file registered for FRAMEWORK '$FRAMEWORK' (scripts/app-types.sh)"
+  # answered by the stack's registry row, so a stack added later needs no branch
+  # here. The row is keyed on the (type, framework) pair: a Ruby CLI and a Ruby
+  # web app are different rows, and only the pair tells them apart.
+  sig="$(framework_signature "$APP_TYPE" "$FRAMEWORK")"
+  [ -n "$sig" ] || fail "no signature file registered for $APP_TYPE/$FRAMEWORK (scripts/app-types.sh)"
+  # `<name>` in a signature is the app directory's basename — for stacks whose
+  # entry point is named after the app (bash: bin/<name>).
+  case "$sig" in *'<name>'*) sig="${sig%%<name>*}$(basename "$APP_DIR")${sig#*<name>}" ;; esac
   if [ -f "$APP_DIR/$sig" ]; then
     log "app: using existing $APP_DIR"
     return 0
@@ -528,14 +555,14 @@ ensure_app() {
   # The row holds the scaffold as `script [args...]`; the app directory is
   # always the last argument. Sinatra and Zola scaffold themselves in pure bash
   # (their builds happen in CI), and so do the droplet-free Elixir types.
-  scaffold="$(framework_scaffold "$FRAMEWORK")"
+  scaffold="$(framework_scaffold "$APP_TYPE" "$FRAMEWORK")"
   if [ "$scaffold" != "-" ]; then
     # Deliberate word splitting: the row's args are shell words, not one string.
     # shellcheck disable=SC2086
     set -- $scaffold
     local generator="$1"; shift
     [ -x "$SCRIPT_DIR/scripts/$generator" ] \
-      || fail "scripts/$generator is missing or not executable (scripts/app-types.sh names it for FRAMEWORK '$FRAMEWORK')"
+      || fail "scripts/$generator is missing or not executable (scripts/app-types.sh names it for $APP_TYPE/$FRAMEWORK)"
     "$SCRIPT_DIR/scripts/$generator" "$@" "$APP_DIR"
     return 0
   fi
@@ -557,37 +584,47 @@ ensure_app() {
   "$SCRIPT_DIR/scripts/inject-skill-docs.sh" "$APP_DIR"
 }
 
-# Parse APP_NAME / APP_MODULE (single source of truth). Phoenix reads mix.exs;
-# Sinatra has no mix.exs, so the app name is the dir basename (also written to
-# .app-name for the CI workflows) and the module is its camelized form.
+# Parse APP_NAME / APP_MODULE (single source of truth).
+#
+# Keyed on the stack's LANGUAGE, not its framework: what the name is parsed from
+# is a property of the language, and every stack of one language answers it the
+# same way. Phoenix, an escript and a mix library all declare their name in
+# mix.exs; Sinatra and a Ruby CLI both take it from the directory and camelize
+# it; a Zola site, a bash CLI and a TypeScript CLI derive no identifier at all,
+# so the directory name is the whole answer. Adding a language means adding an
+# arm here only if it answers differently from all three.
 parse_meta() {
-  if is_zola; then
-    [ -f "$APP_DIR/config.toml" ] || fail "no config.toml in $APP_DIR — scaffold failed?"
-    APP_NAME="$(basename "$APP_DIR")"
-    case "$APP_NAME" in
-      # Hyphens are allowed here where they are not for Phoenix/Sinatra: nothing
-      # derives an Elixir atom or a Ruby module from a site's name, and hyphens
-      # are the natural spelling for a domain label.
-      [a-z]*[!a-z0-9_-]*|*[!a-z0-9_-]*|[!a-z]*)
-        fail "site name '$APP_NAME' must be lowercase letters, digits, '_' or '-' (start with a letter): the dir basename names the site + infra" ;;
-    esac
-    # Nothing evaluates a module for a static site; carried only so the log line
-    # and downstream references have a value.
-    APP_MODULE="(static site)"
-  elif is_sinatra; then
-    [ -f "$APP_DIR/Gemfile" ] || fail "no Gemfile in $APP_DIR — scaffold failed?"
-    APP_NAME="$(basename "$APP_DIR")"
-    case "$APP_NAME" in
-      [a-z]*[!a-z0-9_]*|*[!a-z0-9_]*|[!a-z]*) fail "Sinatra app name '$APP_NAME' must be lower_snake_case (it names the app + infra)" ;;
-    esac
-    APP_MODULE="$(printf '%s' "$APP_NAME" | awk -F_ '{o=""; for(i=1;i<=NF;i++){o=o toupper(substr($i,1,1)) substr($i,2)} print o}')"
-  else
-    [ -f "$APP_DIR/mix.exs" ] || fail "no mix.exs in $APP_DIR — generation failed?"
-    # shellcheck source=scripts/app-meta.sh
-    . "$SCRIPT_DIR/scripts/app-meta.sh"
-    APP_NAME="$(app_name "$APP_DIR")"
-    APP_MODULE="$(app_module "$APP_DIR")"
-  fi
+  local sig
+  sig="$(framework_signature "$APP_TYPE" "$FRAMEWORK")"
+  case "$sig" in *'<name>'*) sig="${sig%%<name>*}$(basename "$APP_DIR")${sig#*<name>}" ;; esac
+  [ -f "$APP_DIR/$sig" ] || fail "no $sig in $APP_DIR — generation failed?"
+
+  case "$LANGUAGE" in
+    elixir)
+      # shellcheck source=scripts/app-meta.sh
+      . "$SCRIPT_DIR/scripts/app-meta.sh"
+      APP_NAME="$(app_name "$APP_DIR")"
+      APP_MODULE="$(app_module "$APP_DIR")" ;;
+    ruby)
+      APP_NAME="$(basename "$APP_DIR")"
+      case "$APP_NAME" in
+        [a-z]*[!a-z0-9_]*|*[!a-z0-9_]*|[!a-z]*)
+          fail "Ruby app name '$APP_NAME' must be lower_snake_case (the dir basename names the app, its module and its infra)" ;;
+      esac
+      APP_MODULE="$(printf '%s' "$APP_NAME" | awk -F_ '{o=""; for(i=1;i<=NF;i++){o=o toupper(substr($i,1,1)) substr($i,2)} print o}')" ;;
+    *)
+      APP_NAME="$(basename "$APP_DIR")"
+      case "$APP_NAME" in
+        # Hyphens are allowed here where they are not above: nothing derives an
+        # Elixir atom or a Ruby module from these names, and a hyphen is the
+        # natural spelling for both a domain label and a command.
+        [a-z]*[!a-z0-9_-]*|*[!a-z0-9_-]*|[!a-z]*)
+          fail "name '$APP_NAME' must be lowercase letters, digits, '_' or '-' (start with a letter): the dir basename names it" ;;
+      esac
+      # Nothing evaluates a module for these; carried only so the log line and
+      # downstream references have a value.
+      APP_MODULE="(no module: $LANGUAGE)" ;;
+  esac
   # App names are snake_case, but DO buckets/DBs and DNS labels only allow
   # hyphens — translate when deriving infra names from the app name.
   local infra_name; infra_name="$(printf '%s' "$APP_NAME" | tr '_' '-')"
@@ -605,12 +642,12 @@ parse_meta() {
   # hyphenated, which is what compose project names and DNS labels accept.
   APP_SLUG="$PROJECT_NAME"
   if needs_droplet; then
-    log "app: $APP_NAME ($APP_MODULE) [$APP_TYPE/$FRAMEWORK] | project: $PROJECT_NAME | region: $REGION"
+    log "app: $APP_NAME ($APP_MODULE) [$APP_TYPE/$FRAMEWORK, $LANGUAGE] | project: $PROJECT_NAME | region: $REGION"
   else
     # PROJECT_NAME/REGION/DNS_RECORD are still resolved above so nothing
     # downstream has to special-case an unset variable, but none of them names
     # anything on this path: no bucket, no cluster, no DNS record exists to name.
-    log "app: $APP_NAME ($APP_MODULE) [$APP_TYPE/$FRAMEWORK] — repo + CI only, no infrastructure"
+    log "app: $APP_NAME ($APP_MODULE) [$APP_TYPE/$FRAMEWORK, $LANGUAGE] — repo + CI only, no infrastructure"
   fi
 }
 
@@ -1118,10 +1155,10 @@ copy_staging_files() {
 # what lets a new framework ship a pipeline without an edit here.
 copy_workflows() { # $1 template dir (repo-relative), $2 dest dir (app-relative)
   local pair src dst
-  for pair in $(framework_workflows "$FRAMEWORK"); do
+  for pair in $(framework_workflows "$APP_TYPE" "$FRAMEWORK"); do
     src="${pair%%:*}"; dst="${pair##*:}"
     [ -f "$SCRIPT_DIR/$1/$src" ] \
-      || fail "no workflow template $1/$src — FRAMEWORK '$FRAMEWORK' names it in scripts/app-types.sh, but this provider does not ship one"
+      || fail "no workflow template $1/$src — $APP_TYPE/$FRAMEWORK names it in scripts/app-types.sh, but this provider does not ship one"
     cp "$SCRIPT_DIR/$1/$src" "$APP_DIR/$2/$dst"
   done
 }
@@ -1147,7 +1184,7 @@ prep_app() {
     # A CLI or a library gets its CI workflow and nothing else: no Dockerfile,
     # no compose file, no deploy/ directory, no release task, no TLS to patch,
     # no edge proxy. The workflow the registry names IS the whole pipeline.
-    log "preparing $APP_TYPE: CI workflow only (nothing is deployed anywhere)"
+    log "preparing $APP_TYPE ($LANGUAGE): CI workflow only (nothing is deployed anywhere)"
     mkdir -p "$APP_DIR/$wf_dir"
     copy_workflows "$tpl_wf_dir" "$wf_dir"
     return 0
@@ -1587,10 +1624,17 @@ bootstrap.sh — stand up an app, its repo and its pipeline.
 
   ./bootstrap.sh [options] [app_dir]     app_dir defaults to .
 
+  ./bootstrap.sh ~/src/myapp             a Phoenix app on a droplet, over HTTPS
+  ./bootstrap.sh --cli ruby ~/src/mytool a Ruby command-line program
+  ./bootstrap.sh --no-droplet ~/src/mylib   a reusable package
+
 Options:
   --check              verify prerequisites and exit; provisions nothing
   --host <dir>         TENANT MODE: deploy onto the droplet <dir>'s app already
                        owns instead of provisioning one (service apps only)
+  --lang <language>    which language to build in, within the app type. Also
+                       spelled as an argument to the type flag: --cli ruby,
+                       --cli=ruby and --lang ruby are the same thing
   --no-droplet         build something that provisions no droplet. On its own
                        that means a $NO_DROPLET_DEFAULT_TYPE; with a type flag it asserts the
                        type is droplet-free and fails if it is not
@@ -1598,23 +1642,33 @@ Options:
 
 App types (or APP_TYPE in the environment / .env):
 $(app_type_help)
-Frameworks (or FRAMEWORK — each one belongs to a single type, so naming a
-framework also picks the type):
-$(app_framework_help)
+Languages, per type (or LANGUAGE / FRAMEWORK):
+$(app_stack_help)
+Every CLI ships real argument parsing — \`mytool --format json hello\`, --help,
+--version, positional arguments and exit codes — over its language's standard
+option parser. None of them is a script you configure with environment
+variables.
+
 The droplet-free types need no DigitalOcean, DNSimple, Spaces or SSH
 credentials: preflight asks for the code host and nothing else.
 
-Adding a type or a framework — gems, hex packages, OTP apps — is a row in
+Adding a language or a type — gems, hex packages, OTP apps — is a row in
 scripts/app-types.sh plus a scaffold script and a CI workflow template.
 EOF
 }
 
 main() {
-  local check=0 t
+  local check=0 t arg val
   while [ $# -gt 0 ]; do
     case "$1" in
       --check) check=1; shift ;;
       --help|-h) usage; exit 0 ;;
+      # The language axis, spelled on its own. `--cli ruby` and `--cli=ruby`
+      # below reach the same variable.
+      --lang|--language)
+        [ -n "${2:-}" ] || fail "--lang needs a language (see --help)"
+        LANGUAGE_FLAG="$2"; shift 2 ;;
+      --lang=*|--language=*) LANGUAGE_FLAG="${1#*=}"; shift ;;
       # Tenant mode: deploy onto the droplet this app already owns. Equivalent
       # to HOST_APP_DIR in the environment; the flag wins.
       --host)
@@ -1623,18 +1677,42 @@ main() {
       --host=*) HOST_APP_DIR="$(abs_dir "${1#--host=}")"; shift ;;
       # A CONSTRAINT, not a type: see resolve_app_type in scripts/app-types.sh.
       --no-droplet) REQUIRE_NO_DROPLET=1; shift ;;
-      # --library is --no-droplet's explicit spelling: same type, named rather
-      # than implied, so `--library --gem` reads the way `--cli` does.
-      --library) APP_TYPE_FLAG="$NO_DROPLET_DEFAULT_TYPE"; shift ;;
       # One --<type> flag per row of the app-type table, matched against the
-      # table itself so a type added later needs no case arm here.
+      # table itself so a type added later needs no case arm here. Each accepts
+      # its language two ways: `--cli=ruby` and `--cli ruby`.
       --*)
-        t="$(printf '%s\n' "$APP_TYPE_TABLE" | awk -F'|' -v f="$1" '$2 == f { print $1; exit }')"
+        arg="${1%%=*}"; val=""
+        case "$1" in *=*) val="${1#*=}" ;; esac
+        t="$(printf '%s\n' "$APP_TYPE_TABLE" | awk -F'|' -v f="$arg" '$2 == f { print $1; exit }')"
         [ -n "$t" ] || fail "unknown argument: $1
 $(usage)"
         [ -z "$APP_TYPE_FLAG" ] || [ "$APP_TYPE_FLAG" = "$t" ] \
-          || fail "conflicting app types: --$APP_TYPE_FLAG and $1 — pick one"
-        APP_TYPE_FLAG="$t"; shift ;;
+          || fail "conflicting app types: --$APP_TYPE_FLAG and $arg — pick one"
+        APP_TYPE_FLAG="$t"; shift
+        if [ -n "$val" ]; then
+          LANGUAGE_FLAG="$val"
+        else
+          # A BARE next argument that names one of this type's languages is the
+          # language, not the app directory — so `--cli ruby ~/src/tool` reads
+          # the way it looks. Only a bare token: anything with a slash (./ruby,
+          # ~/src/ruby) is unambiguously a path and is left alone. A directory
+          # named exactly `ruby` in the current directory therefore needs
+          # `./ruby`, which --help says.
+          case "${1:-}" in
+            */*|"") ;;
+            *)
+              if is_language_of "$t" "$1"; then
+                LANGUAGE_FLAG="$1"; shift
+              elif [ -n "$(language_owners "$1")" ]; then
+                # A real language, but not one THIS type builds in. Left alone it
+                # would silently become the app directory's name, and the run
+                # would build the type's default stack in ./typescript.
+                fail "'$1' is not a $t language — $t builds in: $(type_languages "$t")
+       ($1 is a $(language_owners "$1") language: $(language_type_examples "$1"))
+       If you did mean a directory called '$1', write it as ./$1."
+              fi ;;
+          esac
+        fi ;;
       -*) fail "unknown argument: $1
 $(usage)" ;;
       *)  break ;;
