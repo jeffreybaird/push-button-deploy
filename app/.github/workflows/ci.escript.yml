@@ -1,0 +1,135 @@
+# CI for a droplet-free Elixir CLI (FRAMEWORK=escript). Copied into the project
+# repo by the bootstrap as .github/workflows/ci.yml. `bootstrap.sh --cli`
+# builds this.
+#
+# Two jobs: test (the gate) -> build (the artifact). There is no deploy job
+# because a CLI has nowhere to be deployed to — no droplet, no DNS, no image,
+# no database. What it has instead is an executable, so this pipeline's job is
+# to produce one and hand it to you: `mix escript.build` writes a single file
+# that runs anywhere an Erlang runtime is installed.
+#
+# Every push keeps that executable as a build artifact. Pushing a TAG also
+# attaches it to a release of that tag, which is what makes `curl` -ing the
+# binary out of the repo possible.
+#
+# The toolchain comes from .tool-versions in the repo, which erlef/setup-beam
+# reads directly — bumping Elixir or OTP is a commit to the project, never an
+# edit to this file.
+#
+# Required repo config: none. That is the point.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  # Re-run against main without pushing a commit — the bootstrap uses this when
+  # a re-run finds nothing to commit and so fires no push event.
+  workflow_dispatch:
+
+# A superseded run tells you nothing a newer one won't: cancel, don't queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Red tests block the build entirely: build needs this job.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+
+      - name: Cache deps and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ hashFiles('.tool-versions', 'mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      # Formatting first: it is the fastest check and the one most likely to
+      # fail, so a red run says why in seconds rather than after a full compile.
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      # A warning in something people install is a bug in their build.
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # Only the tag path writes anything (the release upload below); a branch
+      # push builds the artifact and stops.
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+
+      - name: Cache deps and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ hashFiles('.tool-versions', 'mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-
+
+      # .app-name is written by the scaffold and is what `mix escript.build`
+      # names its output, so it is the one place this workflow has to look to
+      # know what file it just produced.
+      - name: Read the executable's name
+        id: meta
+        run: |
+          app=$(tr -d '[:space:]' < .app-name)
+          if [ -z "$app" ]; then
+            echo "::error::.app-name is empty — cannot tell what the escript is called"; exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Build the escript
+        run: |
+          mix deps.get
+          MIX_ENV=prod mix escript.build
+
+      # Prove the thing runs before calling the build green. An escript that
+      # compiles but dies on startup is a failure worth catching here rather
+      # than on someone's laptop.
+      - name: Smoke-test the executable
+        run: ./${{ steps.meta.outputs.app }} --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.app }}
+          path: ${{ steps.meta.outputs.app }}
+          if-no-files-found: error
+
+      # Tag pushes only. The release is created if it does not exist yet, so
+      # `git tag v1.2.3 && git push --tags` is the whole publish procedure.
+      - name: Attach the executable to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP: ${{ steps.meta.outputs.app }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "$APP" --clobber

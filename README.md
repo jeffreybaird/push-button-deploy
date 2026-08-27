@@ -10,6 +10,16 @@ One command takes you from an **empty directory** to a **freshly generated Phoen
 
 If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. If it already contains an app (a `mix.exs` for Phoenix, a `Gemfile` for Sinatra, a `config.toml` for Zola), that app is used as-is — so you can point it at output from your own generator instead.
 
+**Not everything worth building is a website.** `--cli` and `--no-droplet` build a command-line
+program or a reusable package instead: same repo creation, same pipeline wiring, same one
+command — but no droplet, no DNS, no database, and no DigitalOcean credentials required at all.
+See [App types](#app-types).
+
+```bash
+./bootstrap.sh --cli        ~/src/mytool   # an executable, built and tested by CI
+./bootstrap.sh --no-droplet ~/src/mylib    # a package, built and tested by CI
+```
+
 ## What you get
 
 | Concern | Implementation |
@@ -85,6 +95,12 @@ Port 22 is closed to the world. On the default GitHub path, CI punches a tempora
 
 Docker is **not** required locally — images build in CI.
 
+The table above is for a **service** (the default app type). The droplet-free types
+(`--cli`, `--no-droplet` — see [App types](#app-types)) need only `git`, `curl` and the code
+host's tool (`gh`, or `jq` for Gitea): no Terraform, no `doctl`, no SSH, and no local Elixir —
+their scaffolds are pure bash and their builds run in CI. The credentials below are likewise
+service-only; a droplet-free run needs none of them.
+
 ### Accounts and credentials (one-time setup)
 
 1. **DigitalOcean**
@@ -140,6 +156,109 @@ Optional (defaults in parentheses):
 | `GITEA_TOKEN` | **Gitea only** — personal access token. Required. |
 | `GITEA_OWNER` | **Gitea only** — user/org the repo is created under. Optional: unset, it's whichever account `GITEA_TOKEN` authenticates as. |
 | `GITEA_RUNNER_IP` | **Gitea only** — the address the runner's *outbound* traffic comes from, allow-listed once in Terraform. Bare IP or CIDR; comma-separate for more than one. Required. Note this is the runner host's egress IP, **not** a reserved/floating IP attached to it — see [Gitea support](#gitea-support). |
+
+## App types
+
+What gets built is chosen on two axes. **The app type** is the *shape* of the thing — and
+therefore what infrastructure it needs. **The framework** is the *stack* inside that shape.
+Each framework belongs to exactly one type, so naming a framework also picks the type.
+
+```bash
+./bootstrap.sh --help          # the full list, rendered from the registry
+```
+
+| | `--service` (default) | `--cli` | `--no-droplet` (alias `--library`) |
+|---|---|---|---|
+| What it is | a web app served over HTTPS | a command-line program | a reusable package |
+| Frameworks | `phoenix`, `sinatra`, `zola` | `escript` | `mix` |
+| Droplet, DNS, TLS | yes | **none** | **none** |
+| Database | `postgres` / `sqlite` / none | **none** | **none** |
+| Container registry | yes (except `zola`) | **none** | **none** |
+| PR staging | yes (except `zola`) | **none** | **none** |
+| Credentials needed | DO + DNSimple + Spaces + SSH | **code host only** | **code host only** |
+| Local tools | `mix` for Phoenix | `git`, `curl` | `git`, `curl` |
+| Pipeline | `.github/workflows/deploy.yml` | `.github/workflows/ci.yml` | `.github/workflows/ci.yml` |
+| The bootstrap ends when | `https://<domain>` answers | CI goes green | CI goes green |
+| Teardown | droplet, DB, DNS, bucket, registry | nothing exists to destroy | nothing exists to destroy |
+
+The droplet-free types are a genuinely smaller run: eight steps instead of sixteen, no
+Terraform, no `doctl`, no SSH, and `preflight` asks for the code host and nothing else. You can
+stand up a CLI on a laptop that has never heard of DigitalOcean.
+
+```bash
+./bootstrap.sh --cli ~/src/mytool
+# ==> app: mytool (Mytool) [cli/escript] — repo + CI only, no infrastructure
+# ==> preparing cli: CI workflow only (nothing is deployed anywhere)
+# ==> CI GREEN: ci.yml passed
+# ==> done. cli 'mytool' built and green — no infrastructure was provisioned, so
+#     there is nothing to bill and nothing to tear down.
+```
+
+`--no-droplet` is a **constraint**, not a type of its own. On its own it builds the default
+droplet-free type (a library). Alongside `--cli` it is already satisfied and does nothing.
+Against `--service` it fails rather than half-applying — "deploy my Phoenix app without a
+server" and "build me a library instead" are different requests, and guessing between them
+would hand you an app you didn't ask for.
+
+```
+$ ./bootstrap.sh --no-droplet --service
+bootstrap: --no-droplet conflicts with app type 'service' (a web app on its own droplet, ...).
+       A 'service' is served from a droplet — there is no droplet-free variant of it.
+       Drop the type flag (--no-droplet on its own builds a library), or name a
+       droplet-free type: --cli, --library
+```
+
+### What the droplet-free types generate
+
+Both scaffolds are **pure bash** — no local Elixir is involved, the same way the Sinatra and
+Zola scaffolds need no local Ruby or Zola. The build runs in CI.
+
+- `--cli` (`escript`) — `mix.exs` with an `escript:` entry, `lib/<name>/cli.ex` with an
+  `OptionParser` front end (`--help`, `--version`, exit codes), and a test suite that drives it.
+  The entry point splits into `main/1` (prints and halts) and `run/1` (returns
+  `{output, status}`), so every decision is testable without halting the VM.
+  CI tests it, builds the escript, smoke-tests the executable and keeps it as a build artifact.
+  Pushing a tag (`v*`) also attaches it to a release of that tag — on GitHub; see
+  [Gitea support](#gitea-support).
+- `--no-droplet` (`mix`) — the same project without the CLI layer, plus `description`/`package`
+  metadata already stubbed in `mix.exs`, so publishing is a `mix hex.publish` rather than a
+  rewrite.
+
+Both pin the BEAM in `.tool-versions`, which CI reads directly (`erlef/setup-beam`'s
+`version-file`) — bumping Elixir or OTP is a commit to the project, never an edit to a workflow.
+The pins come from `app/Dockerfile`'s ARGs, so this repo has one place to bump them.
+
+CI for both is: `mix format --check-formatted` → `mix compile --warnings-as-errors` →
+`mix test`. What the scaffold emits is already format-clean, so a new project's first run is
+green.
+
+### Adding a type or a framework
+
+Gems, hex packages and OTP apps belong under `--no-droplet`, and the registry exists so that
+adding one is a data change rather than a rewrite. Everything droplet-free in `bootstrap.sh` is
+gated on **capabilities** (`needs_droplet`, `has_database`), never on a type name — so a gem
+added later walks the paths a CLI already walks.
+
+[`scripts/app-types.sh`](scripts/app-types.sh) holds two tables. To add a framework:
+
+1. Add a row to `APP_FRAMEWORK_TABLE`: its type, the file that proves an app already exists
+   there, the scaffold script to run, and the workflow templates to copy (`src:dest` pairs).
+2. Write the scaffold script under `scripts/`.
+3. Add its `ci.<framework>.yml` under `app/.github/workflows/` and `app/.gitea/workflows/`.
+
+That's the whole change — no branch in `bootstrap.sh` moves. The table carries the three
+planned rows commented out as a worked example:
+
+```
+gem|library|Gemfile|new-gem.sh|ci.gem.yml:ci.yml|Ruby gem (bundle gem layout)
+hex|library|mix.exs|new-mix-app.sh --hex|ci.hex.yml:ci.yml|Elixir library published to Hex
+otp|library|mix.exs|new-mix-app.sh --sup|ci.otp.yml:ci.yml|OTP application (supervision tree)
+```
+
+A whole new *type* (a different shape, with different infrastructure needs) is a row in
+`APP_TYPE_TABLE`: its flag, its frameworks, whether it needs a droplet, whether it may have a
+database, and which workflow its pipeline lives in. The `--<type>` flag is matched against that
+table, so `bootstrap.sh`'s argument parser needs no new case arm either.
 
 ## Application framework
 
@@ -554,7 +673,20 @@ Two things to know when sharing a droplet:
 
 # Or, onto a droplet that already serves ~/src/myapp:
 ./bootstrap.sh --host ~/src/myapp ~/src/myotherapp
+
+# Or build something that isn't a website at all — no droplet, no DNS,
+# no database, and no DigitalOcean credentials required:
+./bootstrap.sh --cli        ~/src/mytool
+./bootstrap.sh --no-droplet ~/src/mylib
+
+# The full type + framework list:
+./bootstrap.sh --help
 ```
+
+The steps below describe a **service** — the default. A droplet-free type
+([App types](#app-types)) runs eight of them: preflight, generate, parse, repo, prepare (the CI
+workflow, and nothing else), seed (nothing to seed), commit + push, and poll until CI concludes.
+Steps 4–9 have nothing to do, because nothing was provisioned.
 
 The app name is the directory basename (must be a valid Elixir app name: `lower_snake_case`). What the run does, in order:
 
@@ -627,6 +759,18 @@ stack and volumes under `/root/apps/<slug>`, any staging environment left under
 `/root/apps/<slug>-stg`, and its routes out of the shared Caddy. The droplet and
 its other apps are untouched. (Its Litestream replica in Spaces is left behind —
 delete `litestream/<project>/` by hand if you want the data gone.)
+
+A **droplet-free** app has nothing to tear down — it created no bucket, no cluster, no droplet,
+no DNS record and no registry repository. `teardown.sh` says so and stops, and demands none of
+the DigitalOcean, DNSimple or Spaces credentials the rest of it needs. `--delete-repo` still
+deletes the code-host repo; the local directory is never touched either way. (The app records
+what it is in `.app-type`; apps created before that file existed are treated as services, which
+is what they are.)
+
+```bash
+./teardown.sh ~/src/mytool                 # "nothing to destroy" — and it means it
+./teardown.sh --delete-repo ~/src/mytool   # the repo, and only the repo
+```
 
 ```bash
 # Everything, in the right order, with confirmation (data loss!):
