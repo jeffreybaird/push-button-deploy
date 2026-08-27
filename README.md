@@ -3,7 +3,7 @@
 One command takes you from an **empty directory** to a **freshly generated Phoenix app, Sinatra app or Zola site serving HTTPS on a production DigitalOcean droplet**, with a CI/CD pipeline that deploys every push to `main` from that moment on. Pick the stack with `FRAMEWORK` (default `phoenix`; see [Application framework](#application-framework)).
 
 ```bash
-./bootstrap.sh ~/src/myapp
+pbd bootstrap ~/src/myapp
 # ... a few minutes later ...
 # ==> LIVE: https://myapp.example.com
 ```
@@ -16,9 +16,9 @@ command — but no droplet, no DNS, no database, and no DigitalOcean credentials
 Pick the CLI's language on the same flag. See [App types](#app-types).
 
 ```bash
-./bootstrap.sh --cli ruby       ~/src/mytool   # also: elixir, bash, typescript
-./bootstrap.sh --cli typescript ~/src/myothertool
-./bootstrap.sh --no-droplet     ~/src/mylib    # a package, built and tested by CI
+pbd bootstrap --cli ruby       ~/src/mytool   # also: elixir, bash, typescript
+pbd bootstrap --cli typescript ~/src/myothertool
+pbd bootstrap --no-droplet     ~/src/mylib    # a package, built and tested by CI
 ```
 
 Every CLI it generates is a **command**, not a script you configure by exporting variables:
@@ -26,6 +26,65 @@ Every CLI it generates is a **command**, not a script you configure by exporting
 ```bash
 mytool --format json hello there    # not FORMAT=json ./mytool.sh hello there
 ```
+
+...and so is this one. `pbd` holds itself to the standard it holds them to: subcommands,
+`--help` on every one of them, `--version`, and exit code 2 for a usage error so a caller
+can tell "you typed it wrong" from "it ran and failed".
+
+## Install
+
+```bash
+brew install --HEAD ./Formula/pbd.rb      # from a clone
+```
+
+Or run it straight out of a checkout — put `bin/pbd` on your PATH and it is the same
+command, reading the same templates:
+
+```bash
+git clone https://github.com/jeffreybaird/push-button-deploy.git
+ln -s "$PWD/push-button-deploy/bin/pbd" ~/.local/bin/pbd
+pbd --version
+```
+
+Terraform is required and is not in homebrew-core (it is BUSL-licensed):
+`brew tap hashicorp/tap && brew install hashicorp/tap/terraform`. `pbd check` names every
+other gap before anything is provisioned.
+
+Three paths matter, and `pbd config` prints all of them:
+
+```
+$ pbd config
+version      0.1.0
+root         /opt/homebrew/Cellar/pbd/0.1.0/libexec     # templates + library (read-only)
+state        ~/.local/state/pbd                         # transcripts, cached credentials
+env file     ~/.config/pbd/env                          # your credentials
+```
+
+Nothing is ever written back into `root`, which is what makes the tool installable rather
+than a directory you have to `cd` into. Override any of the three with `PBD_ROOT`,
+`PBD_STATE_DIR` and `--env-file` — pointing an installed `pbd` at a checkout's templates is
+just `PBD_ROOT=~/src/push-button-deploy pbd bootstrap ~/src/myapp`.
+
+The old entry points still work: `./bootstrap.sh`, `./teardown.sh`, `./bootstrap-gitea.sh`
+and `./teardown-gitea.sh` forward to the matching subcommand and say so.
+
+### Layout
+
+```
+bin/pbd              argument parsing and dispatch, and nothing else
+lib/pbd/common.sh    where the tool's files are, where yours go, the env file
+lib/pbd/*.sh         one module per command — only the one being run is loaded
+scripts/             the generators and shared helpers the commands call out to
+infra-*/             Terraform roots, copied into each app's own infra/
+app/ deploy/         Dockerfiles, compose stacks, Caddy config, workflows
+app-template*/       what a freshly generated app gets on top of its generator
+test/run.sh          the whole suite — no framework, drives the real binary
+Formula/pbd.rb       the Homebrew formula
+```
+
+That split — a thin executable over a library — is the same shape `pbd bootstrap --cli bash`
+scaffolds, for the same reason: the library is callable from anywhere, and the parser has one
+job.
 
 ## What you get
 
@@ -86,7 +145,7 @@ Port 22 is closed to the world. On the default GitHub path, CI punches a tempora
 
 ## Prerequisites
 
-### Tools (all checked by `--check`)
+### Tools (all checked by `pbd check`)
 
 | Tool | Why | Install (macOS) |
 |---|---|---|
@@ -106,7 +165,7 @@ The table above is for a **service** (the default app type). The droplet-free ty
 (`--cli`, `--no-droplet` — see [App types](#app-types)) need only `git`, `curl` and the code
 host's tool (`gh`, or `jq` for Gitea): no Terraform, no `doctl`, no SSH, and **no local runtime
 of the language you pick** — every one of those scaffolds is written in bash and built in CI, so
-`./bootstrap.sh --cli typescript` works on a machine with no Node installed. The credentials
+`pbd bootstrap --cli typescript` works on a machine with no Node installed. The credentials
 below are likewise service-only; a droplet-free run needs none of them.
 
 ### Accounts and credentials (one-time setup)
@@ -124,14 +183,34 @@ below are likewise service-only; a droplet-free run needs none of them.
 
 ### Environment variables
 
-The easiest way: copy `.env.example` to `.env` next to `bootstrap.sh` and fill it in. The script sources it automatically (values in the file override the calling shell). It's gitignored; still, `chmod 600 .env`.
+The easiest way: put them in an **env file**. `pbd` looks for one in this order, and
+`pbd config` prints which it found:
+
+| Order | Path | For |
+|---|---|---|
+| 1 | `--env-file PATH` (or `PBD_ENV_FILE`) | naming one explicitly, per run |
+| 2 | `${XDG_CONFIG_HOME:-~/.config}/pbd/env` | an installed `pbd` |
+| 3 | `$PBD_ROOT/.env` | a checkout you run from |
 
 ```bash
-cp .env.example .env && chmod 600 .env
-$EDITOR .env
+mkdir -p ~/.config/pbd
+cp .env.example ~/.config/pbd/env && chmod 600 ~/.config/pbd/env
+$EDITOR ~/.config/pbd/env
 ```
 
-Equivalently, export them in your shell. Required either way:
+The current directory is deliberately **not** searched: app directories carry their own
+unrelated `.env` files (the app's own runtime config), and picking one of those up as your
+DigitalOcean credentials would provision against the wrong account without saying so.
+
+**The calling shell wins.** A value already set in your environment beats the file, so a
+per-run override does what it looks like it does — and where the two disagree, `pbd` says
+which one it used rather than applying it in silence:
+
+```bash
+DNS_ZONE=other.com pbd bootstrap ~/src/site
+```
+
+Equivalently, export them all in your shell. Required either way:
 
 ```bash
 export DIGITALOCEAN_ACCESS_TOKEN="dop_v1_..."   # DO API token
@@ -173,8 +252,8 @@ shape. A Ruby CLI and a Ruby web app are different things of the same language, 
 both axes matter.
 
 ```bash
-./bootstrap.sh --cli ruby ~/src/mytool     # or --cli=ruby, or --cli --lang ruby
-./bootstrap.sh --help                      # the full list, rendered from the registry
+pbd bootstrap --cli ruby ~/src/mytool     # or --cli=ruby, or --cli --lang ruby
+pbd help bootstrap                      # the full list, rendered from the registry
 ```
 
 Each `(type, language)` pair also has a **framework** name — `ruby-cli`, `sinatra`, `zola` —
@@ -202,7 +281,7 @@ Terraform, no `doctl`, no SSH, and `preflight` asks for the code host and nothin
 stand up a CLI on a laptop that has never heard of DigitalOcean.
 
 ```bash
-./bootstrap.sh --cli ruby ~/src/mytool
+pbd bootstrap --cli ruby ~/src/mytool
 # ==> app: mytool (Mytool) [cli/ruby-cli, ruby] — repo + CI only, no infrastructure
 # ==> preparing cli (ruby): CI workflow only (nothing is deployed anywhere)
 # ==> CI GREEN: ci.yml passed
@@ -217,7 +296,7 @@ server" and "build me a library instead" are different requests, and guessing be
 would hand you an app you didn't ask for.
 
 ```
-$ ./bootstrap.sh --no-droplet --service
+$ pbd bootstrap --no-droplet --service
 bootstrap: --no-droplet conflicts with app type 'service' (a web app on its own droplet, ...).
        A 'service' is served from a droplet — there is no droplet-free variant of it.
        Drop the type flag (--no-droplet on its own builds a library), or name a
@@ -255,7 +334,7 @@ directly rather than by spawning a process.
 Two of them have **zero runtime dependencies** (bash needs nothing; TypeScript's parser and test
 runner are both stdlib, and `typescript` is the only devDependency). Ruby's parser is stdlib
 too. None of the four needs a local toolchain to *scaffold* — like the Sinatra and Zola
-scaffolds, they are written by hand in bash and built in CI, so `./bootstrap.sh --cli
+scaffolds, they are written by hand in bash and built in CI, so `pbd bootstrap --cli
 typescript` works on a machine with no Node installed.
 
 Each pins its toolchain in a file CI reads directly — `.tool-versions`, `.ruby-version`,
@@ -280,7 +359,7 @@ Gems, hex packages and OTP apps are the next rows here — see below.
 ### Adding a language or a type
 
 Gems, hex packages and OTP apps belong under `--no-droplet`, and the registry exists so that
-adding one is a data change rather than a rewrite. Everything droplet-free in `bootstrap.sh` is
+adding one is a data change rather than a rewrite. Everything droplet-free in `lib/pbd/bootstrap.sh` is
 gated on **capabilities** (`needs_droplet`, `has_database`), never on a type name — so a gem
 added later walks the paths a CLI already walks.
 
@@ -292,7 +371,7 @@ added later walks the paths a CLI already walks.
 2. Write the scaffold script under `scripts/`.
 3. Add its `ci.<framework>.yml` under `app/.github/workflows/` and `app/.gitea/workflows/`.
 
-That's the whole change — no branch in `bootstrap.sh` moves. Three of the four CLI languages
+That's the whole change — no branch in `lib/pbd/bootstrap.sh` moves. Three of the four CLI languages
 were added exactly this way, and the table carries the next three rows commented out as a
 worked example:
 
@@ -310,13 +389,13 @@ A whole new *type* (a different shape, with different infrastructure needs) is a
 `APP_TYPE_TABLE`: its flag, whether it needs a droplet, whether it may have a database, and
 which workflow its pipeline lives in. Its stacks are just the `APP_STACK_TABLE` rows naming it,
 and the first of them is its default. The `--<type>` flag is matched against the table too, so
-`bootstrap.sh`'s argument parser needs no new case arm either — including for
+`pbd bootstrap`'s argument parser needs no new case arm either — including for
 `--<type> <language>`.
 
 ## Application framework
 
 `FRAMEWORK` picks the app stack the bootstrap generates and deploys. Set it once, before the
-first `./bootstrap.sh`, in `.env` or the environment.
+first `pbd bootstrap`, in your env file or the environment.
 
 | | `phoenix` (default) | `sinatra` | `zola` |
 |---|---|---|---|
@@ -349,7 +428,7 @@ a Phoenix app, a `config.toml` a Zola site. Retrofit an existing Sinatra app's s
 just its language:
 
 ```bash
-FRAMEWORK=zola ./bootstrap.sh --host ~/src/myapp ~/src/myblog
+FRAMEWORK=zola pbd bootstrap --host ~/src/myapp ~/src/myblog
 ```
 
 - **No container, no image, no registry repository.** CI runs `zola build`, tars `public/`, and
@@ -439,7 +518,7 @@ Things worth knowing before you rely on it:
   deploy and the rest when it closes; deleting tags frees manifests, not layers,
   so run `doctl registry garbage-collection start` if the tier's storage gets tight.
 
-Turn it off for an app with `ENABLE_STAGING=false ./bootstrap.sh <app_dir>`: the
+Turn it off for an app with `ENABLE_STAGING=false pbd bootstrap <app_dir>`: the
 record goes away, the `STAGING_DOMAIN` variable is deleted, and `staging.yml` —
 gated on that variable — stops running. An environment that is already up is
 *not* torn down by that (the bootstrap never destroys running stacks); do it
@@ -453,7 +532,7 @@ bootstrap prints the `diff` command that shows what changed.
 ## Database backend
 
 `DATABASE_BACKEND` picks where the app's data lives. Set it once, before the first
-`./bootstrap.sh`, in `.env` or the environment.
+`pbd bootstrap`, in your env file or the environment.
 
 | | `sqlite` (default) | `postgres` |
 |---|---|---|
@@ -492,7 +571,7 @@ and keep the cluster alive until you've verified the new one serves.
 `GIT_PROVIDER` picks the code host **and** the CI/CD engine — GitHub Actions and
 Gitea Actions both come from the same choice, since the deploy pipeline is
 GitHub-Actions-syntax-compatible either way. Set it once, before the first
-`./bootstrap.sh`, in `.env` or the environment.
+`pbd bootstrap`, in your env file or the environment.
 
 | | `github` (default) | `gitea` (self-hosted) |
 |---|---|---|
@@ -507,7 +586,7 @@ GitHub-Actions-syntax-compatible either way. Set it once, before the first
 | Run status | `gh run list --json status,conclusion` | the instance's Actions task-listing API, normalized to the same shape |
 | Rollback trigger | `gh workflow run rollback.yml -f tag=...` | the repo's Actions tab, or `POST .../actions/workflows/rollback.yml/dispatches` |
 | PR staging environments | on by default (`ENABLE_STAGING`) | **not yet** — see below |
-| Repo deletion (`teardown.sh --delete-repo`) | needs the `delete_repo` OAuth scope (`gh auth refresh -s delete_repo`) | needs `GITEA_TOKEN` to carry delete rights on the repo |
+| Repo deletion (`pbd teardown --delete-repo`) | needs the `delete_repo` OAuth scope (`gh auth refresh -s delete_repo`) | needs `GITEA_TOKEN` to carry delete rights on the repo |
 
 Required Gitea-only env: `GITEA_URL`, `GITEA_TOKEN`, `GITEA_RUNNER_IP` (`GITEA_OWNER` is optional — see the table above). All four are documented in `.env.example`.
 
@@ -523,10 +602,10 @@ things, and only the second one belongs in a firewall rule. Get it with:
 ssh root@<your-gitea-host> 'curl -s https://api.ipify.org; echo'
 ```
 
-`bootstrap-gitea.sh` prints the right value (the `gitea_egress_ip` Terraform
+`pbd gitea bootstrap` prints the right value (the `gitea_egress_ip` Terraform
 output). It **changes when the droplet is replaced**, while the reserved IP
 deliberately doesn't — so after a `--replace-droplet`, update `GITEA_RUNNER_IP`
-and re-run `./bootstrap.sh` for each app to refresh its firewall. The symptom
+and re-run `pbd bootstrap` for each app to refresh its firewall. The symptom
 of a stale value is a deploy job whose `Configure SSH` step takes exactly 5s
 (`ssh-keyscan`'s timeout) and then fails on the first `ssh`/`scp`.
 
@@ -543,7 +622,7 @@ Secret and variable seeding works on older releases, so a too-old instance
 gets most of the way through a bootstrap before failing on a 404 for a route
 that was never there. `ci_auth_check` therefore reads `/api/v1/version` during
 preflight and stops with the version as the reason. If you provisioned with
-`bootstrap-gitea.sh`, the pinned tag in `gitea-host/docker-compose.yaml` is
+`pbd gitea bootstrap`, the pinned tag in `gitea-host/docker-compose.yaml` is
 already ≥ 1.24; re-running that script upgrades in place (data is on the
 attached volume, and Gitea migrates on start). Take a volume snapshot first if
 you're jumping several minor versions at once.
@@ -571,13 +650,13 @@ wants it.
 ### Bootstrapping your own Gitea
 
 `GIT_PROVIDER=gitea` needs an actual instance and a registered Actions runner
-to talk to. `bootstrap-gitea.sh` stands both up, reusing the same
-DigitalOcean/DNSimple/Spaces credentials `bootstrap.sh` already needs — one
-`.env` covers both scripts.
+to talk to. `pbd gitea bootstrap` stands both up, reusing the same
+DigitalOcean/DNSimple/Spaces credentials `pbd bootstrap` already needs — one
+env file covers both commands.
 
 ```bash
-./bootstrap-gitea.sh --check   # verify prerequisites
-./bootstrap-gitea.sh           # provision + configure + start
+pbd gitea bootstrap --check   # verify prerequisites
+pbd gitea bootstrap           # provision + configure + start
 ```
 
 What it does: provisions one dedicated droplet (`infra-gitea/` — its own
@@ -595,7 +674,7 @@ it yourself for a real backup story.
 It also creates the one-time admin account and API token
 (`GITEA_ADMIN_EMAIL` is the only new required env var — see the script's
 header for the full list of optional ones) and registers the runner. At the
-end it prints exactly what to add to `.env` for `./bootstrap.sh`:
+end it prints exactly what to add to your env file for `pbd bootstrap`:
 
 ```
 GIT_PROVIDER=gitea
@@ -604,14 +683,14 @@ GITEA_TOKEN=...
 GITEA_RUNNER_IP=<droplet-egress-ip>/32
 ```
 
-Idempotent like `bootstrap.sh`: re-running detects what's already done (an
+Idempotent like `pbd bootstrap`: re-running detects what's already done (an
 existing admin user, an already-registered runner) rather than redoing it —
 important here specifically because Gitea only ever shows a token or the
 generated admin password **once**, at creation; the script caches both
 locally (`.gitea-admin-token`, `.gitea-admin-password`, gitignored) so a
 re-run doesn't need to mint new ones.
 
-`./teardown-gitea.sh` destroys it — droplet, firewall, reserved IP, DNS
+`pbd gitea teardown` destroys it — droplet, firewall, reserved IP, DNS
 record, and **the data volume** (every repo, the Gitea DB, all of it). It
 does not touch any app deployed through the instance, or the state bucket.
 
@@ -622,7 +701,7 @@ smaller disk`, even with `resize_disk = false`, and snapshots don't help
 (a snapshot can only create a droplet with a disk at least as large). Use:
 
 ```bash
-./bootstrap-gitea.sh --replace-droplet
+pbd gitea bootstrap --replace-droplet
 ```
 
 That recreates the droplet rather than resizing it, which is safe by design
@@ -633,7 +712,7 @@ issued certificates, runner registration and IP; only Docker and the pulled
 images are rebuilt, which the rest of the run does anyway.
 
 **Verify against your instance before relying on this in production.** Gitea's
-Actions API has evolved across releases. `bootstrap-gitea.sh` through "Gitea
+Actions API has evolved across releases. `pbd gitea bootstrap` through "Gitea
 is answering" (provisioning, Docker, the compose stack) is confirmed against
 a live instance — real issues that only showed up there are already fixed:
 `infra-gitea/cloud-init.yaml` has to be pure ASCII (an em-dash broke DO's
@@ -654,11 +733,11 @@ on the host daemon on their own network and are handed that address as their
 clone URL. Past that point — `scripts/provider.sh`'s
 `ci_run_row`/`ci_diagnose_dump` (Actions run-status parsing) and
 `ci_dispatch_deploy` (workflow dispatch), plus the rest of
-`bootstrap-gitea.sh`'s own `ensure_admin_token`/`ensure_runner` (CLI output
+`lib/pbd/gitea-bootstrap.sh`'s own `ensure_admin_token`/`ensure_runner` (CLI output
 parsing) — is still being verified as issues surface; both fail loud with
 the raw output when a parse doesn't match, which is the fastest way to spot
-what needs adjusting. A reasonable first run: `./bootstrap-gitea.sh --check`,
-then a full run, then `GIT_PROVIDER=gitea FRAMEWORK=zola ./bootstrap.sh
+what needs adjusting. A reasonable first run: `pbd gitea bootstrap --check`,
+then a full run, then `GIT_PROVIDER=gitea FRAMEWORK=zola pbd bootstrap
 --check` against it (smallest surface — no database, no registry) before a
 full app bootstrap.
 
@@ -666,7 +745,7 @@ full app bootstrap.
 under `app/.github/workflows/` and has no `app/.gitea/workflows/` counterpart,
 so a Gitea app has nothing to build a PR environment with. Rather than
 provision a staging DNS name and database that no pipeline would ever touch,
-`bootstrap.sh` turns the whole feature off on this path (and says so once, if
+`pbd bootstrap` turns the whole feature off on this path (and says so once, if
 you asked for it explicitly with `ENABLE_STAGING=true`). Porting the workflow
 is the only thing missing — the Terraform, the Caddy routing and
 `deploy/staging-down.sh` are all provider-agnostic already.
@@ -680,7 +759,7 @@ A droplet sized for one small app is usually sized for three. To put a second ap
 on a droplet that already serves one, name the **host app's directory**:
 
 ```bash
-./bootstrap.sh --host ~/src/myapp ~/src/myotherapp
+pbd bootstrap --host ~/src/myapp ~/src/myotherapp
 ```
 
 The second app is a **tenant**. It provisions no droplet, no reserved IP, no
@@ -693,7 +772,7 @@ recreated droplet is picked up on the next apply.
 
 | | host app | tenant app |
 |---|---|---|
-| Command | `./bootstrap.sh <dir>` | `./bootstrap.sh --host <host_dir> <dir>` |
+| Command | `pbd bootstrap <dir>` | `pbd bootstrap --host <host_dir> <dir>` |
 | Terraform roots | `infra/{state,persistent,app}` | `infra/tenant` only |
 | Owns | droplet, reserved IP, firewall, VPC, state bucket | its DNS record |
 | On the droplet | `/root/apps/<slug>` + the shared `/root/caddy` | `/root/apps/<slug>` + one site file |
@@ -725,28 +804,42 @@ Two things to know when sharing a droplet:
   app you can't restart next to one you can't lose.
 - **The host's SSH firewall governs everyone.** Port 22 is open only to the CIDRs
   the *host's* `infra/app` was applied with. Bootstrapping a tenant from another
-  machine means adding that machine's IP to the host: `SSH_CIDRS='["<host-ip>/32","<your-ip>/32"]' ./bootstrap.sh <host_dir>`.
+  machine means adding that machine's IP to the host: `SSH_CIDRS='["<host-ip>/32","<your-ip>/32"]' pbd bootstrap <host_dir>`.
 
 ## Usage
 
+| Command | Does |
+|---|---|
+| `pbd check [app_dir]` | verify prerequisites and exit — provisions nothing |
+| `pbd bootstrap [app_dir]` | provision, create the repo, wire the pipeline, deploy |
+| `pbd teardown [app_dir]` | destroy what bootstrap created, in reverse order |
+| `pbd gitea bootstrap` | stand up a self-hosted Gitea + its Actions runner |
+| `pbd gitea teardown` | destroy that instance and everything it hosts |
+| `pbd config` | where pbd found its templates, its state and your env file |
+| `pbd help [command]` | the full options for a command |
+| `pbd version` | the version |
+
+`app_dir` defaults to `.`. Every command takes `--help`. A usage error exits **2**; a run
+that started and failed exits **1**.
+
 ```bash
 # 1. Verify everything is in place — exits non-zero naming the FIRST gap:
-./bootstrap.sh --check ~/src/myapp
+pbd check ~/src/myapp
 
 # 2. Go:
-./bootstrap.sh ~/src/myapp
+pbd bootstrap ~/src/myapp
 
 # Or, onto a droplet that already serves ~/src/myapp:
-./bootstrap.sh --host ~/src/myapp ~/src/myotherapp
+pbd bootstrap --host ~/src/myapp ~/src/myotherapp
 
 # Or build something that isn't a website at all — no droplet, no DNS,
 # no database, and no DigitalOcean credentials required. --cli takes the
 # language (elixir, ruby, bash, typescript):
-./bootstrap.sh --cli ruby   ~/src/mytool
-./bootstrap.sh --no-droplet ~/src/mylib
+pbd bootstrap --cli ruby   ~/src/mytool
+pbd bootstrap --no-droplet ~/src/mylib
 
 # The full type + language list:
-./bootstrap.sh --help
+pbd help bootstrap
 ```
 
 The steps below describe a **service** — the default. A droplet-free type
@@ -756,8 +849,8 @@ Steps 4–9 have nothing to do, because nothing was provisioned.
 
 The app name is the directory basename (must be a valid Elixir app name: `lower_snake_case`). What the run does, in order:
 
-1. **Preflight** — same checks as `--check`.
-2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude skill docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `./scripts/inject-skill-docs.sh <app_dir>`.
+1. **Preflight** — same checks as `pbd check`.
+2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude skill docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `"$(pbd config | awk '/^root/{print $2}')"/scripts/inject-skill-docs.sh <app_dir>`.
 3. **Code host repo** — `git init` if needed, create a private repo (GitHub or Gitea per `GIT_PROVIDER`), and push an `initial commit` of the app as generated. (No workflows exist yet, so this push triggers nothing.)
 4. **State bucket** — create the Spaces bucket; both real roots `init` against it (any pre-existing local state migrates in automatically).
 5. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), DNS record.
@@ -770,7 +863,7 @@ The app name is the directory basename (must be a valid Elixir app name: `lower_
 12. **Commit + push** the pipeline files — which triggers the first deploy through the exact pipeline every later push uses: tests (Postgres service container) → image build → migration gate → blue/green swap.
 13. **Poll `https://<domain>`** until live. On failure it prints ordered diagnostics (Actions status, `dig`, Caddy logs) and tells you whether the deploy *failed* or just *isn't ready yet*.
 
-The script is **idempotent**: fix whatever it complained about and re-run; every step detects work already done. (One side effect of re-running: `SECRET_KEY_BASE` is regenerated, which invalidates existing user sessions.)
+The command is **idempotent**: fix whatever it complained about and re-run; every step detects work already done. (One side effect of re-running: `SECRET_KEY_BASE` is regenerated, which invalidates existing user sessions.)
 
 ### Day 2
 
@@ -781,9 +874,9 @@ The script is **idempotent**: fix whatever it complained about and re-run; every
 | Get a staging environment | **GitHub only** — open a PR against `main`; it deploys to `<app>-stg.<zone>` and is destroyed when the PR closes |
 | Destroy a staging environment by hand | `ssh root@<reserved-ip> "APP_SLUG=<slug>-stg bash /root/caddy/staging-down.sh"` |
 | Roll back | `gh workflow run rollback.yml -f tag=<previous commit sha>` (GitHub) — Gitea: run the `rollback` workflow from the Actions tab (`tag` input), or `POST .../actions/workflows/rollback.yml/dispatches` |
-| Change the infrastructure | edit `<app_dir>/infra/…`, commit, `./bootstrap.sh <app_dir>` (idempotent, applies all three roots) |
-| Recreate the droplet | `terraform -chdir=<app_dir>/infra/app destroy && ./bootstrap.sh <app_dir>` — DB, IP, DNS, certs survive. **Redeploy every tenant afterwards** (`gh workflow run deploy.yml` in each): their stacks live on that droplet |
-| Add another app to the droplet | `./bootstrap.sh --host <app_dir> <other_app_dir>` |
+| Change the infrastructure | edit `<app_dir>/infra/…`, commit, `pbd bootstrap <app_dir>` (idempotent, applies all three roots) |
+| Recreate the droplet | `terraform -chdir=<app_dir>/infra/app destroy && pbd bootstrap <app_dir>` — DB, IP, DNS, certs survive. **Redeploy every tenant afterwards** (`gh workflow run deploy.yml` in each): their stacks live on that droplet |
+| Add another app to the droplet | `pbd bootstrap --host <app_dir> <other_app_dir>` |
 | See what's on a droplet | `ssh root@<reserved-ip> 'ls /root/apps && ls /root/caddy/sites'` |
 | Verify lifecycle isolation | `scripts/verify-isolation.sh` (asserts a destroy plan touches only droplet/firewall/IP-binding) |
 | SSH to the box | `ssh root@<reserved-ip>` (from the IP in `SSH_CIDRS` only) |
@@ -800,7 +893,7 @@ For manual Terraform runs, `cd` into the app and export the same env vars plus `
   (`zola`) sites push no image and use no repository.
 - Reserved IP: free while assigned
 - Plus your DNSimple subscription.
-- **If self-hosting Gitea** (`bootstrap-gitea.sh`, optional — GitHub is free
+- **If self-hosting Gitea** (`pbd gitea bootstrap`, optional — GitHub is free
   and needs none of this): droplet `s-1vcpu-1gb` ~$6 + a 40GB data volume ~$4
   + its own reserved IP (free while assigned). No managed Postgres, no
   container registry — Gitea uses SQLite and no image of its own is built.
@@ -820,27 +913,27 @@ For manual Terraform runs, `cd` into the app and export the same env vars plus `
 
 ## Teardown
 
-On a **tenant** app, `teardown.sh` removes only that app: its DNS records, its
+On a **tenant** app, `pbd teardown` removes only that app: its DNS records, its
 stack and volumes under `/root/apps/<slug>`, any staging environment left under
 `/root/apps/<slug>-stg`, and its routes out of the shared Caddy. The droplet and
 its other apps are untouched. (Its Litestream replica in Spaces is left behind —
 delete `litestream/<project>/` by hand if you want the data gone.)
 
 A **droplet-free** app has nothing to tear down — it created no bucket, no cluster, no droplet,
-no DNS record and no registry repository. `teardown.sh` says so and stops, and demands none of
+no DNS record and no registry repository. `pbd teardown` says so and stops, and demands none of
 the DigitalOcean, DNSimple or Spaces credentials the rest of it needs. `--delete-repo` still
 deletes the code-host repo; the local directory is never touched either way. (The app records
 what it is in `.app-type`; apps created before that file existed are treated as services, which
 is what they are.)
 
 ```bash
-./teardown.sh ~/src/mytool                 # "nothing to destroy" — and it means it
-./teardown.sh --delete-repo ~/src/mytool   # the repo, and only the repo
+pbd teardown ~/src/mytool                 # "nothing to destroy" — and it means it
+pbd teardown --delete-repo ~/src/mytool   # the repo, and only the repo
 ```
 
 ```bash
 # Everything, in the right order, with confirmation (data loss!):
-./teardown.sh <app_dir>
+pbd teardown <app_dir>
 
 # Or by hand — disposable compute only, data survives:
 terraform -chdir=<app_dir>/infra/app destroy
@@ -851,7 +944,7 @@ terraform -chdir=<app_dir>/infra/persistent destroy
 terraform -chdir=<app_dir>/infra/state destroy
 ```
 
-Also delete the container registry (`doctl registry delete`) and the code-host repo (`teardown.sh --delete-repo`, or by hand) if you're done with them.
+Also delete the container registry (`doctl registry delete`) and the code-host repo (`pbd teardown --delete-repo`, or by hand) if you're done with them.
 
 ## Security notes
 

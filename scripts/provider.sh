@@ -139,7 +139,7 @@ ci_auth_check() {
   started but never confirmed. Secrets and variables work either way, which is
   why this only surfaces at the deploy step without this check.
   Fix: bump the gitea image tag in gitea-host/docker-compose.yaml and re-run
-  ./bootstrap-gitea.sh (data lives on the volume; the upgrade is in place)."
+  `pbd gitea bootstrap` (data lives on the volume; the upgrade is in place)."
 }
 
 # Does the repo exist ON THE HOST? Named explicitly rather than inferred from

@@ -362,7 +362,7 @@ Every push runs \`.github/workflows/ci.yml\` (or \`.gitea/workflows/ci.yml\`):
 the specs, plus a smoke test of the built executable.
 
 This project provisions no infrastructure — no droplet, no DNS, no database.
-It was created with \`bootstrap.sh --cli ruby\`.
+It was created with \`pbd bootstrap --cli ruby\`.
 EOF
 
 log "scaffolded $APP_DIR (ruby cli): exe/$APP_NAME, lib/, spec/, ${APP_NAME}.gemspec"

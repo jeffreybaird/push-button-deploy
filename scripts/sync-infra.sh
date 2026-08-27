@@ -116,7 +116,7 @@ at `/root/caddy/sites/<slug>.caddy`.
 ## Changing the deploy
 
 ```bash
-/path/to/push-button-deploy/bootstrap.sh --host <host_app_dir> /path/to/this/app
+pbd bootstrap --host <host_app_dir> /path/to/this/app
 ```
 
 Idempotent. The bootstrap seeds these files once and never overwrites them, so
@@ -139,7 +139,7 @@ finds one.
 ## Tearing down
 
 ```bash
-/path/to/push-button-deploy/teardown.sh /path/to/this/app
+pbd teardown /path/to/this/app
 ```
 
 For a tenant that removes the DNS record, this app's stack and volumes on the
@@ -175,7 +175,7 @@ The supported path is to edit the files here, commit, and re-run the bootstrap
 against this directory — it is idempotent and applies all three roots in order:
 
 ```bash
-/path/to/push-button-deploy/bootstrap.sh /path/to/this/app
+pbd bootstrap /path/to/this/app
 ```
 
 The bootstrap seeds these files once and never overwrites them afterwards, so
@@ -204,7 +204,7 @@ bootstrap fails loudly if it finds one.
 ## Tearing down
 
 ```bash
-/path/to/push-button-deploy/teardown.sh /path/to/this/app
+pbd teardown /path/to/this/app
 ```
 
 Destroys the droplet, then the persistent root (**the database and all its

@@ -310,7 +310,7 @@ Every push runs \`.github/workflows/ci.yml\` (or \`.gitea/workflows/ci.yml\`):
 shellcheck, then the test suite.
 
 This project provisions no infrastructure — no droplet, no DNS, no database.
-It was created with \`bootstrap.sh --cli bash\`.
+It was created with \`pbd bootstrap --cli bash\`.
 EOF
 
 log "scaffolded $APP_DIR (bash cli): bin/$APP_NAME, lib/$APP_NAME/core.sh, test/run.sh"

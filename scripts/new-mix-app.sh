@@ -422,7 +422,7 @@ Every push runs \`.github/workflows/ci.yml\` (or \`.gitea/workflows/ci.yml\`):
 format check, compile with warnings as errors, and the test suite.
 
 This project provisions no infrastructure — no droplet, no DNS, no database.
-It was created with \`bootstrap.sh --$( [ "$KIND" = escript ] && printf cli || printf no-droplet )\`.
+It was created with \`pbd bootstrap --$( [ "$KIND" = escript ] && printf cli || printf no-droplet )\`.
 
 The BEAM versions are pinned in \`.tool-versions\`, which CI reads directly.
 EOF
