@@ -747,7 +747,48 @@ Two things to know when sharing a droplet:
 
 # The full type + language list:
 ./bootstrap.sh --help
+
+# Or don't remember any of the flags — be prompted for every choice, then deploy:
+./bootstrap.sh --interactive        # -i for short
 ```
+
+### Interactive mode
+
+`--interactive` (`-i`) walks you through the same choices the flags and
+environment variables encode — app type, language, code host, and (for a
+service) database backend, PR staging and tenancy — one prompt at a time, then
+shows a recap and deploys on confirmation. Enter accepts the `[default]` shown
+at each step; a menu choice takes either the number or the name.
+
+```
+$ ./bootstrap.sh -i
+==> interactive setup — Enter accepts the [default] shown at each step
+
+What are you building?
+  *1) service    a web app on its own droplet, served over HTTPS
+   2) cli        a command-line program — built, tested and packaged by CI
+   3) library    a reusable package — built and tested by CI
+choice [service]: 2
+
+Which language?
+  *1) elixir     one self-contained executable, via mix escript.build
+   2) ruby       a gem-layout CLI on OptionParser, installable with gem install
+   3) bash       a dependency-free shell CLI, shellcheck-clean
+   4) typescript a Node CLI on node:util parseArgs, installable with npm i -g
+choice [elixir]: ruby
+...
+```
+
+It only fills in the flags for you — it skips no validation. The answers feed
+the exact same resolution and preflight a flag-driven run takes, so an
+interactive run and a flag run that pick the same choices are identical from
+there on (and the follow-up prompts appear only where they can apply: no
+database question for a CLI, a static site or a SQLite-only Sinatra app; no
+staging question outside the GitHub service path). The menus are rendered from
+the app-type registry (`scripts/app-types.sh`), so a stack added there shows up
+here with no extra work. Credentials are still read from `.env`/the environment
+as usual — interactive mode chooses *what* to build, not your secrets. It needs
+a terminal; with no TTY it stops and points you back at the flags.
 
 The steps below describe a **service** — the default. A droplet-free type
 ([App types](#app-types)) runs eight of them: preflight, generate, parse, repo, prepare (the CI
