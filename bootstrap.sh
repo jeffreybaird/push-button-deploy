@@ -12,6 +12,7 @@
 #                                      # repo + CI, no droplet and no credentials
 #   ./bootstrap.sh --no-droplet [app_dir]
 #                                      # build a reusable package the same way
+#   ./bootstrap.sh --interactive       # -i: prompt for every choice, then deploy
 #   ./bootstrap.sh --help              # the full type + language list
 #
 # APP TYPES. What gets built is chosen on two axes, both defined in
@@ -1618,6 +1619,157 @@ abs_dir() {
   fi
 }
 
+# ---- interactive mode --------------------------------------------------------
+#
+# --interactive / -i walks the same choices the flags and environment encode —
+# app type, language, code host, and (for a service) database backend, PR
+# staging and tenancy — then SETS the very variables the flag parser would have
+# set and hands off to the same resolve_app_config -> provision() path a
+# non-interactive run takes. There is no second code path for "what a choice
+# means": resolve_app_config validates and coerces exactly as before, so the
+# menus can never drift from the flags they stand in for. The menus themselves
+# are rendered from the app-type registry (scripts/app-types.sh), so a stack
+# added there shows up here with no edit.
+#
+# Each prompt writes to stderr and sets $REPLY_VALUE — it does NOT echo the
+# answer for a `$(...)` to capture. That is deliberate: a command substitution
+# runs in a subshell, and a fail() (e.g. the terminal closing mid-session) from
+# inside one would only kill the subshell, leaving the parent to march on with
+# an empty value. Setting a global keeps every fail() in the main shell, where
+# it actually stops the run. Answers are read from /dev/tty, so a redirected or
+# piped stdin never swallows a prompt — and ask_menu can take its option list on
+# its own stdin (via process substitution) without the two contending.
+REPLY_VALUE=""
+
+ask_line() { # $1 prompt -> sets REPLY_VALUE to the entered line (empty on Enter)
+  printf '%s' "$1" >&2
+  IFS= read -r REPLY_VALUE < /dev/tty \
+    || fail "interactive: input closed — --interactive needs a terminal (drop it and use the flags; see --help)"
+}
+
+ask_text() { # $1 label, $2 default -> REPLY_VALUE (the default on empty input)
+  local d="$2"
+  ask_line "$1${d:+ [$d]}: "
+  [ -n "$REPLY_VALUE" ] || REPLY_VALUE="$d"
+}
+
+ask_yesno() { # $1 label, $2 default (y/n) -> REPLY_VALUE 'true' or 'false'
+  local d="$2"
+  while :; do
+    ask_line "$1 (y/n) [$d]: "; [ -n "$REPLY_VALUE" ] || REPLY_VALUE="$d"
+    case "$REPLY_VALUE" in
+      y|Y|yes|true)  REPLY_VALUE=true;  return ;;
+      n|N|no|false)  REPLY_VALUE=false; return ;;
+      *) printf '  please answer y or n\n' >&2 ;;
+    esac
+  done
+}
+
+# Numbered menu. Options arrive on stdin as `value|description` lines; the
+# chosen VALUE lands in REPLY_VALUE. A bare Enter takes the default (marked *);
+# a name is accepted as readily as its number.
+ask_menu() { # $1 label, $2 default-value  (options on stdin)
+  local label="$1" default="$2" val desc n=0 i
+  local -a vals=() descs=()
+  while IFS='|' read -r val desc; do
+    [ -n "$val" ] || continue
+    n=$((n + 1)); vals+=("$val"); descs+=("$desc")
+  done
+  printf '\n%s\n' "$label" >&2
+  for ((i = 1; i <= n; i++)); do
+    local mark=" "; [ "${vals[i-1]}" = "$default" ] && mark="*"
+    printf '  %s%s) %-10s %s\n' "$mark" "$i" "${vals[i-1]}" "${descs[i-1]}" >&2
+  done
+  while :; do
+    ask_line "choice [$default]: "; [ -n "$REPLY_VALUE" ] || REPLY_VALUE="$default"
+    for ((i = 1; i <= n; i++)); do
+      [ "$REPLY_VALUE" = "${vals[i-1]}" ] && return
+    done
+    case "$REPLY_VALUE" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$REPLY_VALUE" -ge 1 ] && [ "$REPLY_VALUE" -le "$n" ]; then
+           REPLY_VALUE="${vals[REPLY_VALUE-1]}"; return
+         fi ;;
+    esac
+    printf '  pick 1-%s, or a name\n' "$n" >&2
+  done
+}
+
+# Walk the choices, set the parser's variables, leave the target dir in
+# INTERACTIVE_APP_DIR. Called with main's remaining positionals so the directory
+# prompt can default to one already typed. Everything it decides is re-validated
+# by resolve_app_config; nothing here provisions.
+interactive() {
+  [ -r /dev/tty ] || fail "--interactive needs a terminal (no /dev/tty). Use the flags instead (see --help)."
+  log "interactive setup — Enter accepts the [default] shown at each step"
+
+  # 1. App type — the shape, and therefore what infrastructure it needs.
+  local type_default="${APP_TYPE_FLAG:-${APP_TYPE:-$APP_TYPE_DEFAULT}}"
+  local type
+  ask_menu "What are you building?" "$type_default" \
+    < <(printf '%s\n' "$APP_TYPE_TABLE" | awk -F'|' '{print $1"|"$6}')
+  type="$REPLY_VALUE"; APP_TYPE_FLAG="$type"
+
+  # 2. Language / framework within it (the stacks of that type, from the table).
+  local lang_default="${LANGUAGE_FLAG:-${LANGUAGE:-}}"
+  [ -n "$lang_default" ] || lang_default="$(type_stacks "$type" | head -1 | cut -d'|' -f3)"
+  local lang
+  ask_menu "Which language?" "$lang_default" \
+    < <(type_stacks "$type" | awk -F'|' '{print $3"|"$8}')
+  lang="$REPLY_VALUE"; LANGUAGE_FLAG="$lang"
+
+  # The framework the pair resolves to — the follow-ups key on it, not on names.
+  local fw; fw="$(resolve_framework "$type" "$lang")"
+
+  # 3. Code host + CI engine (every type has one).
+  ask_menu "Where do the repo and CI live?" "${GIT_PROVIDER:-github}" \
+    < <(printf 'github|GitHub (github.com), GitHub Actions\ngitea|self-hosted Gitea + its Actions runner\n')
+  GIT_PROVIDER="$REPLY_VALUE"; export GIT_PROVIDER
+
+  # 4. Service-only infrastructure choices, gated on the SAME predicates
+  #    resolve_app_config uses — asked only when they can actually apply.
+  if [ "$(type_droplet "$type")" = yes ]; then
+    # Database: only where the type may have one AND the framework does not force
+    # it (sinatra is SQLite-only, zola has none). Matches resolve_app_config's
+    # coercions, so nothing offered here gets silently overridden later.
+    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != zola ]; then
+      ask_menu "Database backend?" "${DATABASE_BACKEND:-sqlite}" \
+        < <(printf 'sqlite|a file on the droplet, streamed to Spaces by Litestream (~$0)\npostgres|DigitalOcean Managed Postgres, private-VPC (~$15/mo)\n')
+      DATABASE_BACKEND="$REPLY_VALUE"; export DATABASE_BACKEND
+    fi
+    # PR staging: GitHub only (no Gitea workflow yet) and never for a static site.
+    if [ "$GIT_PROVIDER" = github ] && [ "$fw" != zola ]; then
+      local stg_default=y; [ "${ENABLE_STAGING:-true}" = false ] && stg_default=n
+      ask_yesno "Give every PR a staging environment at <app>-stg.<zone>?" "$stg_default"
+      ENABLE_STAGING="$REPLY_VALUE"; export ENABLE_STAGING
+    fi
+    # Tenancy: deploy onto a droplet another app already owns. Blank = its own.
+    ask_text "Share an EXISTING droplet? Enter that host app's directory (blank = its own droplet)" "${HOST_APP_DIR:-}"
+    [ -z "$REPLY_VALUE" ] || HOST_APP_DIR="$(abs_dir "$REPLY_VALUE")"
+  fi
+
+  # 5. Where it lands. Default to a directory already on the command line, else '.'.
+  ask_text "App directory" "${1:-.}"; INTERACTIVE_APP_DIR="$REPLY_VALUE"
+
+  # 6. Recap and confirm before anything happens.
+  printf '\n' >&2
+  log "about to build:"
+  printf '    type        %s\n' "$type" >&2
+  printf '    language    %s  (framework: %s)\n' "$lang" "$fw" >&2
+  printf '    directory   %s\n' "$(abs_dir "$INTERACTIVE_APP_DIR")" >&2
+  printf '    code host   %s\n' "$GIT_PROVIDER" >&2
+  if [ "$(type_droplet "$type")" = yes ]; then
+    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != zola ]; then
+      printf '    database    %s\n' "${DATABASE_BACKEND:-sqlite}" >&2
+    fi
+    [ "$GIT_PROVIDER" = github ] && [ "$fw" != zola ] \
+      && printf '    staging     %s\n' "${ENABLE_STAGING:-true}" >&2
+    [ -n "${HOST_APP_DIR:-}" ] && printf '    host app    %s  (tenant)\n' "$HOST_APP_DIR" >&2
+  fi
+  printf '\n' >&2
+  [ "$(ask_yesno "Proceed?" y)" = true ] || fail "cancelled"
+}
+
 usage() {
   cat <<EOF
 bootstrap.sh — stand up an app, its repo and its pipeline.
@@ -1629,6 +1781,8 @@ bootstrap.sh — stand up an app, its repo and its pipeline.
   ./bootstrap.sh --no-droplet ~/src/mylib   a reusable package
 
 Options:
+  --interactive, -i    prompt step by step for every choice below, then deploy.
+                       Skips no validation — it just fills the flags for you
   --check              verify prerequisites and exit; provisions nothing
   --host <dir>         TENANT MODE: deploy onto the droplet <dir>'s app already
                        owns instead of provisioning one (service apps only)
@@ -1658,10 +1812,11 @@ EOF
 }
 
 main() {
-  local check=0 t arg val
+  local check=0 interactive=0 t arg val
   while [ $# -gt 0 ]; do
     case "$1" in
       --check) check=1; shift ;;
+      --interactive|-i) interactive=1; shift ;;
       --help|-h) usage; exit 0 ;;
       # The language axis, spelled on its own. `--cli ruby` and `--cli=ruby`
       # below reach the same variable.
@@ -1718,6 +1873,16 @@ $(usage)" ;;
       *)  break ;;
     esac
   done
+
+  # Interactive mode fills in the same flag/env variables the parser above would
+  # have set (app type, language, code host, database, staging, tenancy, target
+  # dir), then falls through to the identical path below — resolve_app_config
+  # still validates and coerces, so an interactive run and a flag run that pick
+  # the same answers are indistinguishable from here on.
+  if [ "$interactive" -eq 1 ]; then
+    interactive "$@"
+    set -- "$INTERACTIVE_APP_DIR"
+  fi
 
   # Resolve WHAT is being built before anything asks what it needs: the type
   # decides the required binaries, the required credentials and the step count.
