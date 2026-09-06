@@ -514,31 +514,15 @@ MD
   log "scaffold: wrote app files, an example Note resource, and an RSpec suite"
 }
 
-# ---- 3. skill docs (copy + placeholder rewrite) --------------------------------
+# ---- 3. skill docs (delegated to the shared injector) --------------------------
+# The copy/rewrite/index-prune lives in scripts/claude-docs.sh, shared with
+# bootstrap, the guided ./claude-docs.sh command and the other scaffolds.
+# Non-interactive here (no CD_SKIP_* set) => every module + agent + the cloud
+# hook land, exactly as before plus the starter agents the template now ships.
 inject_docs() {
-  mkdir -p "$APP_DIR/.claude"
-  cp "$TEMPLATE_DIR/CLAUDE.md" "$APP_DIR/CLAUDE.md"
-  local count=0 src
-  for src in "$TEMPLATE_DIR"/.claude/*.md; do
-    [ -e "$src" ] || continue
-    cp "$src" "$APP_DIR/.claude/$(basename "$src")"
-    count=$((count + 1))
-  done
-
-  # Cloud-environment SessionStart hook, if the template ships one.
-  if [ -f "$TEMPLATE_DIR/.claude/cloud-setup.sh" ]; then
-    cp "$TEMPLATE_DIR/.claude/cloud-setup.sh" "$APP_DIR/.claude/cloud-setup.sh"
-    chmod +x "$APP_DIR/.claude/cloud-setup.sh"
-  fi
-  [ -f "$TEMPLATE_DIR/.claude/settings.json" ] \
-    && cp "$TEMPLATE_DIR/.claude/settings.json" "$APP_DIR/.claude/settings.json"
-
-  find "$APP_DIR/CLAUDE.md" "$APP_DIR/.claude" \
-    \( -name '*.md' -o -name 'cloud-setup.sh' \) -type f -print0 \
-    | MODULE="$APP_MODULE" APP="$APP_NAME" xargs -0 perl -pi -e \
-        's/\QMyApp\E/$ENV{MODULE}/g; s/\Qmy_app\E/$ENV{APP}/g;'
-
-  log "skill docs: placed CLAUDE.md + $count docs, names rewritten to $APP_MODULE/$APP_NAME"
+  # shellcheck source=claude-docs.sh
+  . "$SCRIPT_DIR/claude-docs.sh"
+  cd_inject "$TEMPLATE_DIR" "$APP_DIR" "$APP_MODULE" "$APP_NAME"
 }
 
 if [ -f "$APP_DIR/Gemfile" ]; then

@@ -372,6 +372,47 @@ serves something else — it consumes a directory and a Caddy site file, and not
 It also sidesteps the container registry entirely, which matters on the free starter tier (one
 repository per account).
 
+## Claude Code docs
+
+Every app this tool generates ships **Claude Code docs**: a `CLAUDE.md` project guide plus a
+`.claude/` directory of guidance modules, starter subagents, and a `SessionStart` hook that
+prepares cloud sessions. They come from static template roots in this repo — `app-template/`
+(Phoenix), `app-template-ruby/` (Sinatra), `app-template-zola/` (Zola) — copied into the app
+with the `MyApp`/`my_app` (or `My Site`/`my_site`) placeholders rewritten to its real name. A
+normal `bootstrap.sh` run injects **everything** automatically, exactly as before.
+
+`claude-docs.sh` generates the same docs on their own, and lets you **choose** what lands —
+guided, off the same templates, no provisioning:
+
+```bash
+./claude-docs.sh                       # guided; framework inferred from the cwd
+./claude-docs.sh ~/src/myapp           # guided, into that directory
+./claude-docs.sh --framework sinatra ~/src/myapp
+./claude-docs.sh --all ~/src/myapp     # non-interactive: include everything
+./bootstrap.sh --docs ~/src/myapp      # the same thing, via bootstrap (delegates here)
+```
+
+The guided run walks the pieces one at a time — each **optional** guidance module
+(multi-tenancy, RBAC, payments, object storage, external-service integration), each starter
+**agent** (`test-writer`, `code-reviewer` under `.claude/agents/`), and the `SessionStart` hook
+(with an optional "format on write" variant) — defaulting to *include* at every step, then
+offers to open `CLAUDE.md` in `$EDITOR`. It runs on a freshly generated app or to retrofit an
+existing repo, and only writes `CLAUDE.md` and `.claude/` — never your code. Skipping an
+optional module also drops its line from the `CLAUDE.md` index, so the guide never points at a
+file that isn't there. `bootstrap.sh --interactive` folds the same choice in (answer *yes* to
+"Customize which Claude docs…").
+
+What each template ships is declared in a `claude-docs.manifest` at the template root (the
+placeholder pair, which modules are optional, which agents, any hook variant); adding a module
+or an agent to a template is a file plus a manifest line, picked up by every path above with no
+code change. The Phoenix retrofit path (`./scripts/inject-skill-docs.sh <app_dir>`, which also
+injects the `req`/`oban` deps the docs assume) and the Sinatra/Zola scaffolds all inject through
+the one shared engine (`scripts/claude-docs.sh`). Offline smoke test:
+`./test/claude-docs-smoke.sh`.
+
+CLI and library app types (`--cli`, `--no-droplet`) ship no docs today — the engine is ready
+for them, but the template roots aren't written yet.
+
 ## Pull-request staging environments
 
 Opening a pull request against `main` stands a **complete copy of the app** up on
@@ -798,7 +839,7 @@ Steps 4–9 have nothing to do, because nothing was provisioned.
 The app name is the directory basename (must be a valid Elixir app name: `lower_snake_case`). What the run does, in order:
 
 1. **Preflight** — same checks as `--check`.
-2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude skill docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `./scripts/inject-skill-docs.sh <app_dir>`.
+2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude Code docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten — see [Claude Code docs](#claude-code-docs)) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `./scripts/inject-skill-docs.sh <app_dir>`, or pick what lands with `./claude-docs.sh <app_dir>`.
 3. **Code host repo** — `git init` if needed, create a private repo (GitHub or Gitea per `GIT_PROVIDER`), and push an `initial commit` of the app as generated. (No workflows exist yet, so this push triggers nothing.)
 4. **State bucket** — create the Spaces bucket; both real roots `init` against it (any pre-existing local state migrates in automatically).
 5. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), DNS record.

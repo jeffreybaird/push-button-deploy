@@ -1,0 +1,9 @@
+# claude-docs manifest — drives scripts/claude-docs.sh for this template root.
+#
+# A Zola static site has three core docs, no optional modules, no agents and no
+# SessionStart/format hook (there is no runtime). The only thing the injector
+# needs from here is the placeholder pair — this template uses "My Site" /
+# "my_site" rather than the MyApp / my_app pair the app templates use.
+#
+# Format is documented in app-template/claude-docs.manifest.
+placeholders|My Site|my_site

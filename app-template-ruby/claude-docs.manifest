@@ -1,0 +1,20 @@
+# claude-docs manifest — drives scripts/claude-docs.sh for this template root.
+#
+# Format: role|arg1|arg2  (lines starting with # and blank lines are ignored)
+#   placeholders|<Module-token>|<app-token>  the two strings the injector rewrites
+#   optional|<file.md>|<summary>   a .claude/ module the user may skip (default: include)
+#   agent|<file.md>|<summary>      a .claude/agents/ file the user may include (default: include)
+#   hook|<id>|<summary>            an optional hook variant (swaps settings.json for
+#                                  settings.<id>-hook.json)
+#
+# Core = every .claude/*.md NOT listed 'optional'. If this file is absent, the
+# injector includes everything and prompts for nothing.
+placeholders|MyApp|my_app
+optional|multi-tenancy.md|account_id row-level scoping, test isolation
+optional|rbac.md|authentication, roles, policy objects
+optional|external-service-integration.md|wrapping any third-party API behind a Faraday client
+optional|payment-integration.md|Stripe billing / subscriptions / checkout
+optional|object-storage-integration.md|S3-compatible blob storage
+agent|test-writer.md|drafts RSpec specs to the project's testing rules
+agent|code-reviewer.md|reviews a diff against CLAUDE.md's rules
+hook|format|also run rubocop -A on file writes (PostToolUse)

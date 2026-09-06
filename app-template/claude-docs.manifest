@@ -1,0 +1,21 @@
+# claude-docs manifest — drives scripts/claude-docs.sh for this template root.
+#
+# Format: role|arg1|arg2  (lines starting with # and blank lines are ignored)
+#   placeholders|<Module-token>|<app-token>  the two strings the injector rewrites
+#                                             (e.g. MyApp -> module, my_app -> app name)
+#   optional|<file.md>|<summary>   a .claude/ module the user may skip (default: include)
+#   agent|<file.md>|<summary>      a .claude/agents/ file the user may include (default: include)
+#   hook|<id>|<summary>            an optional hook variant (see claude-docs.sh; 'format'
+#                                  swaps settings.json for settings.<id>-hook.json)
+#
+# Core = every .claude/*.md NOT listed 'optional'. If this file is absent, the
+# injector includes everything and prompts for nothing.
+placeholders|MyApp|my_app
+optional|multi-tenancy.md|tenant scoping, query patterns, test isolation
+optional|rbac.md|roles, enforcement plugs, authorization
+optional|external-service-integration.md|wrapping any third-party API behind a client
+optional|payment-integration.md|billing / subscriptions / checkout
+optional|object-storage-integration.md|S3-compatible file/blob storage
+agent|test-writer.md|drafts ExUnit tests to the project's testing rules
+agent|code-reviewer.md|reviews a diff against CLAUDE.md's rules
+hook|format|also run mix format on file writes (PostToolUse)
