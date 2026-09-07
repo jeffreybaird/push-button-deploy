@@ -67,6 +67,67 @@ Caddy is **host-owned, not app-owned**: one instance per droplet, in `/root/cadd
 
 Port 22 is closed to the world. On the default GitHub path, CI punches a temporary `/32` hole for its own (GitHub-hosted, unpredictable) runner IP at the start of each deploy and revokes it in an `always()` step. On the Gitea path (`GIT_PROVIDER=gitea`), the self-hosted Actions runner has a stable IP instead, so it's allow-listed once in Terraform (`GITEA_RUNNER_IP`) rather than punched per-run — see [Gitea support](#gitea-support).
 
+## Agent instructions and skills
+
+Fresh apps can receive **Claude**, **OpenAI Codex**, or **both** sets of repository-local
+agent files. When `APP_AGENTS` is unset, the generator asks on an interactive terminal
+(Enter selects Claude). Noninteractive runs default to Claude. Set a preference in the
+calling environment or bootstrap's `.env` to skip the prompt:
+
+```bash
+APP_AGENTS=both ./bootstrap.sh ~/src/myapp
+APP_AGENTS=codex FRAMEWORK=sinatra ./bootstrap.sh ~/src/my_ruby_app
+./scripts/new-zola-site.sh --agents codex ~/src/my-site
+```
+
+Bootstrap installs agent files only when generating a new app. Existing-app deployments
+and `--check` do not prompt or install them. To add files to an existing app without
+provisioning infrastructure, scaffolding code, or changing dependencies:
+
+```bash
+./scripts/install-agent-files.sh --agents both ~/src/myapp
+./scripts/install-agent-files.sh --agents codex --framework phoenix ~/src/myapp
+./scripts/install-agent-files.sh --agents codex --force ~/src/myapp
+```
+
+The installer detects Phoenix (`mix.exs`), Sinatra (`Gemfile`), or Zola (`config.toml`).
+Use `--framework` if more than one signature exists; the selected signature must exist.
+`--agents` overrides `APP_AGENTS`. Standalone scripts read the calling environment,
+not bootstrap's credentials `.env`. Invalid terminal input prompts again; EOF cancels.
+
+| Selection | Generated files |
+|---|---|
+| `claude` | `CLAUDE.md`, `.claude/*.md`, plus Phoenix/Sinatra cloud setup and session hook files |
+| `codex` | `AGENTS.md`, `.agents/skills/<topic>/SKILL.md` |
+| `both` | Both sets, each usable independently |
+
+Codex skills share the existing framework guide content, with names and descriptions
+from each template's `skill-metadata.tsv`. Generated links and agent-specific wording
+are adapted for Codex. Claude keeps its existing layout. Claude session hooks are not
+installed for Codex; configure Codex cloud environments separately if needed.
+
+Existing files are **preserved by default**. The installer reports identical files and
+files that differ. `--force` replaces only the selected providers' generated paths;
+unrelated files and the other provider's files survive. Symlink destinations are refused.
+This preservation behavior also applies to the legacy scaffold/injection commands, which
+now accept `--agents` and `--force`.
+
+For Phoenix, the files-only installer reports missing dependency declarations assumed
+by the guides without editing `mix.exs`. Defaults are `req`, `oban`, and `cucumberex`;
+`APP_EXTRA_DEPS` supplies `|`-separated Mix declarations, or `""` to disable the check.
+Fresh Phoenix generation and `scripts/inject-skill-docs.sh` still add missing declarations
+without fetching packages. Use the new installer when you only want agent files.
+
+To verify the installer locally, with no cloud credentials or network access:
+
+```bash
+bash tests/agent-files.sh
+python3 tests/agent-files-flow.py
+```
+
+The first suite checks installation and scaffold fixtures. The second uses Python's
+standard library to test terminal input and bootstrap dispatch with provisioning stubbed.
+
 ## Prerequisites
 
 ### Tools (all checked by `--check`)
@@ -559,7 +620,7 @@ Two things to know when sharing a droplet:
 The app name is the directory basename (must be a valid Elixir app name: `lower_snake_case`). What the run does, in order:
 
 1. **Preflight** — same checks as `--check`.
-2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the **Claude skill docs** (`app-template/` → the app's `CLAUDE.md` + `.claude/`, names rewritten) and the deps those docs assume (`req`, `oban` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit an existing app with `./scripts/inject-skill-docs.sh <app_dir>`.
+2. **Generate** the Phoenix app (`mix phx.new`) if the directory is empty/missing; otherwise use what's there. A non-empty directory without `mix.exs` is refused. Freshly generated apps also get the selected **agent instructions and skills** (see [Agent instructions and skills](#agent-instructions-and-skills), names rewritten) and the deps those docs assume (`req`, `oban`, `cucumberex` — override with `APP_EXTRA_DEPS`, `""` to skip). Retrofit files only with `./scripts/install-agent-files.sh <app_dir>`, or use `./scripts/inject-skill-docs.sh <app_dir>` to also add missing dependency declarations.
 3. **Code host repo** — `git init` if needed, create a private repo (GitHub or Gitea per `GIT_PROVIDER`), and push an `initial commit` of the app as generated. (No workflows exist yet, so this push triggers nothing.)
 4. **State bucket** — create the Spaces bucket; both real roots `init` against it (any pre-existing local state migrates in automatically).
 5. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), DNS record.

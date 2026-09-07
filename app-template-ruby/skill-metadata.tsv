@@ -1,0 +1,16 @@
+a11y-audit	Sinatra/Sequel/SQLite: Use when auditing UI changes for WCAG 2.1 AA accessibility and fixing violations.
+architecture-decisions	Sinatra/Sequel/SQLite: Use when designing domain behavior, errors, audit logs, pagination, side effects, or idempotency.
+database	Sinatra/Sequel/SQLite: Use before database writes, schema changes, Sequel migrations, or SQLite concurrency work.
+deployment	Sinatra/Sequel/SQLite: Use when changing deployment, CI, rollback, infrastructure, runtime configuration, or release behavior.
+design-system	Sinatra/Sequel/SQLite: Use when defining or updating the project design system, visual tokens, and UI conventions.
+external-service-integration	Sinatra/Sequel/SQLite: Use when integrating third-party APIs, client wrappers, retries, or external service boundaries.
+frontend-map	Sinatra/Sequel/SQLite: Use when navigating or updating the map of frontend routes, views, components, and assets.
+multi-tenancy	Sinatra/Sequel/SQLite: Use when implementing tenant scoping, account isolation, or tenant-aware queries and tests.
+object-storage-integration	Sinatra/Sequel/SQLite: Use when integrating S3-compatible storage, blob uploads, or presigned URLs.
+observability	Sinatra/Sequel/SQLite: Use when adding instrumentation, structured logging, tracing, or business events.
+payment-integration	Sinatra/Sequel/SQLite: Use when integrating Stripe payments, subscriptions, checkout, or billing webhooks.
+rbac	Sinatra/Sequel/SQLite: Use when implementing authentication, roles, authorization policies, or membership permissions.
+scalability	Sinatra/Sequel/SQLite: Use when designing caching, background jobs, write buffering, rate limits, or high-volume processing.
+separation-of-concerns	Sinatra/Sequel/SQLite: Use when deciding where domain logic belongs or refactoring application boundaries.
+testing	Sinatra/Sequel/SQLite: Use when adding or reviewing tests, test fixtures, mocks, or UI test selectors.
+theming	Sinatra/Sequel/SQLite: Use when implementing CSS tokens, theme switching, or tenant-specific themes.

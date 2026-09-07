@@ -1,0 +1,3 @@
+content	Zola: Use when authoring Zola content, sections, pages, front matter, and internal links.
+deployment	Zola: Use when changing deployment, CI, rollback, infrastructure, runtime configuration, or release behavior.
+templates	Zola: Use when editing Zola Tera templates, inheritance, filters, functions, or shortcodes.

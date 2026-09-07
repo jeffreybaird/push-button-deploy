@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# new-zola-site.sh — scaffold a runnable Zola site and drop in the Claude skill
+# new-zola-site.sh — scaffold a runnable Zola site and drop in the selected agent
 # docs. The Zola counterpart to scripts/new-sinatra-app.sh (Sinatra) and
 # scripts/inject-skill-docs.sh (Phoenix). Invoked by bootstrap.sh's ensure_app
 # when FRAMEWORK=zola; also runnable by hand.
 #
-#   ./scripts/new-zola-site.sh <site_dir>
+#   ./scripts/new-zola-site.sh [--agents claude|codex|both] [--force] <site_dir>
 #
 # What it does:
 #   1. Derives SITE_SLUG (dir basename) + SITE_TITLE (a readable form of it).
 #   2. Scaffolds a themeless Zola site: config.toml, a section-and-page content
 #      tree with one post, Tera templates (base/index/section/page/404), a small
 #      stylesheet, and .zola-version.
-#   3. Copies the skill docs from app-template-zola/ (CLAUDE.md + .claude/*.md),
-#      rewriting the my_site / My Site placeholders to the site's real names.
+#   3. Installs selected Claude/Codex files through install-agent-files.sh,
+#      rewriting site names. Existing files survive unless --force is supplied.
 #
 # NO LOCAL ZOLA REQUIRED. The scaffold is written by hand rather than by `zola
 # init` precisely so the tool keeps its "empty directory to live site" promise
@@ -30,16 +30,16 @@ fail() { printf 'new-zola-site: %s\n' "$*" >&2; exit 1; }
 log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE_DIR="$SCRIPT_DIR/../app-template-zola"
 
 # The Zola release CI installs. Overridable for a new site; an existing site's
 # committed .zola-version always wins (it is never rewritten).
 ZOLA_PIN="${ZOLA_VERSION:-0.19.2}"
 
-SITE_DIR="${1:-}"
-[ -n "$SITE_DIR" ] || fail "usage: new-zola-site.sh <site_dir>"
-[ -f "$TEMPLATE_DIR/CLAUDE.md" ] || fail "no CLAUDE.md in $TEMPLATE_DIR"
-[ -d "$TEMPLATE_DIR/.claude" ]   || fail "no .claude/ in $TEMPLATE_DIR"
+. "$SCRIPT_DIR/agent-files-common.sh"
+agent_options "$@"
+[ -z "$AGENT_FRAMEWORK" ] || [ "$AGENT_FRAMEWORK" = zola ] || agent_fail 'expected zola framework'
+SITE_DIR="$AGENT_DIR"
+agent_select
 
 SITE_SLUG="$(basename "$SITE_DIR")"
 case "$SITE_SLUG" in
@@ -321,18 +321,9 @@ GITIGNORE
 
 # ---- 3. skill docs ------------------------------------------------------------
 inject_docs() {
-  log "injecting Claude skill docs from $(basename "$TEMPLATE_DIR")/"
-  mkdir -p "$SITE_DIR/.claude"
-  local f base
-  for f in "$TEMPLATE_DIR/CLAUDE.md" "$TEMPLATE_DIR"/.claude/*.md; do
-    [ -f "$f" ] || continue
-    base="$(basename "$f")"
-    if [ "$base" = "CLAUDE.md" ]; then
-      perl -pe "s/\bMy Site\b/$SITE_TITLE/g; s/\bmy_site\b/$SITE_SLUG/g" "$f" > "$SITE_DIR/CLAUDE.md"
-    else
-      perl -pe "s/\bMy Site\b/$SITE_TITLE/g; s/\bmy_site\b/$SITE_SLUG/g" "$f" > "$SITE_DIR/.claude/$base"
-    fi
-  done
+  local options=(--agents "$APP_AGENTS")
+  [ "$AGENT_FORCE" -eq 0 ] || options+=(--force)
+  "$SCRIPT_DIR/install-agent-files.sh" --framework zola "${options[@]}" "$SITE_DIR"
 }
 
 if [ -f "$SITE_DIR/config.toml" ]; then

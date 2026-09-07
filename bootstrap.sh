@@ -39,6 +39,8 @@
 #                     SQLite-only and forces DATABASE_BACKEND=sqlite; 'zola' is a
 #                     STATIC site with no database at all (DATABASE_BACKEND=none)
 #                     and no container image. Chosen once per project.
+#   APP_AGENTS        'claude', 'codex', or 'both'. Unset: prompt for fresh apps
+#                     on terminals; Claude in noninteractive runs.
 #   DATABASE_BACKEND  'sqlite' (default) provisions no DB — the app keeps a
 #                     SQLite file on the droplet's local disk, replicated to
 #                     Spaces by Litestream. 'postgres' provisions a managed
@@ -262,6 +264,13 @@ fi
 # that before .env is sourced would let a .env value silently outrank the
 # coercion (a FRAMEWORK=sinatra in .env would keep whatever DATABASE_BACKEND the
 # same file set, instead of being forced to sqlite).
+# Validate agent configuration without prompting (including --check/existing apps).
+case "${APP_AGENTS-}" in
+  ''|claude|codex|both) ;;
+  *) fail "APP_AGENTS must be 'claude', 'codex' or 'both'" ;;
+esac
+if [ "${APP_AGENTS+x}" = x ]; then export APP_AGENTS; fi
+
 FRAMEWORK="${FRAMEWORK:-phoenix}"
 case "$FRAMEWORK" in
   phoenix|sinatra|zola) ;;
@@ -470,7 +479,7 @@ ensure_app() {
   is_sqlite && db_flag="--database sqlite3"
   log "generating Phoenix app '$name' (mix phx.new --no-install ${db_flag:-postgres})"
   ( cd "$parent" && mix phx.new "$name" --no-install $db_flag )
-  # Freshly generated apps get the Claude skill docs (app-template/) and the
+  # Freshly generated apps get the selected agent files (app-template/) and the
   # deps the docs assume. Existing apps are left alone — run the script by
   # hand to retrofit: ./scripts/inject-skill-docs.sh <app_dir>
   "$SCRIPT_DIR/scripts/inject-skill-docs.sh" "$APP_DIR"

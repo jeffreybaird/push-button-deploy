@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # new-sinatra-app.sh — scaffold a runnable Sinatra + Sequel + SQLite app and drop
-# in the Claude skill docs. The Sinatra counterpart to scripts/inject-skill-docs.sh
+# in the selected agent docs. The Sinatra counterpart to scripts/inject-skill-docs.sh
 # (which handles Phoenix apps). Invoked by bootstrap.sh's ensure_app when
 # FRAMEWORK=sinatra; also runnable by hand.
 #
-#   ./scripts/new-sinatra-app.sh <app_dir>
+#   ./scripts/new-sinatra-app.sh [--agents claude|codex|both] [--force] <app_dir>
 #
 # What it does:
 #   1. Derives APP_NAME (dir basename, lower_snake_case) + APP_MODULE (camelized).
@@ -14,9 +14,8 @@
 #      example Note resource (model + Sequel migration + service object returning
 #      a dry-monads Result), ERB views, and an RSpec suite (Rack::Test + Capybara).
 #      SQLite via Sequel; WAL mode + busy_timeout set for Litestream replication.
-#   3. Copies the skill docs from app-template-ruby/ (CLAUDE.md + .claude/*.md +
-#      the cloud-environment SessionStart hook), rewriting the MyApp / my_app
-#      placeholders to the app's real names.
+#   3. Installs selected Claude/Codex files through install-agent-files.sh,
+#      rewriting app names. Existing files survive unless --force is supplied.
 #   4. Writes .app-name (the deploy/rollback workflows read it — a Rack app has no
 #      mix.exs to parse).
 #
@@ -30,13 +29,13 @@ fail() { printf 'new-sinatra-app: %s\n' "$*" >&2; exit 1; }
 log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE_DIR="$SCRIPT_DIR/../app-template-ruby"
 RUBY_PIN="${RUBY_VERSION:-3.3.6}"
 
-APP_DIR="${1:-}"
-[ -n "$APP_DIR" ] || fail "usage: new-sinatra-app.sh <app_dir>"
-[ -f "$TEMPLATE_DIR/CLAUDE.md" ] || fail "no CLAUDE.md in $TEMPLATE_DIR"
-[ -d "$TEMPLATE_DIR/.claude" ]   || fail "no .claude/ in $TEMPLATE_DIR"
+. "$SCRIPT_DIR/agent-files-common.sh"
+agent_options "$@"
+[ -z "$AGENT_FRAMEWORK" ] || [ "$AGENT_FRAMEWORK" = sinatra ] || agent_fail 'expected sinatra framework'
+APP_DIR="$AGENT_DIR"
+agent_select
 
 APP_NAME="$(basename "$APP_DIR")"
 case "$APP_NAME" in
@@ -512,33 +511,20 @@ storage by Litestream.
 MD
 
   log "scaffold: wrote app files, an example Note resource, and an RSpec suite"
+  if [ "$APP_AGENTS" = codex ]; then
+    perl -pi -e 's{\.claude/([a-z0-9-]+)\.md}{.agents/skills/$1/SKILL.md}g; s{\.claude/}{.agents/skills/}g; s/CLAUDE\.md/AGENTS.md/g; s/Claude Code/Codex/g' \
+      "$APP_DIR/config/database.rb" "$APP_DIR/app/services/notes/create.rb" "$APP_DIR/README.md"
+  elif [ "$APP_AGENTS" = both ]; then
+    perl -pi -e 's/See `CLAUDE.md`/See `CLAUDE.md` and `AGENTS.md`/; s/and `\.claude\/` for the conventions Claude Code follows/and `.claude\/` or `.agents\/skills\/` for the conventions Claude Code and Codex follow/' "$APP_DIR/README.md"
+  fi
+
 }
 
 # ---- 3. skill docs (copy + placeholder rewrite) --------------------------------
 inject_docs() {
-  mkdir -p "$APP_DIR/.claude"
-  cp "$TEMPLATE_DIR/CLAUDE.md" "$APP_DIR/CLAUDE.md"
-  local count=0 src
-  for src in "$TEMPLATE_DIR"/.claude/*.md; do
-    [ -e "$src" ] || continue
-    cp "$src" "$APP_DIR/.claude/$(basename "$src")"
-    count=$((count + 1))
-  done
-
-  # Cloud-environment SessionStart hook, if the template ships one.
-  if [ -f "$TEMPLATE_DIR/.claude/cloud-setup.sh" ]; then
-    cp "$TEMPLATE_DIR/.claude/cloud-setup.sh" "$APP_DIR/.claude/cloud-setup.sh"
-    chmod +x "$APP_DIR/.claude/cloud-setup.sh"
-  fi
-  [ -f "$TEMPLATE_DIR/.claude/settings.json" ] \
-    && cp "$TEMPLATE_DIR/.claude/settings.json" "$APP_DIR/.claude/settings.json"
-
-  find "$APP_DIR/CLAUDE.md" "$APP_DIR/.claude" \
-    \( -name '*.md' -o -name 'cloud-setup.sh' \) -type f -print0 \
-    | MODULE="$APP_MODULE" APP="$APP_NAME" xargs -0 perl -pi -e \
-        's/\QMyApp\E/$ENV{MODULE}/g; s/\Qmy_app\E/$ENV{APP}/g;'
-
-  log "skill docs: placed CLAUDE.md + $count docs, names rewritten to $APP_MODULE/$APP_NAME"
+  local options=(--agents "$APP_AGENTS")
+  [ "$AGENT_FORCE" -eq 0 ] || options+=(--force)
+  "$SCRIPT_DIR/install-agent-files.sh" --framework sinatra "${options[@]}" "$APP_DIR"
 }
 
 if [ -f "$APP_DIR/Gemfile" ]; then

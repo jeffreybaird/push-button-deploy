@@ -1,0 +1,16 @@
+a11y-audit	Phoenix/LiveView: Use when auditing UI changes for WCAG 2.1 AA accessibility and fixing violations.
+architecture-decisions	Phoenix/LiveView: Use when designing domain behavior, errors, audit logs, pagination, side effects, or idempotency.
+deployment	Phoenix/LiveView: Use when changing deployment, CI, rollback, infrastructure, runtime configuration, or release behavior.
+design-system	Phoenix/LiveView: Use when defining or updating the project design system, visual tokens, and UI conventions.
+external-service-integration	Phoenix/LiveView: Use when integrating third-party APIs, client wrappers, retries, or external service boundaries.
+frontend-map	Phoenix/LiveView: Use when navigating or updating the map of frontend routes, views, components, and assets.
+multi-tenancy	Phoenix/LiveView: Use when implementing tenant scoping, account isolation, or tenant-aware queries and tests.
+object-storage-integration	Phoenix/LiveView: Use when integrating S3-compatible storage, blob uploads, or presigned URLs.
+observability	Phoenix/LiveView: Use when adding instrumentation, structured logging, tracing, or business events.
+payment-integration	Phoenix/LiveView: Use when integrating Stripe payments, subscriptions, checkout, or billing webhooks.
+rbac	Phoenix/LiveView: Use when implementing authentication, roles, authorization policies, or membership permissions.
+scalability	Phoenix/LiveView: Use when designing caching, background jobs, write buffering, rate limits, or high-volume processing.
+separation-of-concerns	Phoenix/LiveView: Use when deciding where domain logic belongs or refactoring application boundaries.
+testing	Phoenix/LiveView: Use when adding or reviewing tests, test fixtures, mocks, or UI test selectors.
+theming	Phoenix/LiveView: Use when implementing CSS tokens, theme switching, or tenant-specific themes.
+typescript-hooks	Phoenix/LiveView: Use when implementing LiveView JavaScript or TypeScript hooks and client-side lifecycle behavior.
