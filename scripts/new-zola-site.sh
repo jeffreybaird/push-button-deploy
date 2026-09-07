@@ -319,20 +319,16 @@ public/
 GITIGNORE
 }
 
-# ---- 3. skill docs ------------------------------------------------------------
+# ---- 3. skill docs (delegated to the shared injector) --------------------------
+# scripts/claude-docs.sh does the copy + placeholder rewrite for every framework;
+# the zola manifest supplies this template's "My Site" / "my_site" placeholder
+# pair, and SITE_TITLE / SITE_SLUG are the values. A zola root ships no optional
+# modules, no agents and no cloud hook, so a plain (non-interactive) call copies
+# exactly the three core docs, as before.
 inject_docs() {
-  log "injecting Claude skill docs from $(basename "$TEMPLATE_DIR")/"
-  mkdir -p "$SITE_DIR/.claude"
-  local f base
-  for f in "$TEMPLATE_DIR/CLAUDE.md" "$TEMPLATE_DIR"/.claude/*.md; do
-    [ -f "$f" ] || continue
-    base="$(basename "$f")"
-    if [ "$base" = "CLAUDE.md" ]; then
-      perl -pe "s/\bMy Site\b/$SITE_TITLE/g; s/\bmy_site\b/$SITE_SLUG/g" "$f" > "$SITE_DIR/CLAUDE.md"
-    else
-      perl -pe "s/\bMy Site\b/$SITE_TITLE/g; s/\bmy_site\b/$SITE_SLUG/g" "$f" > "$SITE_DIR/.claude/$base"
-    fi
-  done
+  # shellcheck source=claude-docs.sh
+  . "$SCRIPT_DIR/claude-docs.sh"
+  cd_inject "$TEMPLATE_DIR" "$SITE_DIR" "$SITE_TITLE" "$SITE_SLUG"
 }
 
 if [ -f "$SITE_DIR/config.toml" ]; then

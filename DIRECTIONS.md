@@ -1,3 +1,6 @@
+> **This is the original build spec (historical).** For how the tool works today,
+> see the [documentation in `docs/`](docs/index.md) and the [README](README.md).
+
 You're building a push-button deploy pipeline for this Phoenix app: one command provisions DigitalOcean infrastructure, wires a GitHub Actions pipeline, and serves the app over HTTPS. After bootstrap, every push to `main` deploys.
 
 **Work method:** Implement one user story at a time from the backlog (Epics 1–6; Epic 7 is out of scope unless I say otherwise). For each story, satisfy its acceptance criteria, then stop and tell me what to verify before moving on. Don't batch stories. Commit per story with a message naming it.

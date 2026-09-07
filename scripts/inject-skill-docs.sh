@@ -74,24 +74,12 @@ inject_deps() {
 }
 inject_deps
 
-# ---- 2. copy + rewrite the docs --------------------------------------------------
-mkdir -p "$APP_DIR/.claude"
-cp "$TEMPLATE_DIR/CLAUDE.md" "$APP_DIR/CLAUDE.md"
-count=0
-for src in "$TEMPLATE_DIR"/.claude/*.md; do
-  [ -e "$src" ] || continue
-  cp "$src" "$APP_DIR/.claude/$(basename "$src")"
-  count=$((count + 1))
-done
-
-# ---- 3. cloud-environment bootstrap (SessionStart hook + setup script) ----------
-cp "$TEMPLATE_DIR/.claude/cloud-setup.sh" "$APP_DIR/.claude/cloud-setup.sh"
-chmod +x "$APP_DIR/.claude/cloud-setup.sh"
-cp "$TEMPLATE_DIR/.claude/settings.json" "$APP_DIR/.claude/settings.json"
-
-find "$APP_DIR/CLAUDE.md" "$APP_DIR/.claude" \
-  \( -name '*.md' -o -name 'cloud-setup.sh' \) -type f -print0 \
-  | MODULE="$APP_MODULE" APP="$APP_NAME" xargs -0 perl -pi -e \
-      's/\QMyApp\E/$ENV{MODULE}/g; s/\Qmy_app\E/$ENV{APP}/g;'
-
-log "skill docs: placed CLAUDE.md + $count docs + cloud setup hook, names rewritten to $APP_MODULE/$APP_NAME"
+# ---- 2. copy the docs, agents and cloud hook, rewriting names ------------------
+# The copy/rewrite/index-prune lives in the shared injector so bootstrap, the
+# guided ./claude-docs.sh command and the framework scaffolds all place docs the
+# same way. Non-interactive here (no CD_SKIP_* set), so every module + agent +
+# the cloud hook land — the historical behavior, plus the starter agents the
+# template now ships.
+# shellcheck source=claude-docs.sh
+. "$SCRIPT_DIR/claude-docs.sh"
+cd_inject "$TEMPLATE_DIR" "$APP_DIR" "$APP_MODULE" "$APP_NAME"

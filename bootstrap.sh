@@ -323,6 +323,20 @@ fi
 # shellcheck source=scripts/provider.sh
 . "$SCRIPT_DIR/scripts/provider.sh"
 
+# Interactive prompt primitives (ask_line/ask_text/ask_yesno/ask_menu +
+# REPLY_VALUE), shared with claude-docs.sh. Ordering is unconstrained — these
+# are called only at runtime, in --interactive mode — but keeping the source
+# here alongside the other libs is the clearest place. Requires fail() (defined
+# above).
+# shellcheck source=scripts/prompt.sh
+. "$SCRIPT_DIR/scripts/prompt.sh"
+
+# The shared Claude-docs injector — the automatic doc injection during app
+# generation goes through it, and --interactive can drive its guided selection.
+# It reuses this script's fail()/log() and the prompt helpers above.
+# shellcheck source=scripts/claude-docs.sh
+. "$SCRIPT_DIR/scripts/claude-docs.sh"
+
 # Everything that DEPENDS on the resolved app type — which is only known after
 # main() has parsed the flags, hence a function rather than top-level lines.
 # Nothing above this point reads FRAMEWORK, DATABASE_BACKEND or REQUIRED_* at
@@ -1631,69 +1645,11 @@ abs_dir() {
 # are rendered from the app-type registry (scripts/app-types.sh), so a stack
 # added there shows up here with no edit.
 #
-# Each prompt writes to stderr and sets $REPLY_VALUE — it does NOT echo the
-# answer for a `$(...)` to capture. That is deliberate: a command substitution
-# runs in a subshell, and a fail() (e.g. the terminal closing mid-session) from
-# inside one would only kill the subshell, leaving the parent to march on with
-# an empty value. Setting a global keeps every fail() in the main shell, where
-# it actually stops the run. Answers are read from /dev/tty, so a redirected or
-# piped stdin never swallows a prompt — and ask_menu can take its option list on
-# its own stdin (via process substitution) without the two contending.
-REPLY_VALUE=""
-
-ask_line() { # $1 prompt -> sets REPLY_VALUE to the entered line (empty on Enter)
-  printf '%s' "$1" >&2
-  IFS= read -r REPLY_VALUE < /dev/tty \
-    || fail "interactive: input closed — --interactive needs a terminal (drop it and use the flags; see --help)"
-}
-
-ask_text() { # $1 label, $2 default -> REPLY_VALUE (the default on empty input)
-  local d="$2"
-  ask_line "$1${d:+ [$d]}: "
-  [ -n "$REPLY_VALUE" ] || REPLY_VALUE="$d"
-}
-
-ask_yesno() { # $1 label, $2 default (y/n) -> REPLY_VALUE 'true' or 'false'
-  local d="$2"
-  while :; do
-    ask_line "$1 (y/n) [$d]: "; [ -n "$REPLY_VALUE" ] || REPLY_VALUE="$d"
-    case "$REPLY_VALUE" in
-      y|Y|yes|true)  REPLY_VALUE=true;  return ;;
-      n|N|no|false)  REPLY_VALUE=false; return ;;
-      *) printf '  please answer y or n\n' >&2 ;;
-    esac
-  done
-}
-
-# Numbered menu. Options arrive on stdin as `value|description` lines; the
-# chosen VALUE lands in REPLY_VALUE. A bare Enter takes the default (marked *);
-# a name is accepted as readily as its number.
-ask_menu() { # $1 label, $2 default-value  (options on stdin)
-  local label="$1" default="$2" val desc n=0 i
-  local -a vals=() descs=()
-  while IFS='|' read -r val desc; do
-    [ -n "$val" ] || continue
-    n=$((n + 1)); vals+=("$val"); descs+=("$desc")
-  done
-  printf '\n%s\n' "$label" >&2
-  for ((i = 1; i <= n; i++)); do
-    local mark=" "; [ "${vals[i-1]}" = "$default" ] && mark="*"
-    printf '  %s%s) %-10s %s\n' "$mark" "$i" "${vals[i-1]}" "${descs[i-1]}" >&2
-  done
-  while :; do
-    ask_line "choice [$default]: "; [ -n "$REPLY_VALUE" ] || REPLY_VALUE="$default"
-    for ((i = 1; i <= n; i++)); do
-      [ "$REPLY_VALUE" = "${vals[i-1]}" ] && return
-    done
-    case "$REPLY_VALUE" in
-      ''|*[!0-9]*) ;;
-      *) if [ "$REPLY_VALUE" -ge 1 ] && [ "$REPLY_VALUE" -le "$n" ]; then
-           REPLY_VALUE="${vals[REPLY_VALUE-1]}"; return
-         fi ;;
-    esac
-    printf '  pick 1-%s, or a name\n' "$n" >&2
-  done
-}
+# The prompt primitives (ask_line/ask_text/ask_yesno/ask_menu + REPLY_VALUE)
+# live in scripts/prompt.sh, sourced near the top of this script — they are
+# shared with claude-docs.sh. Their contract: each writes to stderr and sets
+# $REPLY_VALUE (not stdout), reads answers from /dev/tty, and calls fail() on a
+# closed terminal. See that file for the full rationale.
 
 # Walk the choices, set the parser's variables, leave the target dir in
 # INTERACTIVE_APP_DIR. Called with main's remaining positionals so the directory
@@ -1751,6 +1707,21 @@ interactive() {
   # 5. Where it lands. Default to a directory already on the command line, else '.'.
   ask_text "App directory" "${1:-.}"; INTERACTIVE_APP_DIR="$REPLY_VALUE"
 
+  # 5b. Claude docs — optionally tailor which .claude modules/agents/hooks the
+  #     generated app gets. Only for a framework that ships a doc template
+  #     (phoenix/sinatra/zola); CLIs and libraries have none. The CD_SKIP_*
+  #     selections are exported so the scaffold/inject child processes honor
+  #     them; left unset (the default), every module + agent + hook is included.
+  local _docs_tmpl; _docs_tmpl="$(cd_template_dir "$fw")"
+  if [ -n "$_docs_tmpl" ]; then
+    ask_yesno "Customize which Claude docs (modules, agents, hooks) the app gets?" n
+    if [ "$REPLY_VALUE" = true ]; then
+      cd_prompt_selection "$_docs_tmpl"
+      export CD_SKIP_MODULES CD_SKIP_AGENTS CD_HOOK CD_NO_SETUP
+      INTERACTIVE_DOCS_CUSTOMIZED=1
+    fi
+  fi
+
   # 6. Recap and confirm before anything happens.
   printf '\n' >&2
   log "about to build:"
@@ -1766,6 +1737,8 @@ interactive() {
       && printf '    staging     %s\n' "${ENABLE_STAGING:-true}" >&2
     [ -n "${HOST_APP_DIR:-}" ] && printf '    host app    %s  (tenant)\n' "$HOST_APP_DIR" >&2
   fi
+  [ -n "${INTERACTIVE_DOCS_CUSTOMIZED:-}" ] \
+    && printf '    claude docs customized (see the prompts above)\n' >&2
   printf '\n' >&2
   [ "$(ask_yesno "Proceed?" y)" = true ] || fail "cancelled"
 }
@@ -1783,6 +1756,9 @@ bootstrap.sh — stand up an app, its repo and its pipeline.
 Options:
   --interactive, -i    prompt step by step for every choice below, then deploy.
                        Skips no validation — it just fills the flags for you
+  --docs               guided creation of the app's Claude docs (CLAUDE.md +
+                       .claude/) only — provisions nothing. Delegates to
+                       ./claude-docs.sh; run that directly for its own options
   --check              verify prerequisites and exit; provisions nothing
   --host <dir>         TENANT MODE: deploy onto the droplet <dir>'s app already
                        owns instead of provisioning one (service apps only)
@@ -1812,11 +1788,15 @@ EOF
 }
 
 main() {
-  local check=0 interactive=0 t arg val
+  local check=0 interactive=0 docs_only=0 t arg val
   while [ $# -gt 0 ]; do
     case "$1" in
       --check) check=1; shift ;;
       --interactive|-i) interactive=1; shift ;;
+      # Guided Claude-docs only — write CLAUDE.md + .claude/ and stop, provision
+      # nothing. Handled after the loop by delegating to ./claude-docs.sh, which
+      # shares scripts/claude-docs.sh with this script.
+      --docs) docs_only=1; shift ;;
       --help|-h) usage; exit 0 ;;
       # The language axis, spelled on its own. `--cli ruby` and `--cli=ruby`
       # below reach the same variable.
@@ -1873,6 +1853,14 @@ $(usage)" ;;
       *)  break ;;
     esac
   done
+
+  # --docs: guided Claude-docs, no provisioning. Delegate to the standalone
+  # command (which shares scripts/claude-docs.sh). FRAMEWORK, if set in the
+  # environment, is inherited; otherwise claude-docs.sh infers it from the app's
+  # marker file or prompts. Forward the target dir if one was given.
+  if [ "$docs_only" -eq 1 ]; then
+    exec "$SCRIPT_DIR/claude-docs.sh" ${1:+"$1"}
+  fi
 
   # Interactive mode fills in the same flag/env variables the parser above would
   # have set (app type, language, code host, database, staging, tenancy, target
