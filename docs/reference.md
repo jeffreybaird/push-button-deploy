@@ -140,3 +140,6 @@ SQLite-vs-Postgres cost tradeoff.
 - The DO API token is shared with the app repo's Actions secrets (registry +
   firewall ops). Scope it accordingly and rotate it if the repo's secret store is
   ever in doubt.
+- App-specific runtime variables travel the same way: the `APP_ENV` Actions
+  secret (`KEY=VALUE` lines) is appended to `.env` by every deploy, rollback and
+  staging run. See [Operations → Set app-specific runtime variables](operations.md#set-app-specific-runtime-variables).
