@@ -208,6 +208,10 @@ jobs:
           SECRET_KEY_BASE=${STAGING_SECRET_KEY_BASE}
           DATABASE_PATH=${{ vars.DATABASE_PATH }}
           EOF
+          # App-specific runtime variables (e.g. ACCESS_PASSWORD, RETENTION_DAYS_*):
+          # the APP_ENV secret holds KEY=VALUE lines and is appended verbatim.
+          # Unset means nothing is appended.
+          printf '%s\n' "${{ secrets.APP_ENV }}" >> .env
 
       # The production deploy REPLACES the shared edge files on every run; a
       # staging deploy must not, and this is the one place the two differ on
