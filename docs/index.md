@@ -48,7 +48,7 @@ there if you just want the pitch and a three-command quickstart.
 | [Tenancy](tenancy.md) | Several apps on one droplet — host apps and tenants |
 | [Gitea](gitea.md) | Self-hosted Gitea as code host and CI engine |
 | [Claude Code docs](claude-docs.md) | Generating and tailoring an app's `CLAUDE.md` + `.claude/` |
-| [Operations](operations.md) | Day-2: deploy, watch, roll back, recreate, add an app, tear down |
+| [Operations](operations.md) | Day-2: deploy, watch, roll back, set app variables, recreate, add an app, tear down |
 | [Troubleshooting](troubleshooting.md) | Symptom → fix table and FAQ |
 | [Reference](reference.md) | Commands, flags, env vars, scripts, Terraform roots, costs, security |
 

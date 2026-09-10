@@ -62,6 +62,31 @@ it into service — same blue/green swap as a forward deploy, no rebuild.
 **Verify:** `https://<domain>` serves the rolled-back build; the rollback run
 concludes green.
 
+## Set app-specific runtime variables
+
+**Goal:** give the release an environment variable the pipeline does not know
+about — an operator password, a retention window, a feature flag.
+
+```bash
+# in the app repo
+printf 'ACCESS_PASSWORD=%s\nRETENTION_DAYS=14\n' "$(openssl rand -base64 24)" \
+  | gh secret set APP_ENV                                   # GitHub
+```
+
+On **Gitea**, create a repo Actions secret named `APP_ENV` with the same
+`KEY=VALUE` lines as its value.
+
+**What happens:** every workflow that writes the droplet's `.env` (deploy,
+rollback, staging) appends the `APP_ENV` secret to it verbatim, after the
+variables the pipeline manages (`SECRET_KEY_BASE`, `PHX_HOST`, `DATABASE_URL`,
+…). One line per variable, no quoting, no `export`. Unset means nothing is
+appended. The next deploy or rollback picks the change up; a running container
+does not.
+
+**Verify:** the deploy's migration gate boots the release with the new `.env`,
+so a variable the app requires at boot (`System.fetch_env!/1`) fails there, not
+after the swap. `ssh root@<reserved-ip> cat /root/apps/<slug>/.env` shows the appended lines.
+
 ## Change the infrastructure
 
 **Goal:** change something in Terraform — droplet size, a firewall rule, a DNS

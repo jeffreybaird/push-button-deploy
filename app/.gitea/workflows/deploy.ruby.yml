@@ -156,6 +156,10 @@ jobs:
           BACKUP_REGION=${{ vars.BACKUP_REGION }}
           BACKUP_PATH=${{ vars.BACKUP_PATH }}
           EOF
+          # App-specific runtime variables (e.g. ACCESS_PASSWORD, RETENTION_DAYS_*):
+          # the APP_ENV secret holds KEY=VALUE lines and is appended verbatim.
+          # Unset means nothing is appended.
+          printf '%s\n' "${{ secrets.APP_ENV }}" >> .env
 
       # Two destinations, because two things live on the droplet with different
       # owners: /root/caddy is the SHARED edge proxy (one per host, every app
