@@ -42,9 +42,12 @@ docker compose up -d --remove-orphans --wait "$new"
 # The guard matters: an EMPTY list would make `up -d` mean "every service",
 # starting the idle color and defeating the swap. The Postgres stack has no
 # non-color services at all.
-extra="$(docker compose config --services | grep -vxE 'app_(blue|green)' | tr '\n' ' ')"
+# Capture Compose errors separately. awk succeeds when no supporting services
+# match; grep would exit 1 and abort a healthy Postgres swap under pipefail.
+services="$(docker compose config --services)"
+extra="$(printf '%s\n' "$services" | awk 'NF && !/^app_(blue|green)$/')"
 
-if [ -n "$(printf '%s' "$extra" | tr -d ' ')" ]; then
+if [ -n "$extra" ]; then
   # Unquoted on purpose: $extra is a word list of service names, not one argument.
   # shellcheck disable=SC2086
   docker compose up -d $extra
@@ -71,7 +74,7 @@ fi
 #   - services behind a profile (migrate) — compose already omits those from
 #     `config --services`
 #   - the idle color, deliberately removed just above; only "$new" should exist
-expected="$(docker compose config --services | grep -vxE 'app_(blue|green)'; printf '%s\n' "$new")"
+expected="$(printf '%s\n' "$extra" "$new")"
 present="$(docker compose ps -a --services)"
 
 missing=""

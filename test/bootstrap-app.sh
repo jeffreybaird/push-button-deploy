@@ -36,20 +36,25 @@ EOF
     # Explicit inputs must not leak their temporary context into callers.
     APP_DIR=caller-directory; FRAMEWORK=caller-framework
     prepare_app "$app_dir" "$app_type" "$framework" "$backend" "$provider"
-    [ "$APP_DIR" = caller-directory ] && [ "$FRAMEWORK" = caller-framework ]
+    [ "$APP_DIR" = caller-directory ]
+    [ "$FRAMEWORK" = caller-framework ]
     [ "$(cat "$app_dir/.app-type")" = "$app_type" ]
     for pair in $(framework_workflows "$app_type" "$framework"); do
       cmp "$SCRIPT_DIR/app/.$provider/workflows/${pair%%:*}" "$app_dir/.$provider/workflows/${pair##*:}"
     done
     if [ "$app_type" != service ]; then
-      [ ! -e "$app_dir/Dockerfile" ] && [ ! -d "$app_dir/deploy" ]
+      [ ! -e "$app_dir/Dockerfile" ]
+      [ ! -d "$app_dir/deploy" ]
     elif [ "$framework" = zola ]; then
       [ -f "$app_dir/deploy/ci/remote.sh" ]
-      [ ! -e "$app_dir/Dockerfile" ] && [ ! -e "$app_dir/deploy/compose.yaml" ]
+      [ ! -e "$app_dir/Dockerfile" ]
+      [ ! -e "$app_dir/deploy/compose.yaml" ]
       cmp "$SCRIPT_DIR/deploy/site.static.caddy.tmpl" "$app_dir/deploy/site.caddy.tmpl"
-      [ -f "$app_dir/deploy/publish.sh" ] && [ ! -e "$app_dir/deploy/swap.sh" ]
+      [ -f "$app_dir/deploy/publish.sh" ]
+      [ ! -e "$app_dir/deploy/swap.sh" ]
     else
-      [ -f "$app_dir/Dockerfile" ] && [ -f "$app_dir/deploy/swap.sh" ]
+      [ -f "$app_dir/Dockerfile" ]
+      [ -f "$app_dir/deploy/swap.sh" ]
       [ -f "$app_dir/deploy/ci/runtime-env.sh" ]
       if [ "$framework" = sinatra ]; then expected=compose.sinatra.yaml
       elif [ "$backend" = sqlite ]; then expected=compose.sqlite.yaml
@@ -75,6 +80,8 @@ touch "$WORK/shop_api/Gemfile" "$WORK/my-tool/bin/my-tool"
 [ "$(read_app_identity "$WORK/my-tool" cli bash-cli bash)" = 'my-tool|(no module: bash)' ]
 unset PROJECT_NAME REGION DNS_RECORD
 derive_infrastructure_names shop_api
-[ "$PROJECT_NAME" = shop-api ] && [ "$APP_SLUG" = shop-api ]
-[ "$DNS_RECORD" = shop-api ] && [ "$REGION" = nyc3 ]
+[ "$PROJECT_NAME" = shop-api ]
+[ "$APP_SLUG" = shop-api ]
+[ "$DNS_RECORD" = shop-api ]
+[ "$REGION" = nyc3 ]
 echo 'bootstrap app checks passed (18 stack/provider combinations)'

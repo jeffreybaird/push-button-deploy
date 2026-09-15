@@ -2,6 +2,7 @@
 # Offline precedence, secret-redaction, shell-portability and policy checks.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/test/helpers/assertions.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 . "$ROOT/scripts/config.sh"
@@ -26,7 +27,7 @@ load_config "$WORK/config with spaces.env" report_override
 [ "$TEST_EXPANDED" = 'last assignment wins/suffix' ]
 [ "$(bash -c 'printf %s "$TEST_SECRET"')" = caller-secret-never-log ]
 [ "$(wc -l < "$WORK/overrides" | tr -d ' ')" = 3 ]
-! grep -Eq 'never-log|file-default|file-value|NOT_EXECUTED' "$WORK/overrides"
+assert_not grep -Eq 'never-log|file-default|file-value|NOT_EXECUTED' "$WORK/overrides"
 case $- in *a*) echo 'loader changed allexport' >&2; exit 1 ;; esac
 load_config "$WORK/missing.env" report_override
 (
@@ -60,9 +61,9 @@ for provider in github gitea; do
       [ "$TOTAL_STEPS" = sentinel ]
       if [ "$APP_TYPE" != service ]; then
         [ "$DATABASE_BACKEND" = none ]
-        ! contains "$REQUIRED_BINS" terraform
-        ! contains "$REQUIRED_ENV" DIGITALOCEAN_ACCESS_TOKEN
-        ! contains "$REQUIRED_ENV" GITEA_RUNNER_IP
+        assert_not contains "$REQUIRED_BINS" terraform
+        assert_not contains "$REQUIRED_ENV" DIGITALOCEAN_ACCESS_TOKEN
+        assert_not contains "$REQUIRED_ENV" GITEA_RUNNER_IP
       else
         contains "$REQUIRED_BINS" terraform
         contains "$REQUIRED_ENV" DIGITALOCEAN_ACCESS_TOKEN
@@ -72,7 +73,7 @@ for provider in github gitea; do
       fi
       if [ "$provider" = github ]; then
         contains "$REQUIRED_BINS" gh
-        ! contains "$REQUIRED_ENV" GITEA_TOKEN
+        assert_not contains "$REQUIRED_ENV" GITEA_TOKEN
       else
         contains "$REQUIRED_BINS" jq
         contains "$REQUIRED_ENV" GITEA_TOKEN
@@ -90,7 +91,8 @@ fi
   unset APP_TYPE FRAMEWORK LANGUAGE DATABASE_BACKEND ENABLE_STAGING
   APP_TYPE_FLAG=cli; LANGUAGE_FLAG=ruby
   resolve_app_config
-  [ "$FRAMEWORK" = ruby-cli ] && [ "$CI_WORKFLOW" = ci.yml ]
+  [ "$FRAMEWORK" = ruby-cli ]
+  [ "$CI_WORKFLOW" = ci.yml ]
 )
 # Exercise the real entry point without the developer's .env or live accounts.
 mkdir -p "$WORK/tool" "$WORK/bin"
@@ -105,7 +107,7 @@ printf "TEST_SECRET='file-secret-never-log'\n" > "$WORK/tool/.env"
 PATH="$WORK/bin:$PATH" TF_PLUGIN_CACHE_DIR="$WORK/cache" \
   bash "$WORK/tool/bootstrap.sh" --check --cli ruby "$WORK/app" > "$WORK/entry-output" 2>&1
 grep -q 'preflight: OK' "$WORK/entry-output"
-! grep -q 'never-log' "$WORK/entry-output"
-! grep -q 'never-log' "$WORK/tool/bootstrap.log"
+assert_not grep -q 'never-log' "$WORK/entry-output"
+assert_not grep -q 'never-log' "$WORK/tool/bootstrap.log"
 [ ! -d "$WORK/app" ]
 echo 'config checks passed'

@@ -2,6 +2,7 @@
 # Offline runtime serialization and remote delivery checks.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/test/helpers/assertions.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 . "$ROOT/deploy/ci/runtime-env.sh"
@@ -21,15 +22,15 @@ for backend in postgres sqlite; do
     [ "$(tail -2 "$file")" = "$APP_ENV" ]
     if [ "$backend" = postgres ]; then
       grep -Fxq "DATABASE_URL=$DATABASE_URL" "$file"
-      ! grep -q '^DATABASE_PATH=' "$file"
+      assert_not grep -q '^DATABASE_PATH=' "$file"
     else
       grep -Fxq "DATABASE_PATH=$DATABASE_PATH" "$file"
-      ! grep -q '^DATABASE_URL=' "$file"
+      assert_not grep -q '^DATABASE_URL=' "$file"
     fi
     if [ "$backend/$environment" = sqlite/production ]; then
       grep -Fxq "LITESTREAM_SECRET_ACCESS_KEY=$LITESTREAM_SECRET_ACCESS_KEY" "$file"
     else
-      ! grep -Eq '^(LITESTREAM_|BACKUP_)' "$file"
+      assert_not grep -Eq '^(LITESTREAM_|BACKUP_)' "$file"
     fi
     # BSD and GNU stat spell file permissions differently.
     mode="$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")"

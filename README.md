@@ -80,3 +80,10 @@ The full guide lives in [`docs/`](docs/index.md).
 | [Reference](docs/reference.md) | Commands, flags, env vars, scripts, Terraform roots, costs, security |
 
 `DIRECTIONS.md` is the original build spec (historical); the docs above describe the tool as it is today.
+
+## Development
+
+Run the deployment tool's offline regression tests with `bash test/run.sh`.
+The same suite runs for pull requests on Linux and macOS. See
+[Test coverage and contribution guidance](test/README.md) for prerequisites,
+covered behavior, isolation rules, and the limits of offline verification.

@@ -8,14 +8,14 @@ trap 'rm -rf "$WORK"' EXIT
 log() { printf '%s\n' "$*"; }
 sleep() { :; }
 ci_run_row() {
-  [ "$1" = "$APP_DIR" ] && [ "$2" = deploy.yml ] && [ "$3" = abc123 ]
+  [ "$1" = "$APP_DIR" ] && [ "$2" = deploy.yml ] && [ "$3" = abc123 ] || return 99
   local row
   row="$(head -1 "$WORK/runs")"
   sed '1d' "$WORK/runs" > "$WORK/next"
   mv "$WORK/next" "$WORK/runs"
   printf '%s\n' "$row"
 }
-curl() { touch "$WORK/https-called"; return 0; }
+curl() { touch "$WORK/https-called"; return "${HTTP_STATUS:-0}"; }
 diagnose_ci() { printf '%s\n' "$*" >&2; exit 1; }
 diagnose() { exit 1; }
 APP_DIR="$WORK"; CI_WORKFLOW=deploy.yml; HEAD_SHA=abc123
@@ -41,6 +41,22 @@ confirm_live
 CI_AFTER_RUN_ID=""
 printf '10 completed success\n' > "$WORK/runs"
 confirm_ci
+
+# Every terminal non-success is a failure, even while the old site is healthy.
+LIVE_TIMEOUT_SECS=0
+for conclusion in failure cancelled timed_out skipped action_required; do
+  rm -f "$WORK/https-called"
+  printf '11 completed %s\n' "$conclusion" > "$WORK/runs"
+  if ( confirm_live ); then echo "FAIL: accepted $conclusion" >&2; exit 1; fi
+  [ ! -e "$WORK/https-called" ]
+done
+
+# Successful CI does not conceal unavailable HTTPS, and the zero timeout is bounded.
+HTTP_STATUS=1
+printf '11 completed success\n' > "$WORK/runs"
+if ( confirm_live ); then echo 'FAIL: unavailable HTTPS accepted' >&2; exit 1; fi
+[ -e "$WORK/https-called" ]
+HTTP_STATUS=0
 
 # A push can register its run immediately. Baseline lookup must precede it.
 git() {
