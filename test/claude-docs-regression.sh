@@ -35,10 +35,10 @@ cp "$APP/doc/custom.md" "$WORK/custom.before"
 cp "$APP/doc/agents/custom.md" "$WORK/agent.before"
 printf 'MyApp legacy guide\n' > "$APP/CLAUDE.md"
 printf 'my_app legacy module\n' > "$APP/.claude/legacy.md"
-cp "$APP/CLAUDE.md" "$WORK/legacy-guide"
 cp "$APP/.claude/legacy.md" "$WORK/legacy-module"
 cd_inject "$TEMPLATE" "$APP" CoolApp cool_app
-cmp "$WORK/legacy-guide" "$APP/CLAUDE.md"
+grep -q CoolApp "$APP/CLAUDE.md"
+grep -q '`.claude/core.md`' "$APP/CLAUDE.md"
 cmp "$WORK/legacy-module" "$APP/.claude/legacy.md"
 cmp "$WORK/custom.before" "$APP/doc/custom.md"
 cmp "$WORK/agent.before" "$APP/doc/agents/custom.md"
@@ -59,6 +59,7 @@ CD_SKIP_MODULES=optional.md CD_SKIP_AGENTS=reviewer.md CD_NO_SETUP=1 \
 diff -r "$WORK/skipped" "$APP/doc"
 cmp "$WORK/skipped-settings" "$APP/.claude/settings.json"
 assert_not grep -q '^-.*optional.md' "$APP/AGENTS.md"
+assert_not grep -q '^-.*optional.md' "$APP/CLAUDE.md"
 grep -q 'Prose mentioning' "$APP/AGENTS.md"
 
 # Values are literal, including characters meaningful to Perl replacements;
@@ -77,7 +78,7 @@ assert_not bash -c '. "$1/scripts/claude-docs.sh"; CD_HOOK=missing; cd_inject "$
 diff -r "$WORK/before-error" "$APP"
 
 # Links at a selected file or a docs directory must never redirect writes.
-for target in AGENTS.md doc/core.md doc/agents doc/hooks doc .claude; do
+for target in CLAUDE.md AGENTS.md doc/core.md doc/agents doc/hooks doc .claude .claude/agents; do
   dest="$WORK/link-case"
   rm -rf "$dest"
   cp -R "$APP" "$dest"
@@ -101,9 +102,13 @@ for framework in phoenix sinatra; do
   for hook in '' format; do
     target="$WORK/$framework $hook hook"
     CD_HOOK="$hook" cd_inject "$(cd_template_dir "$framework")" "$target" CoolApp cool_app
-    assert_not test -f "$target/CLAUDE.md"
+    [ -f "$target/CLAUDE.md" ]
+    [ -f "$target/.claude/agents/test-writer.md" ]
+    [ -x "$target/.claude/cloud-setup.sh" ]
+    grep -q 'CLAUDE.md' "$target/.claude/agents/test-writer.md"
     assert_not grep -R -E 'CLAUDE\.md|\.claude/' "$target/AGENTS.md" "$target/doc/agents"
     [ -x "$target/doc/hooks/cloud-setup.sh" ]
+    cmp "$target/.claude/cloud-setup.sh" "$target/doc/hooks/cloud-setup.sh"
     command="$(jq -er '.hooks.SessionStart[0].hooks[0].command' "$target/.claude/settings.json")"
     printf '#!/bin/bash\nprintf hooked > "$CLAUDE_PROJECT_DIR/hook-ran"\n' > "$target/doc/hooks/cloud-setup.sh"
     CLAUDE_PROJECT_DIR="$target" bash -c "$command"

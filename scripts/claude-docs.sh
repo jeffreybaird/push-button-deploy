@@ -1,6 +1,6 @@
 # scripts/claude-docs.sh — the one Claude-docs injector.
 #
-# Renders legacy CLAUDE.md + .claude/ templates as AGENTS.md + doc/ (modules, agents, a
+# Renders CLAUDE.md + .claude/ and AGENTS.md + doc/ (modules, agents, a
 # SessionStart cloud-setup hook) into an app, rewriting name placeholders. It is
 # the single implementation behind:
 #   - bootstrap.sh's automatic injection for a freshly generated app,
@@ -13,7 +13,7 @@
 # include everything, prompt for nothing.
 #
 # SELECTION uses SKIP lists: the default includes all template content in the
-# AGENTS.md + doc/ layout, with Claude hook registration in .claude/settings.json:
+# both layouts, with Claude hook registration in .claude/settings.json:
 #   CD_SKIP_MODULES  space-separated optional-module basenames to leave out
 #   CD_SKIP_AGENTS   space-separated agent basenames to leave out
 #   CD_HOOK          "" = plain settings.json; "format" = settings.format-hook.json
@@ -43,7 +43,7 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
   [ -f "$tdir/CLAUDE.md" ] || fail "no CLAUDE.md in $tdir"
   [ -d "$tdir/.claude" ] || fail "no .claude/ in $tdir"
 
-  local toks modtok apptok rel
+  local toks modtok apptok rel layout
   toks="$(cd_placeholders "$tdir")"
   modtok="${toks%%|*}"; apptok="${toks#*|}"
   [ -n "$modtok" ] && [ -n "$apptok" ] || fail "empty placeholder in $tdir/claude-docs.manifest"
@@ -51,7 +51,7 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
 
   # Validate every destination before the first write. Never follow a link
   # inside generated destination directories into another file or directory.
-  for rel in doc doc/agents doc/hooks .claude; do
+  for rel in doc doc/agents doc/hooks .claude .claude/agents; do
     cd_validate_destination "$adir/$rel"
     if [ -e "$adir/$rel" ] && [ ! -d "$adir/$rel" ]; then
       fail "expected a directory: $adir/$rel"
@@ -63,9 +63,12 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
   done < <(cd_selected_files "$tdir")
 
   while IFS= read -r rel; do
+    layout=claude
+    case "$rel" in AGENTS.md|doc/*) layout=agents ;; esac
     cd_render_file "$(cd_source_file "$tdir" "$rel")" "$adir/$rel" \
-      "$modtok" "$apptok" "$modval" "$appval" || return
+      "$modtok" "$apptok" "$modval" "$appval" "$layout" || return
   done < <(cd_selected_files "$tdir")
-  cd_prune_index "$adir/AGENTS.md" || return
+  cd_prune_index "$adir/CLAUDE.md" .claude || return
+  cd_prune_index "$adir/AGENTS.md" doc || return
   log "claude-docs: generated selected docs -> $adir, names rewritten to $modval/$appval"
 }

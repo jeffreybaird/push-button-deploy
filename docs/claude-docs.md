@@ -2,32 +2,35 @@
 
 [← Docs index](index.md) · push-button-deploy
 
-Every app this tool generates ships **agent docs**: an `AGENTS.md` project
-guide plus a `doc/` directory of guidance modules, agent profiles, and a
-`SessionStart` hook that prepares cloud sessions. This page explains what those
-are, how to generate them for any app (guided or not), how to tailor what lands,
-and how the template system works.
+Generated apps receive both Claude Code files and agent-neutral docs. Both
+layouts are rendered from the same templates with the app's names filled in.
 
 ## What gets generated
 
-Into the app directory:
-
-```
-AGENTS.md                 the top-level project guide for coding agents
+```text
+CLAUDE.md                  Claude Code project guide
+.claude/
+  *.md                     Claude guidance modules
+  agents/*.md              registered Claude agent profiles
+  cloud-setup.sh            cloud-session setup script
+  settings.json            automatic Claude hook registration
+AGENTS.md                  project guide for coding agents
 doc/
-  *.md                    guidance modules — core ones always, optional ones you pick
-  agents/*.md             agent profiles (test-writer, code-reviewer)
-  hooks/cloud-setup.sh    the script that prepares cloud sessions
-.claude/settings.json     Claude Code hook registration
+  *.md                     the same guidance with doc/ references
+  agents/*.md              reference copies of the agent profiles
+  hooks/cloud-setup.sh      cloud-session setup script
 ```
 
-Agent profiles in `doc/agents/` are reference documents; they are not registered
-as tool-specific subagents. Hook registration remains in `.claude/settings.json`
-and points to `doc/hooks/cloud-setup.sh`. The hook format is Claude Code-specific;
-placing these files in `doc/` does not register hooks with other coding agents.
+Claude hook registration remains in `.claude/settings.json` and invokes
+`doc/hooks/cloud-setup.sh`. The `.claude/cloud-setup.sh` copy remains available.
+Optional formatter hooks keep their existing commands. These hooks are
+Claude Code-specific; copying them does not register hooks with other agents.
+Zola ships guidance only, without agents or hooks.
 
-Existing `CLAUDE.md` and legacy `.claude/` guidance files are preserved. Rerunning
-is not a migration or cleanup of old generated files.
+The Claude guide and profiles retain `CLAUDE.md` and `.claude/` references.
+The new guide and profiles use `AGENTS.md` and `doc/` references. These are
+generated copies, not symlinks: rerun the injector to refresh both layouts from
+the template. Local edits to selected generated files are overwritten.
 
 The docs come from static **template roots** in this repo, copied into the app
 with the `MyApp`/`my_app` placeholders (or `My Site`/`my_site` for Zola)
@@ -48,7 +51,7 @@ the commands below to generate docs on their own, retrofit an existing repo, or
 
 ## Core vs optional modules
 
-A framework's `AGENTS.md` indexes its `doc/*.md` modules in two groups.
+Each guide indexes the modules in its own layout (`.claude/*.md` or `doc/*.md`) in two groups.
 **Core** modules always ship. **Optional** modules ship by default but can be
 left out; skipping one also removes its line from the `AGENTS.md` index, so the
 guide never points at a file that isn't there.
@@ -86,7 +89,7 @@ same templates, provisioning nothing.
 | `--help, -h` | usage |
 | `<app_dir>` | target directory (defaults to `.`) |
 
-It writes `AGENTS.md`, selected files in `doc/`, and `.claude/settings.json` when hooks are enabled — never your code.
+It writes both guides and selected files in `.claude/` and `doc/` — never your code.
 
 ## How-to
 
@@ -116,7 +119,7 @@ Goal: add agent docs to a repo that doesn't have them, without touching its code
 ```
 
 What happens: same guided flow. Selected template files overwrite matching
-paths, including any local edits to those files. Other files under `doc/`
+paths, including any local edits to those files. Other files under `.claude/` and `doc/`
 are left byte-for-byte unchanged; placeholder replacement runs only on the files
 selected for this run. Nothing else in the repo is touched. (For a Phoenix app you can also
 use `./scripts/inject-skill-docs.sh <app_dir>`, which additionally injects the
@@ -128,7 +131,7 @@ The same template, names, and selections produce the same generated content.
 Skipping a module, agent, or cloud hook leaves any existing copy untouched; it
 does not delete files from a previous run. Remove unwanted old files yourself
 after reviewing local edits. Skipped module bullets are removed from the newly
-generated `AGENTS.md` index.
+generated `CLAUDE.md` and `AGENTS.md` indexes.
 
 Selected file destinations and the `doc/`, `doc/agents/`, `doc/hooks/`, and
 `.claude/` directories
@@ -217,7 +220,8 @@ for nothing — the safe default.
 ## Under the hood
 
 Template sources retain their existing `CLAUDE.md` and `.claude/` layout. The
-injector maps these to the new destination names and updates generated references.
+injector renders both the original layout and the additional destination names,
+updating references only in the new layout.
 
 All paths share one injector, `scripts/claude-docs.sh`, so a guided run and an
 automatic bootstrap run place docs identically:
@@ -233,7 +237,7 @@ automatic bootstrap run place docs identically:
 - `bootstrap.sh` and the framework scaffolds (`scripts/inject-skill-docs.sh`,
   `scripts/new-sinatra-app.sh`, `scripts/new-zola-site.sh`) all call into it.
   Non-interactively (skip nothing) they generate every module and profile in
-  the new layout, with hook registration for frameworks that ship hooks.
+  both layouts, with hook registration for frameworks that ship hooks.
 
 ## Test it
 
