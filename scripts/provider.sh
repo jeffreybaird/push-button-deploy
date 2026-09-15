@@ -266,18 +266,19 @@ var_delete() {
 #
 # The id leads: bootstrap remembers the run that already existed before it
 # triggered anything, so a stale conclusion from an earlier attempt is never
-# mistaken for this invocation's verdict (see run_state in bootstrap.sh).
+# mistaken for this invocation's verdict (see wait_for_workflow_success in scripts/deployment.sh).
 #
 # GITEA CAVEAT: /actions/tasks does not exist before Gitea 1.23 (ci_auth_check
 # enforces a 1.24 floor, so this is reachable). It is also documented not to
 # report runs still in "waiting" — a just-triggered run can be invisible here
 # for a beat, which is why the caller polls rather than reading once.
-ci_run_row() {
+ci_run_row() { # optional explicit app directory, workflow, and commit
+  local APP_DIR="${1:-${APP_DIR:-}}" CI_WORKFLOW="${2:-$CI_WORKFLOW}" HEAD_SHA="${3:-${HEAD_SHA:-}}"
   if is_github; then
     ( cd "$APP_DIR" \
       && gh run list --workflow "$CI_WORKFLOW" --commit "$HEAD_SHA" --limit 1 \
            --json databaseId,status,conclusion \
-           --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"' 2>/dev/null
+           --jq '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"' 2>/dev/null
     ) || true
     return 0
   fi
