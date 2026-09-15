@@ -128,28 +128,9 @@ trap 'rc=$?; if [ "$rc" -ne 0 ]; then
       fi' EXIT
 
 # ---- .env (same precedence rule as bootstrap.sh: the calling shell wins) ------
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  _envtmp="$(mktemp)"
-  for _k in $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$SCRIPT_DIR/.env"); do
-    if [ -n "${!_k+x}" ]; then printf '%s=%q\n' "$_k" "${!_k}" >> "$_envtmp"; fi
-  done
-
-  set -a
-  # shellcheck disable=SC1091
-  . "$SCRIPT_DIR/.env"
-  set +a
-
-  if [ -s "$_envtmp" ]; then
-    while IFS= read -r _line; do
-      _k="${_line%%=*}"
-      _was="${!_k}"
-      eval "export $_line"
-      [ "$_was" != "${!_k}" ] && warn "$_k: using '${!_k}' from the environment, not '$_was' from .env"
-    done < "$_envtmp"
-  fi
-  rm -f "$_envtmp"
-  unset _envtmp _k _line _was
-fi
+# shellcheck source=scripts/config.sh
+. "$SCRIPT_DIR/scripts/config.sh"
+load_config "$SCRIPT_DIR/.env" warn
 
 # ---- config resolution (after .env, same reasoning as bootstrap.sh) -----------
 GITEA_PROJECT_NAME="${GITEA_PROJECT_NAME:-gitea-infra}"
@@ -330,7 +311,7 @@ start_core_services() {
   write_gitea_env ""
   # `pull` explicitly: `up -d` only fetches an image it does not already have
   # locally, so a re-run after the compose file moves WITHIN a floating tag
-  # (1.24 -> a later 1.24.x) would silently keep the old one. A tag change is
+  # (1.25 -> a later 1.25.x) would silently keep the old one. A tag change is
   # picked up either way; this is what makes patch updates land too.
   remote_ssh "cd /root/gitea && docker compose pull caddy gitea"
   remote_ssh "cd /root/gitea && docker compose up -d caddy gitea"

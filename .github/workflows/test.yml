@@ -1,0 +1,30 @@
+name: Repository tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    name: Offline regression tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run repository tests
+        # /bin/bash exercises Apple's Bash 3.2 on macOS and Bash 5 on Linux.
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: /bin/bash test/run.sh

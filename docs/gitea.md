@@ -72,25 +72,20 @@ IP you already know, so it's simpler and no less secure to allow-list it once
 (`gitea_runner_cidr`, wired from `GITEA_RUNNER_IP`) than to reimplement a
 punch/revoke dance that solves a problem the Gitea path doesn't have.
 
-## Minimum Gitea version: 1.24
+## Minimum Gitea version: 1.25
 
-This is a hard floor, not a recommendation — 1.24 is the first release carrying
-both Actions API routes bootstrap depends on:
+Bootstrap confirms deployment through `/actions/runs`, introduced in Gitea 1.25.
+Unlike `/actions/tasks`, this endpoint reports the entire workflow's status,
+including waiting jobs. The query filters by commit, then checks the workflow
+path across all result pages. A successful job from another workflow cannot
+confirm deployment. [Gitea's run conversion](https://github.com/go-gitea/gitea/blob/release/v1.25/services/convert/convert.go#L250)
+shows these fields and their run-level source.
 
-| endpoint | used for | 1.22 | 1.23 | 1.24 |
-|---|---|---|---|---|
-| `/actions/secrets`, `/actions/variables` | seeding CI config | yes | yes | yes |
-| `/actions/tasks` | polling the deploy run to confirm LIVE | no | yes | yes |
-| `/actions/workflows/{id}/dispatches` | redeploying without a new commit | no | no | yes |
-
-Secret and variable seeding works on older releases, so a too-old instance gets
-most of the way through a bootstrap before failing on a 404 for a route that was
-never there. `ci_auth_check` therefore reads `/api/v1/version` during preflight
-and stops with the version as the reason. If you provisioned with
-`bootstrap-gitea.sh`, the pinned tag in `gitea-host/docker-compose.yaml` is
-already >= 1.24; re-running that script upgrades in place (data is on the
-attached volume, and Gitea migrates on start). Take a volume snapshot first if
-you're jumping several minor versions at once.
+Preflight checks `/api/v1/version` and rejects older versions before remote
+repository or CI changes. `gitea-host/docker-compose.yaml` now pins the 1.25
+series. Existing installations on 1.24 need an explicit upgrade: review Gitea's
+upgrade guidance, back up the data volume, and rerun `./bootstrap-gitea.sh` when
+ready. Editing this repository does not change a running instance.
 
 ## Standing up your own instance
 

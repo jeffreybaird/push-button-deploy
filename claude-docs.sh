@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# claude-docs.sh — guided creation of an app's Claude Code docs.
+# claude-docs.sh — guided creation of an app's agent docs.
 #
-# Walks you through which pieces of CLAUDE.md + .claude/ (guidance modules,
+# Walks you through which pieces of CLAUDE.md + .claude/ and AGENTS.md + doc/ (guidance modules,
 # starter agents, the SessionStart cloud-setup hook) your app needs, assembles
 # them from this repo's static templates with the app's name filled in, and
 # offers to open the result in your editor. Runs on a freshly generated app or
-# to retrofit an existing repo — it only writes CLAUDE.md and .claude/, never
-# your code.
+# to retrofit an existing repo — writes both guides and their docs directories.
 #
 #   ./claude-docs.sh                     guided, framework inferred from the cwd
 #   ./claude-docs.sh ~/src/myapp         guided, into that directory
@@ -27,11 +26,12 @@ warn() { printf '\033[33m==> WARN\033[0m %s\n' "$*" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/claude-docs.sh
-. "$SCRIPT_DIR/scripts/claude-docs.sh"   # also sources scripts/prompt.sh
+. "$SCRIPT_DIR/scripts/claude-docs.sh"
+. "$SCRIPT_DIR/scripts/prompt.sh"
 
 usage() {
   cat <<EOF
-claude-docs.sh — guided creation of an app's Claude Code docs (CLAUDE.md + .claude/).
+claude-docs.sh — guided creation of an app's agent docs (CLAUDE.md + .claude/ and AGENTS.md + doc/).
 
   ./claude-docs.sh [options] [app_dir]      app_dir defaults to .
 
@@ -43,9 +43,14 @@ Options:
   --help, -h               this message
 
 What it writes, tailored by your answers:
-  CLAUDE.md                the top-level project guide
-  .claude/*.md             guidance modules (core always; optional ones you pick)
-  .claude/agents/*.md      starter subagents (test-writer, code-reviewer)
+  CLAUDE.md               Claude Code project guide
+  .claude/*.md            Claude guidance modules
+  .claude/agents/*.md     Claude agent profiles
+  .claude/cloud-setup.sh  retained cloud-session setup script
+  AGENTS.md               project guide for coding agents
+  doc/*.md                guidance modules (core always; optional ones you pick)
+  doc/agents/*.md          agent profiles (test-writer, code-reviewer)
+  doc/hooks/cloud-setup.sh cloud-session setup script
   .claude/settings.json    a SessionStart hook that prepares cloud sessions
                            (dynamic frameworks only; optional 'format' variant)
 
@@ -110,7 +115,7 @@ vals="$(cd_values_for "$FRAMEWORK" "$APP_DIR")"
 MODVAL="${vals%%|*}"; APPVAL="${vals#*|}"
 
 printf '\n' >&2
-log "about to write Claude docs:"
+log "about to write agent docs:"
 printf '    framework    %s\n' "$FRAMEWORK" >&2
 printf '    directory    %s\n' "$(abs_dir "$APP_DIR")" >&2
 printf '    names        %s / %s\n' "$MODVAL" "$APPVAL" >&2
@@ -131,10 +136,10 @@ cd_inject "$TEMPLATE_DIR" "$APP_DIR" "$MODVAL" "$APPVAL"
 # ---- open in editor ------------------------------------------------------------
 if have_tty && [ "$INCLUDE_ALL" -eq 0 ]; then
   ed="${VISUAL:-${EDITOR:-}}"
-  ask_yesno "open CLAUDE.md in your editor${ed:+ ($ed)}?" n
+  ask_yesno "open AGENTS.md in your editor${ed:+ ($ed)}?" n
   if [ "$REPLY_VALUE" = true ]; then
-    "${ed:-vi}" "$APP_DIR/CLAUDE.md" < /dev/tty > /dev/tty 2>&1 || warn "editor exited non-zero"
+    "${ed:-vi}" "$APP_DIR/AGENTS.md" < /dev/tty > /dev/tty 2>&1 || warn "editor exited non-zero"
   fi
 fi
 
-log "done. Review $APP_DIR/CLAUDE.md and $APP_DIR/.claude/ and adapt them to your app."
+log "done. Review $APP_DIR/AGENTS.md and $APP_DIR/doc/ and adapt them to your app."

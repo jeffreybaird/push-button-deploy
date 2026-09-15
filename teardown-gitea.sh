@@ -32,26 +32,9 @@ log()  { printf '\033[31m==>\033[0m [%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Same .env precedence rule as the other scripts: the calling shell wins.
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  _envtmp="$(mktemp)"
-  for _k in $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$SCRIPT_DIR/.env"); do
-    if [ -n "${!_k+x}" ]; then printf '%s=%q\n' "$_k" "${!_k}" >> "$_envtmp"; fi
-  done
-  set -a
-  # shellcheck disable=SC1091
-  . "$SCRIPT_DIR/.env"
-  set +a
-  if [ -s "$_envtmp" ]; then
-    while IFS= read -r _line; do
-      _k="${_line%%=*}"
-      _was="${!_k}"
-      eval "export $_line"
-      [ "$_was" != "${!_k}" ] && log "$_k: using '${!_k}' from the environment, not '$_was' from .env"
-    done < "$_envtmp"
-  fi
-  rm -f "$_envtmp"
-  unset _envtmp _k _line _was
-fi
+# shellcheck source=scripts/config.sh
+. "$SCRIPT_DIR/scripts/config.sh"
+load_config "$SCRIPT_DIR/.env" log
 
 GITEA_PROJECT_NAME="${GITEA_PROJECT_NAME:-gitea-infra}"
 GITEA_REGION="${GITEA_REGION:-nyc3}"
