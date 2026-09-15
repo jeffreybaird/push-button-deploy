@@ -67,6 +67,8 @@ run_teardown() {
 make_host() {
   make_app "$1"
   mkdir -p "$APP/infra/app/.terraform" "$APP/infra/persistent/.terraform" "$APP/infra/state/.terraform"
+  printf 'key = "infra-app/terraform.tfstate"\n' > "$APP/infra/app/backend.tf"
+  printf 'key = "infra-persistent/terraform.tfstate"\n' > "$APP/infra/persistent/backend.tf"
 }
 
 # Planning performs no calls, needs no credentials, and never falls back for CLI.

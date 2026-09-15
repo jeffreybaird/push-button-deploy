@@ -1,9 +1,5 @@
-# Remote backend initialization; replaced by shared helper in the next PR.
+# Teardown reconnects to existing remote state; it never copies state.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/terraform-backend.sh"
 backend_init() {
-  cat > "$1/backend.hcl" <<EOF
-bucket    = "$STATE_BUCKET"
-endpoints = { s3 = "$STATE_ENDPOINT" }
-EOF
-  terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl >/dev/null
+  terraform_backend_init "$1" "$STATE_BUCKET" "$STATE_ENDPOINT" "${2:-}" reconfigure
 }
-

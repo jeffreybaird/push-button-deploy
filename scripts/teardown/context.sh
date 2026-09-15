@@ -71,7 +71,7 @@ teardown_resolve_roots() {
 teardown_derive_requirements() {
   REQUIRED_BINS=""; REQUIRED_ENV=""
   if [ "$NO_INFRA" != 1 ]; then
-    REQUIRED_BINS="terraform doctl"
+    REQUIRED_BINS="terraform doctl jq"
     REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
   fi
   if [ "$TENANT" = 1 ]; then

@@ -61,3 +61,5 @@ These are offline contract/regression checks, not end-to-end deployment tests.
 They do not establish real Compose health/network behavior, cloud provider API
 compatibility, or Terraform lifecycle isolation. `scripts/verify-isolation.sh`
 is a separate live-state check and is intentionally outside this runner.
+
+`terraform-backend.sh` covers local migration, remote reconnection, stale and malformed caches, tenant keys, custom data directories, preserved state/cache files, and init failure propagation.

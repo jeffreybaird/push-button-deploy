@@ -90,30 +90,11 @@ wait_bucket_visible() { # $1: attempts, 5s apart
   return 1
 }
 
-# Point a root at the Spaces backend and init. -force-copy migrates any
-# existing local state into the bucket on first contact (idempotent after).
-# $2 (optional): state key, for roots that don't pin one in backend.tf. The host
-# roots each own a fixed key because they are alone in their bucket; tenants
-# share the HOST's bucket, so every tenant needs a key of its own.
+# Bootstrap wrapper keeps the existing API and logging; identity/mode handling
+# is shared with both teardown entry points.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/terraform-backend.sh"
 backend_init() {
-  # A cached backend from a previous project may point at a bucket that no
-  # longer exists (torn down) — init would try to migrate state OUT of it and
-  # die on the 404. If the cached bucket differs from the current one, drop
-  # the cache and start clean.
-  local cached
-  cached="$(sed -nE 's/.*"bucket": ?"([^"]+)".*/\1/p' "$1/.terraform/terraform.tfstate" 2>/dev/null | head -1 || true)"
-  if [ -n "$cached" ] && [ "$cached" != "$STATE_BUCKET" ]; then
-    log "backend: cached bucket '$cached' != '$STATE_BUCKET' — reinitializing $(basename "$1")"
-    rm -rf "$1/.terraform"
-  fi
-  cat > "$1/backend.hcl" <<EOF
-bucket    = "$STATE_BUCKET"
-endpoints = { s3 = "$STATE_ENDPOINT" }
-EOF
-  if [ -n "${2:-}" ]; then
-    printf 'key       = "%s"\n' "$2" >> "$1/backend.hcl"
-  fi
-  log "backend: init $(basename "$1") against $STATE_BUCKET (may download providers; output in $LOG_FILE)..."
-  quiet terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl
+  log "backend: initialize $(basename "$1") against $STATE_BUCKET"
+  terraform_backend_init "$1" "$STATE_BUCKET" "$STATE_ENDPOINT" "${2:-}" bootstrap || return
   log "backend: $(basename "$1") initialized"
 }

@@ -13,7 +13,7 @@ preview, not a Terraform resource diff or a guarantee that remote resources exis
 | `plan.sh` | Ordered operations, labels, confirmation, dispatch |
 | `operations.sh` | Individual host, tenant, registry and cache operations |
 | `guards.sh` | Temporary lifecycle overrides and restoration |
-| `backend.sh` | Remote backend initialization (shared separately in the next refactor) |
+| `backend.sh` | Teardown adapter for [shared backend initialization](../terraform-backend.md) |
 
 Repository-only apps never select Terraform roots. Tenants select only their
 recorded tenant root and require the state key to match the project. They never

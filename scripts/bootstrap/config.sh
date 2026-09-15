@@ -81,7 +81,7 @@ required_binaries() { # $1 type, $2 framework, $3 provider
   # Terraform nor an SSH client — and its scaffolds are pure bash, so it does not
   # even need a local Elixir.
   local bins="git curl"
-  if needs_droplet; then bins="$bins terraform doctl ssh scp dig"; fi
+  if needs_droplet; then bins="$bins terraform doctl ssh scp dig jq"; fi
   # Framework-specific local tooling: Phoenix generates + prepares the app with
   # `mix`; Sinatra scaffolds with bash and only needs `openssl` (fresh session
   # secret) — the Ruby build itself happens in Docker/CI, not locally. Zola and
