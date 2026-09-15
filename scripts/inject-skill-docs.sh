@@ -18,8 +18,8 @@
 #      (.claude/cloud-setup.sh + the .claude/settings.json SessionStart hook
 #      that runs it), same placeholder rewrite applied to the script.
 #
-# Idempotent-ish: re-running overwrites the docs (template wins) and skips
-# already-present deps. Existing files the app owns are never touched.
+# Re-running overwrites selected template paths and skips already-present deps.
+# Other app-owned docs and files excluded from this run are left untouched.
 #
 # Portable: BSD/macOS bash, grep, sed, perl.
 set -euo pipefail

@@ -107,10 +107,25 @@ Goal: add Claude docs to a repo that doesn't have them, without touching its cod
 ./claude-docs.sh --framework phoenix ~/src/existing-app
 ```
 
-What happens: same guided flow. Only `CLAUDE.md` and `.claude/` are created or
-overwritten; nothing else in the repo is touched. (For a Phoenix app you can also
+What happens: same guided flow. Selected template files overwrite matching
+paths, including any local edits to those files. Other files under `.claude/`
+are left byte-for-byte unchanged; placeholder replacement runs only on the files
+selected for this run. Nothing else in the repo is touched. (For a Phoenix app you can also
 use `./scripts/inject-skill-docs.sh <app_dir>`, which additionally injects the
 `req`/`oban`/`cucumberex` deps the docs assume into `mix.exs`.)
+
+### Run it again
+
+The same template, names, and selections produce the same generated content.
+Skipping a module, agent, or cloud hook leaves any existing copy untouched; it
+does not delete files from a previous run. Remove unwanted old files yourself
+after reviewing local edits. Skipped module bullets are removed from the newly
+generated `CLAUDE.md` index.
+
+Selected file destinations and the `.claude/` and `.claude/agents/` directories
+must not be symlinks. Invalid hook variants and symlink destinations are rejected
+before writing. File writes are sequential, so an I/O failure during generation
+can leave a partially updated set; correct the failure and rerun.
 
 ### Take everything, non-interactively
 
@@ -197,8 +212,12 @@ automatic bootstrap run place docs identically:
 
 - `scripts/prompt.sh` — the interactive prompt primitives (also used by
   `bootstrap.sh --interactive`).
-- `scripts/claude-docs.sh` — the manifest-driven copy + placeholder rewrite +
-  index prune + guided selection.
+- `scripts/claude-docs.sh` — the public API and injection sequence.
+- `scripts/claude-docs/manifest.sh` — template metadata queries.
+- `scripts/claude-docs/framework.sh` — framework detection and app names.
+- `scripts/claude-docs/selection.sh` — guided questions and selection options.
+- `scripts/claude-docs/files.sh` — selected paths, hook sources, destination checks.
+- `scripts/claude-docs/render.sh` — literal placeholder replacement and index pruning.
 - `bootstrap.sh` and the framework scaffolds (`scripts/inject-skill-docs.sh`,
   `scripts/new-sinatra-app.sh`, `scripts/new-zola-site.sh`) all call into it.
   Non-interactively (skip nothing) they reproduce the historical "copy it all"
@@ -210,10 +229,14 @@ An offline smoke test covers the injector across all three frameworks (copy,
 placeholder rewrite, optional-module prune, agent/hook selection, `bash -n`):
 
 ```bash
-./test/claude-docs-smoke.sh
+bash test/claude-docs-smoke.sh
+bash test/claude-docs-regression.sh
 ```
 
-It needs no network and no `mix`/`bundle`/`zola` — just bash, awk and perl.
+The regression suite covers app-owned files, reruns, skipped existing files,
+placeholder-like replacement values, hook variants, and rejected symlinks. Both
+suites also run through `bash test/run.sh`. They need no network and no
+`mix`/`bundle`/`zola` — just Bash and standard text/file tools, including Perl.
 
 ## Troubleshooting
 

@@ -27,7 +27,8 @@ warn() { printf '\033[33m==> WARN\033[0m %s\n' "$*" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/claude-docs.sh
-. "$SCRIPT_DIR/scripts/claude-docs.sh"   # also sources scripts/prompt.sh
+. "$SCRIPT_DIR/scripts/claude-docs.sh"
+. "$SCRIPT_DIR/scripts/prompt.sh"
 
 usage() {
   cat <<EOF

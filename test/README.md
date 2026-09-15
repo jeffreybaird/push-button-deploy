@@ -38,6 +38,7 @@ automatically. Fixtures and assertion helpers live in subdirectories.
 | `bootstrap-app.sh` | Generated deployment artifacts across 18 stack/backend/provider combinations. |
 | `workflow-scripts.sh` | Literal env serialization, private permissions, staging backup omission, remote destinations and shared-edge preservation. |
 | `workflow-templates.rb` | YAML parsing, shell syntax, helper availability, migration-before-swap and no-migration rollback contracts. |
+| `claude-docs-regression.sh` | App-owned docs preservation, reruns, literal replacement, hook validation and symlink rejection. |
 | `claude-docs-smoke.sh` | Document injection, placeholders, optional modules, agents and hooks. |
 | `assertion-contract.sh` | Negative assertions reject both unexpected success and errors in the assertion command. |
 

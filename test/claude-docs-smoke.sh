@@ -2,7 +2,7 @@
 #
 # test/claude-docs-smoke.sh — offline smoke test for the Claude-docs injector.
 #
-# The repo has no other automated test harness; this is the safety net for
+# Included in test/run.sh; this is the cross-framework smoke coverage for
 # scripts/claude-docs.sh and the three scaffolds that now delegate to it. It
 # runs the injector non-interactively into temp dirs and asserts the copy,
 # placeholder rewrite, optional-module prune, agent selection and hook variant
@@ -35,7 +35,11 @@ have_file() { [ -f "$2" ] && ok "$1" || bad "$1 — expected file $2"; }
 no_file()   { [ ! -e "$2" ] && ok "$1" || bad "$1 — unexpected $2"; }
 no_dir()    { [ ! -d "$2" ] && ok "$1" || bad "$1 — unexpected dir $2"; }
 greps()     { grep -q "$3" "$2" 2>/dev/null && ok "$1" || bad "$1 — /$3/ not in $2"; }
-no_greps()  { grep -q "$3" "$2" 2>/dev/null && bad "$1 — /$3/ still in $2" || ok "$1"; }
+no_greps() {
+  local status=0
+  grep -q "$3" "$2" || status=$?
+  if [ "$status" -eq 1 ]; then ok "$1"; else bad "$1 — unexpected grep status $status for $2"; fi
+}
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
