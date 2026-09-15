@@ -135,72 +135,58 @@ jobs:
             --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
 
       - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          bash deploy/ci/configure-ssh.sh
 
       # .env carries the SHA-pinned image + runtime secrets/config. Built on the
       # runner, shipped to the droplet, never committed. (locked decision:
       # secrets arrive over SSH at deploy time, never in cloud-init/metadata.)
       - name: Write .env
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+          SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+          DATABASE_PATH: ${{ vars.DATABASE_PATH }}
+          LITESTREAM_ACCESS_KEY_ID: ${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
+          LITESTREAM_SECRET_ACCESS_KEY: ${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
+          BACKUP_BUCKET: ${{ vars.BACKUP_BUCKET }}
+          BACKUP_ENDPOINT: ${{ vars.BACKUP_ENDPOINT }}
+          BACKUP_REGION: ${{ vars.BACKUP_REGION }}
+          BACKUP_PATH: ${{ vars.BACKUP_PATH }}
+          APP_ENV: ${{ secrets.APP_ENV }}
         run: |
-          umask 077
-          cat > .env <<EOF
-          IMAGE=${IMAGE}
-          DOMAIN=${{ vars.DOMAIN }}
-          APP_SLUG=${APP_SLUG}
-          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
-          DATABASE_PATH=${{ vars.DATABASE_PATH }}
-          LITESTREAM_ACCESS_KEY_ID=${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
-          LITESTREAM_SECRET_ACCESS_KEY=${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
-          BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
-          BACKUP_ENDPOINT=${{ vars.BACKUP_ENDPOINT }}
-          BACKUP_REGION=${{ vars.BACKUP_REGION }}
-          BACKUP_PATH=${{ vars.BACKUP_PATH }}
-          EOF
-          # App-specific runtime variables (e.g. ACCESS_PASSWORD, RETENTION_DAYS_*):
-          # the APP_ENV secret holds KEY=VALUE lines and is appended verbatim.
-          # Unset means nothing is appended.
-          printf '%s\n' "${{ secrets.APP_ENV }}" >> .env
+          bash deploy/ci/runtime-env.sh sqlite production
 
       # Two destinations, because two things live on the droplet with different
       # owners: /root/caddy is the SHARED edge proxy (one per host, every app
       # contributes a site file to it) and /root/apps/<slug> is this app's stack.
       - name: Create stack directories
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "mkdir -p /root/caddy/sites '$STACK_DIR'"
+          bash deploy/ci/remote.sh create-directories
 
       - name: Copy shared edge files to droplet
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/edge-compose.yaml \
-            root@"$HOST":/root/caddy/compose.yaml
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/Caddyfile deploy/site.caddy.tmpl deploy/edge.sh \
-            root@"$HOST":/root/caddy/
+          bash deploy/ci/remote.sh upload-edge
 
       - name: Copy stack files + .env to droplet
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/swap.sh deploy/litestream.yml .env \
-            root@"$HOST":"$STACK_DIR"/
+          bash deploy/ci/remote.sh upload-stack sqlite production
 
       # Shared network + shared Caddy + this app's route, before the app starts.
       # On a droplet still running the old single-stack layout this also performs
       # the one-time migration into /root/apps (see deploy/edge.sh).
       - name: Prepare shared edge (network, Caddy, route)
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "APP_SLUG='$APP_SLUG' DOMAIN='${{ vars.DOMAIN }}' bash /root/caddy/edge.sh"
+          bash deploy/ci/remote.sh prepare-edge production
 
       - name: Registry login + pull new image
+        env:
+          DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
-             && cd '$STACK_DIR' && docker compose pull"
+          bash deploy/ci/remote.sh pull-image
 
       # Migration gate: runs the new image as a one-off BEFORE serving traffic.
       # A non-zero exit fails this step -> the job fails -> the swap is skipped
@@ -208,16 +194,14 @@ jobs:
       # serve a half-updated DB.
       - name: Run migrations (gate before traffic)
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "cd '$STACK_DIR' && docker compose run --rm migrate bundle exec rake db:migrate"
+          bash deploy/ci/remote.sh migrate sinatra
 
       # Health-checked blue/green swap: start the idle color from the new image,
       # wait for its healthcheck, only then stop the old color. Caddy holds
       # requests through the window — no downtime.
       - name: Swap to new release
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "bash '$STACK_DIR'/swap.sh"
+          bash deploy/ci/remote.sh swap
 
       # Close the hole no matter how the deploy ended.
       - name: Revoke runner IP

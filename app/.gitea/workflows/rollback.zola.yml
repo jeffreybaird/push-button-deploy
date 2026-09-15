@@ -47,11 +47,10 @@ jobs:
       # No firewall hole-punch here (see file header) — the runner's IP is
       # already allow-listed for SSH, statically, in infra-app/firewall.tf.
       - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          bash deploy/ci/configure-ssh.sh
 
       # Fail here — before touching the live symlink — if the requested release
       # was pruned or never existed. publish.sh checks this too; doing it first

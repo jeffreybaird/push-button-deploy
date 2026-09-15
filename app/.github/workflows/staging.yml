@@ -203,11 +203,10 @@ jobs:
             --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
 
       - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          bash deploy/ci/configure-ssh.sh
 
       # Staging must not sign with production's key — a cookie forged in (or leaked
       # out of) a PR environment would otherwise be valid against production. It
@@ -232,23 +231,12 @@ jobs:
       # staging domain, the staging slug, and the derived signing secret above.
       - name: Write .env (Postgres)
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          SECRET_KEY_BASE: ${{ env.STAGING_SECRET_KEY_BASE }}
+          APP_ENV: ${{ secrets.APP_ENV }}
         run: |
-          umask 077
-          cat > .env <<EOF
-          IMAGE=${IMAGE}
-          DOMAIN=${DOMAIN}
-          APP_SLUG=${APP_SLUG}
-          DATABASE_URL=${{ secrets.STAGING_DATABASE_URL }}
-          SECRET_KEY_BASE=${STAGING_SECRET_KEY_BASE}
-          EOF
-          # App-specific runtime variables (e.g. ACCESS_PASSWORD, RETENTION_DAYS_*):
-          # the APP_ENV secret holds KEY=VALUE lines and is appended verbatim.
-          # Unset means nothing is appended.
-          printf '%s\n' "${{ secrets.APP_ENV }}" >> .env
-          if ! grep -q '^DATABASE_URL=ecto://' .env; then
-            echo "::error::STAGING_DATABASE_URL is not set. Re-run the bootstrap against this app — it creates the staging database on the existing cluster and seeds this secret."
-            exit 1
-          fi
+          bash deploy/ci/runtime-env.sh postgres staging
 
       # No Spaces keypair and no BACKUP_* target: the staging litestream.yml
       # replicates into the environment's own volume, and the archive loop is
@@ -257,24 +245,19 @@ jobs:
       # them.
       - name: Write .env (SQLite)
         if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
+        env:
+          SECRET_KEY_BASE: ${{ env.STAGING_SECRET_KEY_BASE }}
+          DATABASE_PATH: ${{ vars.DATABASE_PATH }}
+          APP_ENV: ${{ secrets.APP_ENV }}
         run: |
-          umask 077
-          cat > .env <<EOF
-          IMAGE=${IMAGE}
-          DOMAIN=${DOMAIN}
-          APP_SLUG=${APP_SLUG}
-          SECRET_KEY_BASE=${STAGING_SECRET_KEY_BASE}
-          DATABASE_PATH=${{ vars.DATABASE_PATH }}
-          EOF
-          # App-specific runtime variables (e.g. ACCESS_PASSWORD, RETENTION_DAYS_*):
-          # the APP_ENV secret holds KEY=VALUE lines and is appended verbatim.
-          # Unset means nothing is appended.
-          printf '%s\n' "${{ secrets.APP_ENV }}" >> .env
+          bash deploy/ci/runtime-env.sh sqlite staging
 
       - name: Write db-ca.pem
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
+        env:
+          DATABASE_CA_CERT: ${{ secrets.DATABASE_CA_CERT }}
         run: |
-          printf '%s\n' "${{ secrets.DATABASE_CA_CERT }}" > db-ca.pem
+          printf '%s\n' "$DATABASE_CA_CERT" > db-ca.pem
           chmod 644 db-ca.pem
 
       # The production deploy REPLACES the shared edge files on every run; a
@@ -290,33 +273,7 @@ jobs:
       # It must land BEFORE the slot is claimed, since claiming may mean running it.
       - name: Install shared edge files if the droplet has none
         run: |
-          ssh_do() { ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" "$@"; }
-          ssh_do "mkdir -p /root/caddy/sites /root/apps /root/caddy/.incoming"
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/edge-compose.yaml deploy/Caddyfile deploy/edge.sh \
-            root@"$HOST":/root/caddy/.incoming/
-          ssh_do "
-            set -e
-            cd /root/caddy/.incoming
-            [ -e /root/caddy/compose.yaml ] || mv edge-compose.yaml /root/caddy/compose.yaml
-            [ -e /root/caddy/Caddyfile ]    || mv Caddyfile        /root/caddy/Caddyfile
-            [ -e /root/caddy/edge.sh ]      || mv edge.sh          /root/caddy/edge.sh
-            rm -rf /root/caddy/.incoming
-          "
-          # Staging-owned files, always refreshed because nothing else ships them
-          # and they are named for this environment alone:
-          #   staging-down.sh          — refuses any slug not ending in -stg
-          #   site.<slug>-stg.tmpl     — the DYNAMIC site template, under a name no
-          #                              other app writes. The shared
-          #                              site.caddy.tmpl cannot be used here: on a
-          #                              droplet whose last production deploy was a
-          #                              static site it holds the STATIC template,
-          #                              and rendering staging from that would serve
-          #                              files off a directory that does not exist.
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/staging-down.sh root@"$HOST":/root/caddy/staging-down.sh
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/site.caddy.tmpl root@"$HOST":/root/caddy/"site.${APP_SLUG}.tmpl"
+          bash deploy/ci/remote.sh upload-staging-edge
 
       # Who owns the single staging slot. Three cases:
       #   this PR      -> update the environment in place, keep its data
@@ -345,9 +302,7 @@ jobs:
       - name: Copy stack files + .env to droplet (Postgres)
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/swap.sh db-ca.pem .env \
-            root@"$HOST":"$STACK_DIR"/
+          bash deploy/ci/remote.sh upload-stack postgres staging
 
       # compose.staging.yaml lands as compose.override.yaml, which Docker Compose
       # merges automatically — that is how swap.sh and the migration runner get
@@ -356,13 +311,7 @@ jobs:
       - name: Copy stack files + .env to droplet (SQLite)
         if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/swap.sh .env \
-            root@"$HOST":"$STACK_DIR"/
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/litestream.staging.yml root@"$HOST":"$STACK_DIR"/litestream.yml
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.staging.yaml root@"$HOST":"$STACK_DIR"/compose.override.yaml
+          bash deploy/ci/remote.sh upload-stack sqlite staging
 
       # Same shared Caddy, one more site file. The staging name resolves to this
       # droplet already (Terraform created the record), so the certificate issues
@@ -370,27 +319,27 @@ jobs:
       # next PR to claim the slot reuses it instead of asking Let's Encrypt again.
       - name: Prepare shared edge (network, Caddy, route)
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "APP_SLUG='$APP_SLUG' DOMAIN='$DOMAIN' SITE_TMPL='site.${APP_SLUG}.tmpl' bash /root/caddy/edge.sh"
+          bash deploy/ci/remote.sh prepare-edge staging
 
       - name: Registry login + pull new image
+        env:
+          DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "echo '$DOCR_TOKEN' | docker login registry.digitalocean.com -u '$DOCR_TOKEN' --password-stdin \
-             && cd '$STACK_DIR' && docker compose pull"
+          bash deploy/ci/remote.sh pull-image
 
       # Against the STAGING database (Postgres) or the environment's own SQLite
       # volume — never production's. A failed migration fails the job and leaves
       # whatever was serving in place, exactly as in production.
       - name: Run migrations (gate before traffic)
+        env:
+          RELEASE_APP: ${{ needs.build.outputs.app_name }}
+          RELEASE_MODULE: ${{ needs.build.outputs.module }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "cd '$STACK_DIR' && docker compose run --rm migrate bin/${{ needs.build.outputs.app_name }} eval '${{ needs.build.outputs.module }}.Release.migrate()'"
+          bash deploy/ci/remote.sh migrate phoenix "$RELEASE_APP" "$RELEASE_MODULE"
 
       - name: Swap to new release
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "bash '$STACK_DIR'/swap.sh"
+          bash deploy/ci/remote.sh swap
 
       # One staging image per PR: the tag just deployed stays, every older tag
       # for this PR goes. Best-effort — a registry hiccup must not fail a deploy
@@ -473,9 +422,12 @@ jobs:
             --inbound-rules "protocol:tcp,ports:22,address:${runner_ip}/32"
 
       - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
+          # The checked-out base may predate deploy/ci helpers.
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key)
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
