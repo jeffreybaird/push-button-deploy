@@ -200,6 +200,8 @@ pin_ruby() {
 # edge files travel in every app repo on purpose — any app's deploy must be able
 # to stand the proxy up, including the first one on a fresh droplet.
 copy_deploy_files() {
+  mkdir -p "$APP_DIR/deploy/ci"
+  cp "$SCRIPT_DIR"/deploy/ci/*.sh "$APP_DIR/deploy/ci/"
   # Shared by every framework: the droplet's edge proxy.
   cp "$SCRIPT_DIR/deploy/Caddyfile" \
      "$SCRIPT_DIR/deploy/edge-compose.yaml" \

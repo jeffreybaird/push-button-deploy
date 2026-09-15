@@ -95,11 +95,10 @@ jobs:
       # No firewall hole-punch here (see file header) — the runner's IP is
       # already allow-listed for SSH, statically, in infra-app/firewall.tf.
       - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          bash deploy/ci/configure-ssh.sh
 
       - name: Create stack directories
         run: |
@@ -111,12 +110,7 @@ jobs:
       # including the first one on a fresh droplet.
       - name: Copy shared edge files to droplet
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/edge-compose.yaml \
-            root@"$HOST":/root/caddy/compose.yaml
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/Caddyfile deploy/site.caddy.tmpl deploy/edge.sh \
-            root@"$HOST":/root/caddy/
+          bash deploy/ci/remote.sh upload-edge
 
       - name: Upload release
         run: |
@@ -131,9 +125,10 @@ jobs:
       # something to serve. (On a droplet still running the old single-stack
       # layout this also performs the one-time migration — see deploy/edge.sh.)
       - name: Prepare shared edge (network, Caddy, route)
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "APP_SLUG='$APP_SLUG' DOMAIN='${{ vars.DOMAIN }}' bash /root/caddy/edge.sh"
+          bash deploy/ci/remote.sh prepare-edge production
 
       # The deploy itself: one atomic symlink move. Old releases are kept for
       # rollback (KEEP_RELEASES in publish.sh).

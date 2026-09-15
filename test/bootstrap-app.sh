@@ -44,11 +44,13 @@ EOF
     if [ "$app_type" != service ]; then
       [ ! -e "$app_dir/Dockerfile" ] && [ ! -d "$app_dir/deploy" ]
     elif [ "$framework" = zola ]; then
+      [ -f "$app_dir/deploy/ci/remote.sh" ]
       [ ! -e "$app_dir/Dockerfile" ] && [ ! -e "$app_dir/deploy/compose.yaml" ]
       cmp "$SCRIPT_DIR/deploy/site.static.caddy.tmpl" "$app_dir/deploy/site.caddy.tmpl"
       [ -f "$app_dir/deploy/publish.sh" ] && [ ! -e "$app_dir/deploy/swap.sh" ]
     else
       [ -f "$app_dir/Dockerfile" ] && [ -f "$app_dir/deploy/swap.sh" ]
+      [ -f "$app_dir/deploy/ci/runtime-env.sh" ]
       if [ "$framework" = sinatra ]; then expected=compose.sinatra.yaml
       elif [ "$backend" = sqlite ]; then expected=compose.sqlite.yaml
       else expected=compose.yaml; fi

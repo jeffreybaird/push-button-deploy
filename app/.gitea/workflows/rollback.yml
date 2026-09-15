@@ -78,56 +78,47 @@ jobs:
       # No firewall hole-punch here (see file header) — the runner's IP is
       # already allow-listed for SSH, statically, in infra-app/firewall.tf.
       - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          bash deploy/ci/configure-ssh.sh
 
       # Identical .env contract to deploy.yml, IMAGE pinned to the chosen tag.
       # DB-specific lines branch on vars.DATABASE_BACKEND (empty = postgres).
       - name: Write .env (Postgres, pinned image)
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}:${{ env.TAG }}
+          DOMAIN: ${{ vars.DOMAIN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+          APP_ENV: ${{ secrets.APP_ENV }}
         run: |
-          umask 077
-          cat > .env <<EOF
-          IMAGE=${{ steps.meta.outputs.image }}:${TAG}
-          DOMAIN=${{ vars.DOMAIN }}
-          APP_SLUG=${APP_SLUG}
-          DATABASE_URL=${{ secrets.DATABASE_URL }}
-          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
-          EOF
-          # App-specific runtime variables (e.g. ACCESS_PASSWORD, RETENTION_DAYS_*):
-          # the APP_ENV secret holds KEY=VALUE lines and is appended verbatim.
-          # Unset means nothing is appended.
-          printf '%s\n' "${{ secrets.APP_ENV }}" >> .env
+          bash deploy/ci/runtime-env.sh postgres production
 
       - name: Write .env (SQLite, pinned image)
         if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}:${{ env.TAG }}
+          DOMAIN: ${{ vars.DOMAIN }}
+          SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+          DATABASE_PATH: ${{ vars.DATABASE_PATH }}
+          LITESTREAM_ACCESS_KEY_ID: ${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
+          LITESTREAM_SECRET_ACCESS_KEY: ${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
+          BACKUP_BUCKET: ${{ vars.BACKUP_BUCKET }}
+          BACKUP_ENDPOINT: ${{ vars.BACKUP_ENDPOINT }}
+          BACKUP_REGION: ${{ vars.BACKUP_REGION }}
+          BACKUP_PATH: ${{ vars.BACKUP_PATH }}
+          APP_ENV: ${{ secrets.APP_ENV }}
         run: |
-          umask 077
-          cat > .env <<EOF
-          IMAGE=${{ steps.meta.outputs.image }}:${TAG}
-          DOMAIN=${{ vars.DOMAIN }}
-          APP_SLUG=${APP_SLUG}
-          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
-          DATABASE_PATH=${{ vars.DATABASE_PATH }}
-          LITESTREAM_ACCESS_KEY_ID=${{ secrets.LITESTREAM_ACCESS_KEY_ID }}
-          LITESTREAM_SECRET_ACCESS_KEY=${{ secrets.LITESTREAM_SECRET_ACCESS_KEY }}
-          BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
-          BACKUP_ENDPOINT=${{ vars.BACKUP_ENDPOINT }}
-          BACKUP_REGION=${{ vars.BACKUP_REGION }}
-          BACKUP_PATH=${{ vars.BACKUP_PATH }}
-          EOF
-          # App-specific runtime variables (e.g. ACCESS_PASSWORD, RETENTION_DAYS_*):
-          # the APP_ENV secret holds KEY=VALUE lines and is appended verbatim.
-          # Unset means nothing is appended.
-          printf '%s\n' "${{ secrets.APP_ENV }}" >> .env
+          bash deploy/ci/runtime-env.sh sqlite production
 
       - name: Write db-ca.pem
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
+        env:
+          DATABASE_CA_CERT: ${{ secrets.DATABASE_CA_CERT }}
         run: |
-          printf '%s\n' "${{ secrets.DATABASE_CA_CERT }}" > db-ca.pem
+          printf '%s\n' "$DATABASE_CA_CERT" > db-ca.pem
           chmod 644 db-ca.pem
 
       # The shared edge proxy is host-owned and already running; refreshing it
@@ -135,43 +126,35 @@ jobs:
       # own) and re-asserts this app's route.
       - name: Create stack directories
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "mkdir -p /root/caddy/sites '$STACK_DIR'"
+          bash deploy/ci/remote.sh create-directories
 
       - name: Copy shared edge files to droplet
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/edge-compose.yaml \
-            root@"$HOST":/root/caddy/compose.yaml
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/Caddyfile deploy/site.caddy.tmpl deploy/edge.sh \
-            root@"$HOST":/root/caddy/
+          bash deploy/ci/remote.sh upload-edge
 
       - name: Copy stack files + .env to droplet (Postgres)
         if: ${{ vars.DATABASE_BACKEND != 'sqlite' }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/swap.sh db-ca.pem .env \
-            root@"$HOST":"$STACK_DIR"/
+          bash deploy/ci/remote.sh upload-stack postgres production
 
       - name: Copy stack files + .env to droplet (SQLite)
         if: ${{ vars.DATABASE_BACKEND == 'sqlite' }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            deploy/compose.yaml deploy/swap.sh deploy/litestream.yml .env \
-            root@"$HOST":"$STACK_DIR"/
+          bash deploy/ci/remote.sh upload-stack sqlite production
 
       - name: Prepare shared edge (network, Caddy, route)
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "APP_SLUG='$APP_SLUG' DOMAIN='${{ vars.DOMAIN }}' bash /root/caddy/edge.sh"
+          bash deploy/ci/remote.sh prepare-edge production
 
       # No migration step: the pinned image is older than (or equal to) the
       # schema, so Ecto.Migrator would find nothing pending anyway.
       # Same health-checked blue/green swap as deploy — a rollback to a broken
       # image fails the swap and leaves the current color serving.
       - name: Pull pinned image and swap
+        env:
+          DOCR_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
-            "echo '${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}' | docker login registry.digitalocean.com -u '${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}' --password-stdin \
-             && cd '$STACK_DIR' && docker compose pull && bash swap.sh"
+          bash deploy/ci/remote.sh pull-image
+          bash deploy/ci/remote.sh swap
