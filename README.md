@@ -41,7 +41,7 @@ mytool --format json hello there    # not FORMAT=json ./mytool.sh hello there
 | Tests | `mix test` against a Postgres 17 service container; red tests block the build and deploy |
 | Rollback | Pins a prior image, no rebuild — `gh workflow run rollback.yml -f tag=<previous sha>` (GitHub) or the Actions tab (Gitea) |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
-| Claude Code docs | Every generated app ships a `CLAUDE.md` + `.claude/` (guidance modules, starter agents, a SessionStart hook) — see [Claude Code docs](docs/claude-docs.md) |
+| Agent docs | Every generated app ships a `AGENTS.md` + `doc/` (guidance modules, starter agents, a SessionStart hook) — see [Agent docs](docs/claude-docs.md) |
 | Terraform state | Versioned DO Spaces bucket (S3-compatible backend) |
 | Secrets | Never in cloud-init or droplet metadata — they arrive over SSH at deploy time |
 
@@ -74,7 +74,7 @@ The full guide lives in [`docs/`](docs/index.md).
 | [Staging](docs/staging.md) | Per-PR staging environments — how they work and how to turn them off |
 | [Tenancy](docs/tenancy.md) | Several apps on one droplet — host apps and tenants |
 | [Gitea](docs/gitea.md) | Self-hosted Gitea as code host and CI engine |
-| [Claude Code docs](docs/claude-docs.md) | Generating and tailoring an app's `CLAUDE.md` + `.claude/` |
+| [Agent docs](docs/claude-docs.md) | Generating and tailoring an app's `AGENTS.md` + `doc/` |
 | [Operations](docs/operations.md) | Day-2: deploy, watch, roll back, recreate, add an app, tear down |
 | [Troubleshooting](docs/troubleshooting.md) | Symptom → fix table and FAQ |
 | [Reference](docs/reference.md) | Commands, flags, env vars, scripts, Terraform roots, costs, security |

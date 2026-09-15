@@ -123,7 +123,7 @@ db_path = ENV.fetch("DATABASE_PATH") do
 end
 
 # The single global connection. SQLite is one file, one writer at a time — see
-# .claude/database.md before doing anything write-heavy.
+# doc/database.md before doing anything write-heavy.
 DB = Sequel.connect(adapter: "sqlite", database: db_path)
 
 # WAL: readers don't block the single writer, and it's what Litestream replicates.
@@ -254,7 +254,7 @@ require "dry/monads"
 
 module Notes
   # One object, one job, one #call. Returns a tagged Result the route branches on
-  # — never a bare boolean/nil. See .claude/architecture-decisions.md.
+  # — never a bare boolean/nil. See doc/architecture-decisions.md.
   class Create
     include Dry::Monads[:result]
 
@@ -487,8 +487,8 @@ GI
   cat > "$APP_DIR/README.md" <<'MD'
 # Notes (Sinatra + Sequel + SQLite)
 
-A minimal, tested Sinatra app scaffolded by `push-button-deploy`. See `CLAUDE.md`
-and `.claude/` for the conventions Claude Code follows in this repo.
+A minimal, tested Sinatra app scaffolded by `push-button-deploy`. See `AGENTS.md`
+and `doc/` for this repo's coding conventions.
 
 ```bash
 bundle install
@@ -502,7 +502,7 @@ Layout:
 - `app.rb` — the Sinatra app; thin routes only.
 - `app/services/` — service objects (one `#call`, return a dry-monads Result).
 - `app/models/` — Sequel models (persistence + invariants).
-- `config/database.rb` — the SQLite connection (WAL mode; see `.claude/database.md`).
+- `config/database.rb` — the SQLite connection (WAL mode; see `doc/database.md`).
 - `db/migrate/` — Sequel migrations (`rake db:migrate`).
 - `spec/` — RSpec (Rack::Test + Capybara).
 

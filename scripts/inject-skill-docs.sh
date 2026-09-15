@@ -10,12 +10,12 @@
 #   1. Injects deps the docs assume (default req + oban + cucumberex; override
 #      with APP_EXTRA_DEPS, '|'-separated mix.exs entries, empty string = none).
 #      Deps already declared in mix.exs are skipped.
-#   2. Copies app-template/CLAUDE.md -> <app_dir>/CLAUDE.md and
-#      app-template/.claude/*.md -> <app_dir>/.claude/, rewriting the MyApp /
+#   2. Copies app-template/CLAUDE.md -> <app_dir>/AGENTS.md and
+#      app-template/.claude/*.md -> <app_dir>/doc/, rewriting the MyApp /
 #      my_app placeholders to the app's real module/app names (compounds like
 #      MyAppWeb and :my_app are covered by plain global replace).
 #   3. Copies the Claude Code cloud-environment bootstrap
-#      (.claude/cloud-setup.sh + the .claude/settings.json SessionStart hook
+#      (doc/hooks/cloud-setup.sh + the .claude/settings.json SessionStart hook
 #      that runs it), same placeholder rewrite applied to the script.
 #
 # Re-running overwrites selected template paths and skips already-present deps.
@@ -68,7 +68,7 @@ inject_deps() {
   # Insert right after the `{:phoenix,` dep line (present exactly once).
   DEP_BLOCK="$lines" perl -0777 -pi -e '
     my $b = $ENV{DEP_BLOCK};
-    s/(\{:phoenix,[^\n]*\n)/$1 . "      # added by inject-skill-docs.sh (see CLAUDE.md)\n" . $b/e;
+    s/(\{:phoenix,[^\n]*\n)/$1 . "      # added by inject-skill-docs.sh (see AGENTS.md)\n" . $b/e;
   ' "$mixfile"
   log "skill docs: injected deps into mix.exs"
 }

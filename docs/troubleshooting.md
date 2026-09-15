@@ -62,9 +62,9 @@ was never there. Preflight now reads `/api/v1/version` and stops with the versio
 as the reason. Upgrade the instance (re-running `./bootstrap-gitea.sh` upgrades in
 place). See [Gitea](gitea.md).
 
-## Claude Code docs
+## Agent docs
 
-For the full feature, see [Claude Code docs](claude-docs.md).
+For the full feature, see [Agent docs](claude-docs.md).
 
 ### "could not infer the framework"
 
@@ -87,8 +87,8 @@ pipe, a CI step). Use the non-interactive path, which needs an explicit framewor
 
 ### An optional module I skipped is still referenced
 
-It shouldn't be — skipping a module also removes its bullet from the `CLAUDE.md`
-index. If you edited `CLAUDE.md` by hand and re-ran, the template wins on re-run
+It shouldn't be — skipping a module also removes its bullet from the `AGENTS.md`
+index. If you edited `AGENTS.md` by hand and re-ran, the template wins on re-run
 (docs are overwritten); your own files are never touched. Re-run and re-apply your
 edits, or keep them in a section the template doesn't own.
 
@@ -111,7 +111,7 @@ host's tool. See [App types](app-types.md).
 
 **I bootstrapped an app before the starter agents existed — what changed?** A
 normal (non-interactive) `bootstrap.sh` run now also emits the two starter agents
-(`test-writer`, `code-reviewer`) under `.claude/agents/`. Docs are otherwise
+(`test-writer`, `code-reviewer`) under `doc/agents/`. Docs are otherwise
 identical. Retrofit an existing app with `./claude-docs.sh <app_dir>`.
 
 **Can I switch a live app between SQLite and Postgres by flipping the flag?** No.
