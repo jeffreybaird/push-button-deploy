@@ -33,7 +33,11 @@ for backend in postgres sqlite; do
       assert_not grep -Eq '^(LITESTREAM_|BACKUP_)' "$file"
     fi
     # BSD and GNU stat spell file permissions differently.
-    mode="$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")"
+    if [ "$(uname -s)" = Darwin ]; then
+      mode="$(stat -f %Lp "$file")"
+    else
+      mode="$(stat -c %a "$file")"
+    fi
     [ "$mode" = 600 ]
   done
 done
