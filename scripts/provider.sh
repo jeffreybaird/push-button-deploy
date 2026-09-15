@@ -20,6 +20,7 @@ is_github() { [ "$GIT_PROVIDER" = github ]; }
 is_gitea() { [ "$GIT_PROVIDER" = gitea ]; }
 
 PROVIDER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/providers" && pwd)"
+. "$PROVIDER_LIB_DIR/errors.sh"
 . "$PROVIDER_LIB_DIR/github.sh"
 . "$PROVIDER_LIB_DIR/gitea-http.sh"
 . "$PROVIDER_LIB_DIR/gitea-auth.sh"

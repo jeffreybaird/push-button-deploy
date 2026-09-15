@@ -1,5 +1,5 @@
 # Gitea Actions secrets and variables. secret_set consumes stdin.
-# Variable deletion remains best effort for compatibility with teardown.
+# Missing variables are harmless; other deletion errors must reach the caller.
 
 gitea_secret_set() {
   local name="$1"
@@ -27,6 +27,8 @@ gitea_var_set() {
 }
 
 gitea_var_delete() {
-  local name="$1"
-  gitea_api_status DELETE "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/variables/$name" >/dev/null 2>&1 || true
+  local name="$1" code
+  code="$(gitea_api_status DELETE "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME/actions/variables/$name")" \
+    || { provider_error "Gitea variable deletion request failed for $name"; return 2; }
+  provider_delete_status "variable $name" "$code"
 }

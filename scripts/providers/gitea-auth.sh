@@ -1,6 +1,6 @@
 # Authenticate and resolve the repository owner before repository operations.
-# Gitea 1.24 is required for Actions workflow dispatch (task polling needs 1.23).
-GITEA_MIN_VERSION="1.24"
+# Gitea 1.25 adds full workflow runs; older task rows only report individual jobs.
+GITEA_MIN_VERSION="1.25"
 
 gitea_version_at_least() { # $1 have, $2 want -> 0 if have >= want
   awk -v have="$1" -v want="$2" 'BEGIN {
@@ -26,10 +26,9 @@ gitea_ci_auth_check() {
     || fail "Gitea did not report a version ($GITEA_URL/api/v1/version) — cannot confirm it is at least $GITEA_MIN_VERSION"
   gitea_version_at_least "$ver" "$GITEA_MIN_VERSION" \
     || fail "Gitea $ver is too old — this tool needs at least $GITEA_MIN_VERSION.
-  Below $GITEA_MIN_VERSION the Actions API has no /actions/tasks (run polling) and no
-  /actions/workflows/{id}/dispatches (redeploy trigger), so a deploy can be
-  started but never confirmed. Secrets and variables work either way, which is
-  why this only surfaces at the deploy step without this check.
+  Full workflow confirmation requires /actions/runs, introduced in 1.25.
+  Older /actions/tasks responses only report individual jobs and cannot confirm
+  that the complete workflow succeeded.
   Fix: bump the gitea image tag in gitea-host/docker-compose.yaml and re-run
   ./bootstrap-gitea.sh (data lives on the volume; the upgrade is in place)."
 }
