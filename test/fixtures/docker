@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Stateful Docker boundary double used only by swap.sh's subprocess tests.
+set -euo pipefail
+: "${SWAP_FIXTURE:?fixture directory required}"
+printf '%s\n' "$*" >> "$SWAP_FIXTURE/calls"
+case "$*" in
+  'compose ps --services --status running') cat "$SWAP_FIXTURE/running" ;;
+  'compose config --services')
+    [ ! -e "$SWAP_FIXTURE/fail-config" ] || exit 21
+    cat "$SWAP_FIXTURE/services" ;;
+  'compose ps -a --services') cat "$SWAP_FIXTURE/present" ;;
+  'compose up -d --remove-orphans --wait '* )
+    [ ! -e "$SWAP_FIXTURE/fail-candidate" ] || exit 22
+    printf '%s\n' "${!#}" >> "$SWAP_FIXTURE/present" ;;
+  'compose up -d '*)
+    [ ! -e "$SWAP_FIXTURE/fail-support" ] || exit 23
+    shift 3
+    for service in "$@"; do
+      [ "$service" != backup ] || [ ! -e "$SWAP_FIXTURE/omit-backup" ] || continue
+      printf '%s\n' "$service" >> "$SWAP_FIXTURE/present"
+    done ;;
+  'compose stop '*) : ;;
+  'compose rm -f '*)
+    awk -v old="${!#}" '$0 != old' "$SWAP_FIXTURE/present" > "$SWAP_FIXTURE/next"
+    mv "$SWAP_FIXTURE/next" "$SWAP_FIXTURE/present" ;;
+  *) printf 'unexpected docker operation: %s\n' "$*" >&2; exit 98 ;;
+esac
