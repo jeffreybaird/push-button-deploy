@@ -33,6 +33,7 @@ run_suite() {
   # Git configuration is isolated so tests cannot invoke a user's signing hooks.
   env -i HOME="$HOME" PATH="$WORK/bin:$PATH" TMPDIR="$WORK/work" \
     LC_ALL=C GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+    BASH_ENV="$ROOT/test/helpers/diagnostics.sh" \
     TEST_EXTERNAL_CALLS="$WORK/external-calls" \
     "$interpreter" "$suite" > "$WORK/$name.log" 2>&1 || status=$?
   if [ "$status" -eq 0 ] && [ ! -s "$WORK/external-calls" ]; then
