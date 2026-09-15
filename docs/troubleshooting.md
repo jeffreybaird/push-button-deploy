@@ -56,9 +56,8 @@ not). Update `GITEA_RUNNER_IP` to the current egress address and re-run
 
 ### Bootstrap fails on a 404 partway through a Gitea run
 
-The instance is older than the required **1.24** floor — secret/variable seeding
-works on older releases, so it gets most of the way before hitting a route that
-was never there. Preflight now reads `/api/v1/version` and stops with the version
+The instance is older than the required **1.25** floor — secret/variable seeding
+works on older releases, but full-workflow confirmation needs `/actions/runs`. Preflight now reads `/api/v1/version` and stops with the version
 as the reason. Upgrade the instance (re-running `./bootstrap-gitea.sh` upgrades in
 place). See [Gitea](gitea.md).
 

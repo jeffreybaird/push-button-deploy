@@ -1,7 +1,10 @@
 # Gitea repository lifecycle and Git authentication.
 
 gitea_repo_exists() {
-  [ "$(gitea_api_status GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME")" = "200" ]
+  local code
+  code="$(gitea_api_status GET "/repos/$GITEA_OWNER_RESOLVED/$APP_NAME")" \
+    || { provider_error "Gitea repository lookup request failed"; return 2; }
+  provider_repository_status "$code"
 }
 
 gitea_repo_remote_url() {

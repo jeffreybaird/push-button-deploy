@@ -7,6 +7,11 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 log() { :; }
+expect_status() {
+  local expected="$1" actual=0; shift
+  "$@" >/dev/null 2>&1 || actual=$?
+  [ "$actual" -eq "$expected" ] || fail "expected status $expected, got $actual: $*"
+}
 
 # Sourcing must perform no network operations.
 gh() { return 99; }
@@ -23,11 +28,16 @@ gh() {
   printf '%s\n' "$@" > "$WORK/gh-args"
   printf '%s\n' "$PWD" > "$WORK/gh-cwd"
   if [ "$1 $2" = 'secret set' ]; then cat > "$WORK/gh-stdin"; fi
+  case "$*" in
+    'api user --jq .login') printf 'alice\n' ;;
+    'repo view --json nameWithOwner -q .nameWithOwner') printf 'team/example\n' ;;
+    'api --method '*) printf 'HTTP/2 %s\n' "${GH_HTTP_CODE:-200}" ;;
+  esac
   return "${GH_STATUS:-0}"
 }
 expect_gh() { printf '%s\n' "$@" > "$WORK/expected"; cmp "$WORK/expected" "$WORK/gh-args"; }
 ci_auth_check; expect_gh auth status
-repo_exists; expect_gh repo view example
+repo_exists; expect_gh api --method GET --include --silent repos/alice/example
 repo_remote_url; expect_gh repo view example --json url -q .url
 repo_create; expect_gh repo create example --source=. --private --remote=origin
 repo_delete; expect_gh repo delete --yes
@@ -35,8 +45,8 @@ printf 'line one\nline "two"\\end' > "$WORK/secret"
 secret_set TOKEN < "$WORK/secret"; expect_gh secret set TOKEN
 cmp "$WORK/secret" "$WORK/gh-stdin"
 var_set DOMAIN 'a value with spaces'; expect_gh variable set DOMAIN -b 'a value with spaces'
-GH_STATUS=1 var_delete OLD; expect_gh variable delete OLD
-GH_STATUS=1 assert_not repo_exists
+GH_HTTP_CODE=404 var_delete OLD; expect_gh api --method DELETE --include --silent repos/team/example/actions/variables/OLD
+GH_STATUS=1 expect_status 2 repo_exists
 GH_STATUS=1 assert_not repo_create
 ( GH_STATUS=1; ci_auth_check ) > "$WORK/error" 2>&1 && fail 'auth failure was swallowed'
 ( GH_STATUS=1; repo_delete ) > "$WORK/error" 2>&1 && fail 'delete failure was swallowed'
@@ -69,7 +79,7 @@ curl() {
   else
     case "$url" in
       */user) printf '%s' "${AUTH_BODY:-{\"login\":\"alice\"}}" ;;
-      */version) printf '{"version":"%s"}' "${VERSION:-1.24.0+dev}" ;;
+      */version) printf '{"version":"%s"}' "${VERSION:-1.25.0+dev}" ;;
       *) printf '{}' ;;
     esac
   fi
@@ -81,7 +91,7 @@ ci_auth_check
 [ "$GITEA_OWNER_RESOLVED" = alice ]
 GITEA_OWNER=team ci_auth_check
 [ "$GITEA_OWNER_RESOLVED" = team ]
-( VERSION=1.23.9; ci_auth_check ) > "$WORK/error" 2>&1 && fail 'old version accepted'
+( VERSION=1.24.9; ci_auth_check ) > "$WORK/error" 2>&1 && fail 'old version accepted'
 ( AUTH_BODY='{}'; ci_auth_check ) > "$WORK/error" 2>&1 && fail 'missing login accepted'
 ( CURL_STATUS=7; ci_auth_check ) > "$WORK/error" 2>&1 && fail 'connection error accepted'
 gitea_version_at_least 1.24 1.24
@@ -126,7 +136,7 @@ HTTP_CODE=404 var_set DOMAIN new
 grep -q '^POST .*actions/variables/DOMAIN$' "$WORK/requests"
 ( HTTP_CODE=403; var_set DOMAIN new ) > "$WORK/error" 2>&1 && fail 'variable error swallowed'
 ( HTTP_CODE=404; POST_CODE=500; var_set DOMAIN new ) > "$WORK/error" 2>&1 && fail 'create error swallowed'
-HTTP_CODE=500 var_delete OLD
+HTTP_CODE=500 expect_status 2 var_delete OLD
 POST_CODE=204 ci_dispatch_deploy
 jq -e '.ref == "main"' "$WORK/body" >/dev/null
 grep -q 'POST https://code.example/api/v1/repos/team/example/actions/workflows/ci.yml/dispatches' "$WORK/requests"

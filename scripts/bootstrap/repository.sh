@@ -15,8 +15,12 @@ ensure_repo() {
     # origin outlives the repo it points at (deleted by hand, or the whole
     # instance rebuilt), so treating "origin is configured" as proof of
     # existence skipped creation and left the push below to die on a 404.
-    if repo_exists; then
+    local lookup_status=0
+    repo_exists || lookup_status=$?
+    if [ "$lookup_status" -eq 0 ]; then
       log "repo '$APP_NAME' already exists on the code host"
+    elif [ "$lookup_status" -ne 1 ]; then
+      fail "repository lookup failed; refusing to change origin or create a repository"
     else
       # Any origin at this point references something that is gone: stale by
       # definition. Drop it so repo_create can wire a correct one.
@@ -129,7 +133,7 @@ seed_ci() {
       # switch, so leaving a stale one behind would keep deploying to a name
       # Terraform has just removed from DNS. Absent already? Then there is
       # nothing to remove and the failure is expected.
-      var_delete STAGING_DOMAIN
+      var_delete STAGING_DOMAIN || fail "could not remove STAGING_DOMAIN; staging may still be enabled"
     fi
   )
 }

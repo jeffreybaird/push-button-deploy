@@ -16,7 +16,7 @@ commit_push() {
     fi
   )
   HEAD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
-  previous_row="$(ci_run_row "$APP_DIR" "$CI_WORKFLOW" "$HEAD_SHA")"
+  previous_row="$(ci_run_row "$APP_DIR" "$CI_WORKFLOW" "$HEAD_SHA")" || return 2
   CI_AFTER_RUN_ID="${previous_row%% *}"
 
   ( cd "$APP_DIR"; provider_git_push -u origin main )
@@ -42,7 +42,10 @@ wait_for_workflow_success() {
   local started=$SECONDS row run_id status conclusion elapsed last_heartbeat=0
   log "waiting for $workflow at $commit (timeout ${timeout}s)..."
   while :; do
-    row="$(ci_run_row "$app_dir" "$workflow" "$commit")"
+    row="$(ci_run_row "$app_dir" "$workflow" "$commit")" || {
+      log "CI query failed for $workflow; refusing to infer workflow success"
+      return 2
+    }
     run_id=""; status=""; conclusion=""
     read -r run_id status conclusion <<< "$row"
     if [ -n "$run_id" ] && [ "$run_id" != "$after_run_id" ]; then

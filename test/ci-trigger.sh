@@ -14,6 +14,7 @@ ci_run_row() {
   [ "$1" = "$APP_DIR" ] && [ "$2" = deploy.yml ] || return 99
   [ "$3" = "$(git -C "$APP_DIR" rev-parse HEAD)" ] || return 99
   printf 'lookup\n' >> "$CASE/events"
+  case "$CASE" in */lookup-fails) return 2 ;; esac
   cat "$CASE/run"
 }
 provider_git_push() {
@@ -28,7 +29,7 @@ commit_push
 printf '%s\n' "$HEAD_SHA" "$CI_AFTER_RUN_ID" > "$CASE/result"
 DRIVER
 
-for scenario in changed unchanged empty running push-fails; do
+for scenario in changed unchanged empty running push-fails lookup-fails; do
   export CASE="$WORK/$scenario" ROOT
   export APP_DIR="$CASE/app"
   mkdir -p "$CASE"
@@ -52,7 +53,12 @@ for scenario in changed unchanged empty running push-fails; do
   esac
   status=0
   "$BASH" "$WORK/driver.sh" > "$CASE/output" 2>&1 || status=$?
-  if [ "$scenario" = push-fails ]; then
+  if [ "$scenario" = lookup-fails ]; then
+    [ "$status" -eq 2 ]
+    [ ! -e "$CASE/result" ]
+    [ "$(cat "$CASE/events")" = lookup ]
+    continue
+  elif [ "$scenario" = push-fails ]; then
     [ "$status" -ne 0 ]
     [ ! -e "$CASE/result" ]
     assert_not grep -q dispatch "$CASE/events"

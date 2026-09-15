@@ -33,19 +33,21 @@ HEAD_SHA=unrelated; CI_WORKFLOW=other.yml
 [ "$CI_WORKFLOW" = other.yml ]
 
 gitea_api() {
-  [ "$1 $2" = 'GET /repos/owner/example/actions/tasks' ] || return 1
+  [ "$1 $2" = 'GET /repos/owner/example/actions/runs?head_sha=wanted&limit=50&page=1' ] || return 1
   cat "$WORK/gitea.json"
 }
 GIT_PROVIDER=gitea
 for envelope in array object; do
   for spec in 'success completed success' 'failure completed failure' \
               'cancelled completed cancelled' 'skipped completed skipped' \
-              'running in_progress' 'waiting in_progress' 'blocked in_progress'; do
+              'in_progress in_progress' 'waiting in_progress' 'queued in_progress'; do
     read -r upstream expected_status expected_conclusion <<< "$spec"
     jq -n --arg status "$upstream" --arg envelope "$envelope" '
-      [{id: 99, run_number: 99, head_sha: "other", status: "success"},
-       {id: 7, run_number: 7, head_sha: "wanted", status: $status},
-       {id: 6, run_number: 6, head_sha: "wanted", status: "failure"}]
+      [{id: 99, run_number: 99, head_sha: "other", path: "deploy.yml@refs/heads/main", status: "completed", conclusion: "success"},
+       {id: 7, run_number: 7, head_sha: "wanted", path: ".gitea/workflows/deploy.yml@refs/heads/main",
+        status: (if ["success", "failure", "cancelled", "skipped"] | index($status) then "completed" else $status end),
+        conclusion: (if ["success", "failure", "cancelled", "skipped"] | index($status) then $status else "" end)},
+       {id: 6, run_number: 6, head_sha: "wanted", path: "deploy.yml@refs/heads/main", status: "completed", conclusion: "failure"}]
       | if $envelope == "object" then {workflow_runs: .} else . end
     ' > "$WORK/gitea.json"
     row="$(ci_run_row "$APP_DIR" deploy.yml wanted)"
@@ -55,8 +57,15 @@ for envelope in array object; do
     [ "$conclusion" = "$expected_conclusion" ]
   done
 done
-for response in '[]' '{"workflow_runs":[]}' '<html>service unavailable</html>'; do
+for response in '[]' '{"workflow_runs":[]}'; do
   printf '%s\n' "$response" > "$WORK/gitea.json"
   [ -z "$(ci_run_row "$APP_DIR" deploy.yml wanted)" ]
+done
+GIT_PROVIDER=github
+for response in '<html>service unavailable</html>' '[{"status":"completed","conclusion":"success"}]'; do
+  printf '%s\n' "$response" > "$WORK/github.json"
+  result=0
+  ci_run_row "$APP_DIR" deploy.yml wanted > "$WORK/error" 2>&1 || result=$?
+  [ "$result" -eq 2 ]
 done
 echo 'provider run fixture checks passed'
