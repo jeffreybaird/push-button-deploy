@@ -2,12 +2,11 @@
 #
 # claude-docs.sh — guided creation of an app's agent docs.
 #
-# Walks you through which pieces of AGENTS.md + doc/ (guidance modules,
+# Walks you through which pieces of CLAUDE.md + .claude/ and AGENTS.md + doc/ (guidance modules,
 # starter agents, the SessionStart cloud-setup hook) your app needs, assembles
 # them from this repo's static templates with the app's name filled in, and
 # offers to open the result in your editor. Runs on a freshly generated app or
-# to retrofit an existing repo — writes AGENTS.md, doc/, and optional
-# .claude/settings.json hook registration.
+# to retrofit an existing repo — writes both guides and their docs directories.
 #
 #   ./claude-docs.sh                     guided, framework inferred from the cwd
 #   ./claude-docs.sh ~/src/myapp         guided, into that directory
@@ -32,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<EOF
-claude-docs.sh — guided creation of an app's agent docs (AGENTS.md + doc/).
+claude-docs.sh — guided creation of an app's agent docs (CLAUDE.md + .claude/ and AGENTS.md + doc/).
 
   ./claude-docs.sh [options] [app_dir]      app_dir defaults to .
 
@@ -44,7 +43,11 @@ Options:
   --help, -h               this message
 
 What it writes, tailored by your answers:
-  AGENTS.md               the top-level project guide
+  CLAUDE.md               Claude Code project guide
+  .claude/*.md            Claude guidance modules
+  .claude/agents/*.md     Claude agent profiles
+  .claude/cloud-setup.sh  retained cloud-session setup script
+  AGENTS.md               project guide for coding agents
   doc/*.md                guidance modules (core always; optional ones you pick)
   doc/agents/*.md          agent profiles (test-writer, code-reviewer)
   doc/hooks/cloud-setup.sh cloud-session setup script

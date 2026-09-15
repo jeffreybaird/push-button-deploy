@@ -11,21 +11,21 @@ cd_validate_hook() {
 
 cd_selected_files() { # template root -> relative destination paths, one per line
   local tdir="$1" src base
-  printf 'AGENTS.md\n'
+  printf 'CLAUDE.md\nAGENTS.md\n'
   for src in "$tdir"/.claude/*.md; do
     [ -f "$src" ] || continue
     base="${src##*/}"
     cd_in_list "$base" "${CD_SKIP_MODULES:-}" && continue
-    printf 'doc/%s\n' "$base"
+    printf '.claude/%s\ndoc/%s\n' "$base" "$base"
   done
   for src in "$tdir"/.claude/agents/*.md; do
     [ -f "$src" ] || continue
     base="${src##*/}"
     cd_in_list "$base" "${CD_SKIP_AGENTS:-}" && continue
-    printf 'doc/agents/%s\n' "$base"
+    printf '.claude/agents/%s\ndoc/agents/%s\n' "$base" "$base"
   done
   if [ -z "${CD_NO_SETUP:-}" ]; then
-    [ ! -f "$tdir/.claude/cloud-setup.sh" ] || printf 'doc/hooks/cloud-setup.sh\n'
+    [ ! -f "$tdir/.claude/cloud-setup.sh" ] || printf '.claude/cloud-setup.sh\ndoc/hooks/cloud-setup.sh\n'
     if [ -n "${CD_HOOK:-}" ] || [ -f "$tdir/.claude/settings.json" ]; then
       printf '.claude/settings.json\n'
     fi
@@ -35,7 +35,7 @@ cd_selected_files() { # template root -> relative destination paths, one per lin
 
 cd_source_file() { # template root, relative destination -> selected source
   case "$2" in
-    AGENTS.md) printf '%s/CLAUDE.md\n' "$1" ;;
+    CLAUDE.md|AGENTS.md) printf '%s/CLAUDE.md\n' "$1" ;;
     doc/hooks/cloud-setup.sh) printf '%s/.claude/cloud-setup.sh\n' "$1" ;;
     .claude/settings.json)
       if [ -n "${CD_HOOK:-}" ]; then
@@ -43,6 +43,7 @@ cd_source_file() { # template root, relative destination -> selected source
       else
         printf '%s/.claude/settings.json\n' "$1"
       fi ;;
+    .claude/*) printf '%s/%s\n' "$1" "$2" ;;
     doc/*) printf '%s/.claude/%s\n' "$1" "${2#doc/}" ;;
     *) fail "unknown docs destination '$2'" ;;
   esac

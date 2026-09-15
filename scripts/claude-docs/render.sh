@@ -2,14 +2,15 @@
 
 cd_render_file() { # source, destination, module token, app token, module value, app value
   local src="$1" dest="$2"
+  local layout="${7:-claude}"
   mkdir -p "$(dirname "$dest")" || return
   cp "$src" "$dest" || return
   # Translate template references before inserting application-specific names.
   # Settings stay in the tool's discovery location; the executable lives in doc/.
-  case "$dest" in
-    *.md)
+  case "$layout:$dest" in
+    agents:*.md)
       perl -pi -e 's/CLAUDE\.md/AGENTS.md/g; s/\.claude\//doc\//g; s/Claude Code reads this every session\./Project guidance for coding agents./g;' "$dest" || return ;;
-    */settings.json)
+    *:*/settings.json)
       perl -pi -e 's{\.claude/cloud-setup\.sh}{doc/hooks/cloud-setup.sh}g;' "$dest" || return ;;
   esac
   case "$dest" in
@@ -28,8 +29,8 @@ cd_render_file() { # source, destination, module token, app token, module value,
 }
 
 cd_prune_index() { # generated AGENTS.md
-  local module
+  local module prefix="$2"
   for module in ${CD_SKIP_MODULES:-}; do
-    BASE="$module" perl -ni -e 'print unless /^-\s+\x60\Qdoc\/$ENV{BASE}\E\x60/' "$1" || return
+    BASE="$module" PREFIX="$prefix" perl -ni -e 'print unless /^-\s+\x60\Q$ENV{PREFIX}\/$ENV{BASE}\E\x60/' "$1" || return
   done
 }
