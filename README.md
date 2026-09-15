@@ -87,3 +87,8 @@ Run the deployment tool's offline regression tests with `bash test/run.sh`.
 The same suite runs for pull requests on Linux and macOS. See
 [Test coverage and contribution guidance](test/README.md) for prerequisites,
 covered behavior, isolation rules, and the limits of offline verification.
+
+### Preview teardown
+
+Run `./teardown.sh --plan /path/to/app` to inspect the host, tenant, or
+repository-only scope without remote calls. See [teardown design](scripts/teardown/README.md).
