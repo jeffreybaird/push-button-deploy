@@ -44,7 +44,7 @@ STATE_BUCKET="${GITEA_STATE_BUCKET:-${GITEA_PROJECT_NAME}-tfstate}"
 STATE_REGION="${GITEA_SPACES_REGION:-$GITEA_REGION}"
 STATE_ENDPOINT="https://${STATE_REGION}.digitaloceanspaces.com"
 
-REQUIRED_BINS="terraform doctl"
+REQUIRED_BINS="terraform doctl jq"
 REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE"
 for b in $REQUIRED_BINS; do have "$b" || fail "missing binary: $b"; done
 for v in $REQUIRED_ENV; do
@@ -89,11 +89,8 @@ if [ "$ASSUME_YES" != 1 ]; then
   [ "$answer" = "$GITEA_PROJECT_NAME" ] || fail "confirmation did not match — aborting (nothing destroyed)"
 fi
 
-cat > "$GITEA_TF_DIR/backend.hcl" <<EOF
-bucket    = "$STATE_BUCKET"
-endpoints = { s3 = "$STATE_ENDPOINT" }
-EOF
-terraform -chdir="$GITEA_TF_DIR" init -input=false -force-copy -backend-config=backend.hcl >/dev/null \
+. "$SCRIPT_DIR/scripts/terraform-backend.sh"
+terraform_backend_init "$GITEA_TF_DIR" "$STATE_BUCKET" "$STATE_ENDPOINT" "" reconfigure \
   || fail "terraform init failed — is the state bucket '$STATE_BUCKET' still there? (nothing destroyed yet)"
 
 # Lift the two prevent_destroy guards for the duration of this destroy —

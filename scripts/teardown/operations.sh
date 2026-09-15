@@ -1,7 +1,7 @@
 # Individual teardown operations. All inputs are resolved before execution.
 
 teardown_initialize_tenant() {
-  terraform -chdir="$1" init -input=false -force-copy -backend-config=backend.hcl >/dev/null || return
+  backend_init "$1" "$STATE_KEY" || return
   DROPLET_IP="$(terraform -chdir="$1" output -raw host_ip)" || return
   [ -n "$DROPLET_IP" ] || fail "tenant state has no host_ip; refusing to discard DNS before cleanup"
   case "$DROPLET_IP" in *[!0-9a-fA-F:.]*) fail "invalid host_ip in tenant state" ;; esac
