@@ -19,45 +19,33 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=app-meta.sh
 . "$HERE/app-meta.sh"
 
-CHECK_ONLY=0
-if [ "${1:-}" = "--check" ]; then CHECK_ONLY=1; shift; fi
-APP_DIR="${1:-.}"
-
-APP="$(app_name "$APP_DIR")"
-MOD="$(app_module "$APP_DIR")"
-REL="$APP_DIR/lib/$APP/release.ex"
-
-verify() {
-  if [ -f "$REL" ] \
-     && grep -Eq "^defmodule[[:space:]]+${MOD}\.Release[[:space:]]+do" "$REL" \
-     && grep -Eq '^[[:space:]]*def[[:space:]]+migrate\b' "$REL" \
-     && grep -q 'Ecto.Migrator' "$REL"; then
-    echo "OK: $REL defines ${MOD}.Release.migrate/0 via Ecto.Migrator."
+# Validate the expected release entry point without changing the application.
+validate_release_task() { # $1 release file, $2 base module
+  local release_file="$1" module="$2"
+  if [ -f "$release_file" ] \
+     && awk -v expected="${module}.Release" '$1 == "defmodule" && $2 == expected && $3 == "do" { found = 1 } END { exit !found }' "$release_file" \
+     && grep -Eq '^[[:space:]]*def[[:space:]]+migrate([[:space:]]|\(|,|$)' "$release_file" \
+     && grep -q 'Ecto.Migrator' "$release_file"; then
+    printf 'OK: %s defines %s.Release.migrate/0 via Ecto.Migrator.\n' "$release_file" "$module"
     return 0
   fi
-  echo "FAIL: $REL must define ${MOD}.Release.migrate/0 using Ecto.Migrator." >&2
-  [ -f "$REL" ] && echo "(file exists but is non-compliant — not overwriting)" >&2
-  [ "$CHECK_ONLY" -eq 1 ] && echo "Run: scripts/ensure-release-task.sh $APP_DIR" >&2
-  exit 1
+  printf 'FAIL: %s must define %s.Release.migrate/0 using Ecto.Migrator.\n' "$release_file" "$module" >&2
+  if [ -f "$release_file" ]; then
+    printf '(file exists but is non-compliant — not overwriting)\n' >&2
+  fi
+  return 1
 }
 
-if [ "$CHECK_ONLY" -eq 1 ]; then
-  verify
-fi
-
-# Compliant already, or present-but-wrong (refuse to clobber) -> verify decides.
-if [ -f "$REL" ]; then
-  verify
-fi
-
-mkdir -p "$APP_DIR/lib/$APP"
-cat > "$REL" <<EOF
-defmodule ${MOD}.Release do
+generate_release_task() { # $1 release file, $2 OTP app, $3 base module
+  local release_file="$1" app="$2" module="$3"
+  mkdir -p "$(dirname "$release_file")"
+cat > "$release_file" <<EOF
+defmodule ${module}.Release do
   @moduledoc """
   Used for executing DB release tasks when run in production without Mix
   installed.
   """
-  @app :${APP}
+  @app :${app}
 
   def migrate do
     load_app()
@@ -84,5 +72,26 @@ defmodule ${MOD}.Release do
 end
 EOF
 
-echo "Generated $REL (${MOD}.Release.migrate/0)."
-verify
+  printf 'Generated %s (%s.Release.migrate/0).\n' "$release_file" "$module"
+}
+
+main() {
+  local check_only=0 app_dir app module release_file
+  if [ "${1:-}" = --check ]; then check_only=1; shift; fi
+  app_dir="${1:-.}"
+  app="$(app_name "$app_dir")"
+  module="$(app_module "$app_dir")"
+  release_file="$app_dir/lib/$app/release.ex"
+
+  if [ "$check_only" -eq 1 ] || [ -e "$release_file" ]; then
+    validate_release_task "$release_file" "$module"
+    return $?
+  fi
+
+  generate_release_task "$release_file" "$app" "$module"
+  validate_release_task "$release_file" "$module"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
