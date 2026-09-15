@@ -60,28 +60,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Same precedence rule as bootstrap.sh: the CALLING SHELL WINS. A teardown that
 # silently used .env's DNS_ZONE instead of the one the operator named would
 # destroy records in the wrong zone.
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  _envtmp="$(mktemp)"
-  for _k in $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$SCRIPT_DIR/.env"); do
-    if [ -n "${!_k+x}" ]; then printf '%s=%q\n' "$_k" "${!_k}" >> "$_envtmp"; fi
-  done
-
-  set -a
-  # shellcheck disable=SC1091
-  . "$SCRIPT_DIR/.env"
-  set +a
-
-  if [ -s "$_envtmp" ]; then
-    while IFS= read -r _line; do
-      _k="${_line%%=*}"
-      _was="${!_k}"
-      eval "export $_line"
-      [ "$_was" != "${!_k}" ] && log "$_k: using '${!_k}' from the environment, not '$_was' from .env"
-    done < "$_envtmp"
-  fi
-  rm -f "$_envtmp"
-  unset _envtmp _k _line _was
-fi
+# shellcheck source=scripts/config.sh
+. "$SCRIPT_DIR/scripts/config.sh"
+load_config "$SCRIPT_DIR/.env" log
 
 # Same provider abstraction bootstrap.sh uses (GIT_PROVIDER, is_github/
 # is_gitea, repo_delete, ...) — sourced here rather than inherited, since

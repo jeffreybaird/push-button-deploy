@@ -163,72 +163,6 @@ warn()  { printf '\033[33m==> WARN\033[0m [%s] %s\n' "$(ts)" "$*" >&2; printf 'W
 fail()  { printf '\033[31mbootstrap: %s\033[0m\n' "$*" >&2; printf 'FAIL [%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; exit 1; }
 have()  { command -v "$1" >/dev/null 2>&1; }
 
-# Database backend selector. 'sqlite' (default) = a file on the droplet,
-# replicated to Spaces by Litestream; 'postgres' = a managed cluster (~$15/mo).
-# is_sqlite gates every backend-specific branch below.
-#
-# SQLite is the default because it is the right answer for the apps this tool
-# builds: one small droplet, one writer, traffic that fits in a file. Reach for
-# postgres when you actually need concurrent writers, or SQL that SQLite lacks.
-#
-# The choice is per-project and effectively permanent. Running an existing
-# Postgres project WITHOUT setting DATABASE_BACKEND=postgres would ask Terraform
-# to tear its cluster down — tf_persistent refuses rather than let that happen.
-is_sqlite() { [ "$DATABASE_BACKEND" = "sqlite" ]; }
-
-# Application framework selector. 'phoenix' (default) generates + deploys a
-# Phoenix/Elixir app; 'sinatra' a Sinatra/Ruby app (Sequel + Puma). is_sinatra /
-# is_phoenix gate every framework-specific branch. The Sinatra path is
-# SQLite-only (Sequel + Litestream), so choosing it forces the sqlite backend.
-# 'zola' is a STATIC site: `zola build` produces a directory, CI ships it to the
-# droplet as a release, and the shared Caddy serves those files directly. There
-# is no app container, no image in the registry and no database — which is why it
-# forces DATABASE_BACKEND=none rather than picking one.
-is_sinatra() { [ "$FRAMEWORK" = "sinatra" ]; }
-is_phoenix() { [ "$FRAMEWORK" = "phoenix" ]; }
-is_zola()    { [ "$FRAMEWORK" = "zola" ]; }
-# A static site has no server-side runtime, so every dynamic-stack step below
-# (image build, blue/green swap, migrations, runtime secrets) is skipped or
-# replaced. is_static names that where the reason is "no app process" rather than
-# "Zola specifically" — the next static generator reuses the same branches.
-is_static()  { is_zola; }
-
-# PR STAGING ENVIRONMENTS. Every dynamic app gets a second name on the same
-# droplet, <record>-stg.<zone>, behind which a pull request against main stands
-# up a complete copy of itself — its own compose project, volumes, database and
-# Caddy route — torn down when the PR closes (.github/workflows/staging.yml,
-# deploy/staging-down.sh). A static site is excluded: there is no environment to
-# build, only files a symlink points at.
-#
-# The NAME is Terraform's (infra/persistent, or infra/tenant), so CI never needs
-# DNSimple credentials; the ENVIRONMENT is the pipeline's. STAGING_DOMAIN is read
-# back from Terraform after the apply and is empty when staging is off — which is
-# also what an app whose infra/ copy predates this feature reads as, so it simply
-# keeps deploying production and nothing breaks.
-#
-# GITHUB ONLY, for now: the staging workflow exists as a template under
-# app/.github/workflows/ and has no app/.gitea/workflows/ counterpart, so a Gitea
-# app has nothing to run a PR environment WITH. Provisioning the staging name and
-# database anyway would bill for a DNS record and a database no pipeline ever
-# touches, so the whole feature is off on that path until the workflow is ported.
-# needs_droplet, not just "not static": a CLI or a library has no environment to
-# stand up behind a pull request, and no droplet to stand it up on.
-wants_staging()   { [ "${ENABLE_STAGING:-true}" = true ] && needs_droplet && ! is_static && is_github; }
-staging_enabled() { [ -n "${STAGING_DOMAIN:-}" ]; }
-
-# Tenant mode: deploy onto a droplet another app already owns (--host, or
-# HOST_APP_DIR in the environment). is_tenant gates every step that would
-# otherwise provision host-owned infrastructure.
-#
-# Tenants are SQLite-only, deliberately. Sharing a droplet is a cost decision,
-# and the Postgres path's per-app cluster costs three times the droplet it would
-# be sharing; putting several apps in ONE cluster is a different feature (users,
-# grants and firewall rules per tenant) and not this one. Each SQLite tenant
-# keeps its own file on its own volume with its own Litestream prefix, so they
-# are isolated from each other without any of that.
-HOST_APP_DIR="${HOST_APP_DIR:-}"
-is_tenant() { [ -n "$HOST_APP_DIR" ]; }
-
 # Code-hosting + CI/CD provider selector. 'github' (default) drives every step
 # with the `gh` CLI and GitHub Actions, unchanged. 'gitea' talks to a
 # self-hosted Gitea instance's REST API instead (scripts/provider.sh, sourced
@@ -284,33 +218,9 @@ trap 'rc=$?; if [ "$rc" -ne 0 ]; then
 # per-run overrides silently impossible: the run above would provision against
 # whatever .env said and report success, having built the wrong thing. An
 # override that differs is announced rather than applied in silence.
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  _envtmp="$(mktemp)"
-  # Every KEY on a plain or `export `-prefixed assignment line.
-  for _k in $(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$SCRIPT_DIR/.env"); do
-    # ${!_k+x} is set only when the variable EXISTS in the environment, so an
-    # explicit empty value still counts as "the caller said so".
-    if [ -n "${!_k+x}" ]; then printf '%s=%q\n' "$_k" "${!_k}" >> "$_envtmp"; fi
-  done
-
-  set -a
-  # shellcheck disable=SC1091
-  . "$SCRIPT_DIR/.env"
-  set +a
-
-  # Re-apply what the caller set, and say so where the file disagreed. Still
-  # inside `set -a`'s effect for these names: they were exported while sourcing.
-  if [ -s "$_envtmp" ]; then
-    while IFS= read -r _line; do
-      _k="${_line%%=*}"
-      _was="${!_k}"
-      eval "export $_line"
-      [ "$_was" != "${!_k}" ] && warn "$_k: using '${!_k}' from the environment, not '$_was' from .env"
-    done < "$_envtmp"
-  fi
-  rm -f "$_envtmp"
-  unset _envtmp _k _line _was
-fi
+# shellcheck source=scripts/config.sh
+. "$SCRIPT_DIR/scripts/config.sh"
+load_config "$SCRIPT_DIR/.env" warn
 
 # The app-type + framework registry (APP_TYPE/FRAMEWORK resolution, the
 # capability predicates every droplet-free branch below is gated on, and the
@@ -337,92 +247,9 @@ fi
 # shellcheck source=scripts/claude-docs.sh
 . "$SCRIPT_DIR/scripts/claude-docs.sh"
 
-# Everything that DEPENDS on the resolved app type — which is only known after
-# main() has parsed the flags, hence a function rather than top-level lines.
-# Nothing above this point reads FRAMEWORK, DATABASE_BACKEND or REQUIRED_* at
-# load time; the is_* predicates only read them when called.
-resolve_app_config() {
-  # APP_TYPE first: it decides which frameworks are legal, and FRAMEWORK
-  # (possibly from .env) decides the type when no flag named one.
-  resolve_app_type
-
-  DATABASE_BACKEND="${DATABASE_BACKEND:-sqlite}"
-  # Sinatra runs on SQLite only (Sequel + Litestream); a static site has no data
-  # layer at all, and neither does anything droplet-free — a CLI and a library
-  # have nowhere to keep a database and nothing that would talk to one. All are
-  # FORCED rather than refused, because the common case is a shared .env carrying
-  # a DATABASE_BACKEND meant for some other project, and failing there would be
-  # obstructive. But an override that changes what gets provisioned is never
-  # silent: say so when the incoming value actually differed.
-  local requested_backend="${DATABASE_BACKEND}"
-  if is_sinatra;      then DATABASE_BACKEND="sqlite"; fi
-  if is_zola;         then DATABASE_BACKEND="none"; fi
-  if ! has_database;  then DATABASE_BACKEND="none"; fi
-  # Only 'postgres' is worth a warning: it is the one request whose silent
-  # downgrade would change what gets provisioned, billed and backed up. Ignoring
-  # a 'sqlite' on a static site provisions nothing either way, and a shared .env
-  # naming it is the normal case — warning there would be noise on every run.
-  if [ "$requested_backend" = "postgres" ] && [ "$DATABASE_BACKEND" != "postgres" ]; then
-    warn "$APP_TYPE/$FRAMEWORK forces DATABASE_BACKEND=$DATABASE_BACKEND — the requested managed Postgres cluster will NOT be provisioned"
-  fi
-
-  # PR staging environments, on by default for anything with a server-side
-  # runtime. Turning it off here removes the staging DNS record (and, on
-  # Postgres, the staging database) on the next apply; the workflow shipped with
-  # the app then finds no STAGING_DOMAIN variable and skips every job.
-  ENABLE_STAGING="${ENABLE_STAGING:-true}"
-  case "$ENABLE_STAGING" in
-    true|false) ;;
-    *) fail "ENABLE_STAGING must be 'true' or 'false' (got '$ENABLE_STAGING')" ;;
-  esac
-
-  # Staging has no Gitea workflow yet (see wants_staging). Silently dropping an
-  # explicit request for it would be the one case where the user is owed a word
-  # — but only where staging was ever on the table: a droplet-free app has no
-  # environment to stand up in the first place.
-  if [ "$ENABLE_STAGING" = true ] && needs_droplet && ! is_static && is_gitea; then
-    warn "GIT_PROVIDER=gitea has no staging workflow yet — no PR environment will be built, and no staging DNS name or database will be provisioned"
-  fi
-
-  # Local tooling, by capability rather than by name. A droplet-free app talks to
-  # the code host and nothing else, so it needs neither the DigitalOcean CLI nor
-  # Terraform nor an SSH client — and its scaffolds are pure bash, so it does not
-  # even need a local Elixir.
-  REQUIRED_BINS="git curl"
-  if needs_droplet; then REQUIRED_BINS="$REQUIRED_BINS terraform doctl ssh scp dig"; fi
-  # Framework-specific local tooling: Phoenix generates + prepares the app with
-  # `mix`; Sinatra scaffolds with bash and only needs `openssl` (fresh session
-  # secret) — the Ruby build itself happens in Docker/CI, not locally. Zola and
-  # the droplet-free frameworks add nothing: their scaffolds are written by hand
-  # and their builds run in CI.
-  if is_sinatra; then REQUIRED_BINS="$REQUIRED_BINS openssl"
-  elif is_phoenix; then REQUIRED_BINS="$REQUIRED_BINS mix"; fi
-  # gh drives the GitHub path end to end; the Gitea path talks REST over curl
-  # (already required) and leans on jq for safe JSON bodies + run-status parsing.
-  if is_github; then REQUIRED_BINS="$REQUIRED_BINS gh"
-  elif is_gitea; then REQUIRED_BINS="$REQUIRED_BINS jq"; fi
-
-  # Same rule for credentials: what is never contacted is never demanded. This
-  # is what lets `./bootstrap.sh --cli ~/src/tool` run on a machine that has
-  # never heard of DigitalOcean.
-  REQUIRED_ENV=""
-  if needs_droplet; then
-    REQUIRED_ENV="DIGITALOCEAN_ACCESS_TOKEN DNSIMPLE_TOKEN DNSIMPLE_ACCOUNT DNS_ZONE SSH_KEY_NAME SSH_PRIVATE_KEY SPACES_ACCESS_KEY_ID SPACES_SECRET_ACCESS_KEY"
-  fi
-  # GITEA_OWNER is deliberately NOT required: unset, the repo is created under
-  # whichever account GITEA_TOKEN authenticates as (see ci_auth_check) — the same
-  # implicit-current-user behavior gh already gives the GitHub path.
-  if is_gitea; then
-    REQUIRED_ENV="$REQUIRED_ENV GITEA_URL GITEA_TOKEN"
-    # The runner IP exists to be allow-listed in the droplet firewall. No
-    # droplet, no firewall, nothing to allow-list.
-    needs_droplet && REQUIRED_ENV="$REQUIRED_ENV GITEA_RUNNER_IP"
-  fi
-
-  # A droplet-free run has eight steps: it skips every provisioning step and
-  # replaces "poll until live" with "poll until CI concludes".
-  needs_droplet || TOTAL_STEPS=8
-}
+# shellcheck source=scripts/bootstrap/config.sh
+. "$SCRIPT_DIR/scripts/bootstrap/config.sh"
+HOST_APP_DIR="${HOST_APP_DIR:-}"
 
 # Terraform roots. The ones in THIS repo are templates: every app gets its own
 # copy under <app_dir>/infra/ (scripts/sync-infra.sh) and Terraform runs from
@@ -453,18 +280,6 @@ mkdir -p "$TF_PLUGIN_CACHE_DIR"
 # Checks run in order and fail fast, naming the FIRST gap (AC 6.1).
 preflight() {
   local b v val
-
-  case "$DATABASE_BACKEND" in
-    postgres|sqlite)
-      has_database \
-        || fail "DATABASE_BACKEND=$DATABASE_BACKEND is meaningless for a '$APP_TYPE' — it has no data layer and no host to keep one on" ;;
-    # 'none' is never selectable by hand: it is what FRAMEWORK=zola and every
-    # droplet-free type imply, and the coercion in resolve_app_config is the only
-    # thing that sets it.
-    none) is_zola || ! has_database \
-        || fail "DATABASE_BACKEND=none is only valid for FRAMEWORK=zola" ;;
-    *) fail "DATABASE_BACKEND must be 'postgres' or 'sqlite' (got '$DATABASE_BACKEND')" ;;
-  esac
 
   # Tenant mode: the host must be a real, already-bootstrapped app directory —
   # the tenant reads its Terraform state for the droplet's IP and firewall, so a
@@ -558,7 +373,9 @@ preflight() {
 provision() {
   local identity
   # A tenant skips the five host-only steps and runs three of its own.
-  is_tenant && TOTAL_STEPS=14
+  TOTAL_STEPS=16
+  if ! needs_droplet; then TOTAL_STEPS=8
+  elif is_tenant; then TOTAL_STEPS=14; fi
   log "transcript of this run: $LOG_FILE"
   step "preflight checks";                          preflight
   step "ensure app exists (generate if missing)";   ensure_app

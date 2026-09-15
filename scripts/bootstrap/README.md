@@ -4,6 +4,8 @@
 Source these modules to define operations; call the operations explicitly to
 perform work.
 
+- `config.sh`: resolve database/staging policy, validate it, and derive required
+  tools and credentials. Shared `.env` loading lives in `../config.sh`.
 - `app.sh`: generate application files, read identity, derive infrastructure
   names, prepare framework releases, and install deployment templates.
 - `infrastructure.sh`: apply host or tenant Terraform roots and read their
@@ -23,3 +25,9 @@ prepare files, seed CI, push, and confirm.
 Offline checks live in `test/`. Run `bash test/bootstrap-app.sh` to exercise file
 installation across both providers and all supported stack/backend combinations.
 Build-tool discovery is stubbed; no cloud services are contacted.
+
+Configuration is loaded before defaults are applied. Flags and interactive input
+then feed `resolve_app_config()`: app type/stack resolution, backend normalization,
+staging defaults, validation, and dependency derivation. Progress counts are owned
+by `provision()` and do not influence policy. `../config.sh` preserves caller
+assignment values, including empty strings, and reports overridden key names only.
