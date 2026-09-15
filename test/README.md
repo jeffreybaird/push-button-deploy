@@ -33,6 +33,7 @@ automatically. Fixtures and assertion helpers live in subdirectories.
 | `config.sh` | Caller precedence, explicit empty/multiline values, exports, redacted diagnostics, app policy and a real CLI preflight with mocked authentication. |
 | `deployment.sh` | Old runs cannot satisfy a new deployment; CI success precedes HTTPS; terminal failures and HTTPS timeout fail. |
 | `ci-trigger.sh` | Real local Git commits/pushes, no-change dispatch, already-running CI reuse, immediate run registration and failed pushes. |
+| `provider-contract.sh` | Provider dispatch, authentication, repo lifecycle, secret stdin, variable update/create, workflow dispatch, transport and Git argument forwarding. |
 | `provider-runs.sh` | GitHub query identity and empty results; Gitea response envelopes, commit filtering, ordering, status normalization and malformed responses. |
 | `swap.sh` | Both colors, first deployment, no supporting services, SQLite support services, failed candidates/configuration/support startup and missing containers. |
 | `bootstrap-app.sh` | Generated deployment artifacts across 18 stack/backend/provider combinations. |
