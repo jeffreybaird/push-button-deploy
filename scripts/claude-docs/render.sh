@@ -4,6 +4,14 @@ cd_render_file() { # source, destination, module token, app token, module value,
   local src="$1" dest="$2"
   mkdir -p "$(dirname "$dest")" || return
   cp "$src" "$dest" || return
+  # Translate template references before inserting application-specific names.
+  # Settings stay in the tool's discovery location; the executable lives in doc/.
+  case "$dest" in
+    *.md)
+      perl -pi -e 's/CLAUDE\.md/AGENTS.md/g; s/\.claude\//doc\//g; s/Claude Code reads this every session\./Project guidance for coding agents./g;' "$dest" || return ;;
+    */settings.json)
+      perl -pi -e 's{\.claude/cloud-setup\.sh}{doc/hooks/cloud-setup.sh}g;' "$dest" || return ;;
+  esac
   case "$dest" in
     *.md|*/cloud-setup.sh)
       # One pass prevents inserted values from being rewritten as tokens.
@@ -19,9 +27,9 @@ cd_render_file() { # source, destination, module token, app token, module value,
   if [ "${dest##*/}" = cloud-setup.sh ]; then chmod +x "$dest" || return; fi
 }
 
-cd_prune_index() { # generated CLAUDE.md
+cd_prune_index() { # generated AGENTS.md
   local module
   for module in ${CD_SKIP_MODULES:-}; do
-    BASE="$module" perl -ni -e 'print unless /^-\s+\x60\Q.claude\/$ENV{BASE}\E\x60/' "$1" || return
+    BASE="$module" perl -ni -e 'print unless /^-\s+\x60\Qdoc\/$ENV{BASE}\E\x60/' "$1" || return
   done
 }

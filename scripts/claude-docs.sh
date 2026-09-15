@@ -1,6 +1,6 @@
 # scripts/claude-docs.sh — the one Claude-docs injector.
 #
-# Copies a template root's CLAUDE.md + .claude/ (guidance modules, agents, a
+# Renders legacy CLAUDE.md + .claude/ templates as AGENTS.md + doc/ (modules, agents, a
 # SessionStart cloud-setup hook) into an app, rewriting name placeholders. It is
 # the single implementation behind:
 #   - bootstrap.sh's automatic injection for a freshly generated app,
@@ -12,9 +12,8 @@
 # hook variant. Core = every .claude/*.md not marked optional. No manifest =>
 # include everything, prompt for nothing.
 #
-# SELECTION is expressed as SKIP lists so the default (skip nothing) reproduces
-# the historical "copy it all" behavior exactly — the callers that don't want a
-# guided run get byte-identical output plus whatever the template now ships:
+# SELECTION uses SKIP lists: the default includes all template content in the
+# AGENTS.md + doc/ layout, with Claude hook registration in .claude/settings.json:
 #   CD_SKIP_MODULES  space-separated optional-module basenames to leave out
 #   CD_SKIP_AGENTS   space-separated agent basenames to leave out
 #   CD_HOOK          "" = plain settings.json; "format" = settings.format-hook.json
@@ -51,8 +50,8 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
   cd_validate_hook "$tdir"
 
   # Validate every destination before the first write. Never follow a link
-  # inside the generated docs tree into another file or directory.
-  for rel in .claude .claude/agents; do
+  # inside generated destination directories into another file or directory.
+  for rel in doc doc/agents doc/hooks .claude; do
     cd_validate_destination "$adir/$rel"
     if [ -e "$adir/$rel" ] && [ ! -d "$adir/$rel" ]; then
       fail "expected a directory: $adir/$rel"
@@ -67,6 +66,6 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
     cd_render_file "$(cd_source_file "$tdir" "$rel")" "$adir/$rel" \
       "$modtok" "$apptok" "$modval" "$appval" || return
   done < <(cd_selected_files "$tdir")
-  cd_prune_index "$adir/CLAUDE.md" || return
+  cd_prune_index "$adir/AGENTS.md" || return
   log "claude-docs: generated selected docs -> $adir, names rewritten to $modval/$appval"
 }

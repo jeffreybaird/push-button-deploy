@@ -29,7 +29,7 @@ there if you just want the pitch and a three-command quickstart.
 | Get a staging environment on every pull request | [Staging](staging.md) |
 | Put a second app on a droplet I already have | [Tenancy](tenancy.md) |
 | Use self-hosted Gitea instead of GitHub | [Gitea](gitea.md) |
-| Generate or tailor an app's CLAUDE.md / .claude docs | [Claude Code docs](claude-docs.md) |
+| Generate or tailor an app's AGENTS.md / doc/ docs | [Agent docs](claude-docs.md) |
 | Deploy a change, roll back, or tear down | [Operations](operations.md) |
 | Fix an error or answer a "why did it…" | [Troubleshooting](troubleshooting.md) |
 | Look up every command, flag, script and cost | [Reference](reference.md) |
@@ -47,7 +47,7 @@ there if you just want the pitch and a three-command quickstart.
 | [Staging](staging.md) | Per-PR staging environments — how they work and how to turn them off |
 | [Tenancy](tenancy.md) | Several apps on one droplet — host apps and tenants |
 | [Gitea](gitea.md) | Self-hosted Gitea as code host and CI engine |
-| [Claude Code docs](claude-docs.md) | Generating and tailoring an app's `CLAUDE.md` + `.claude/` |
+| [Agent docs](claude-docs.md) | Generating and tailoring an app's `AGENTS.md` + `doc/` |
 | [Operations](operations.md) | Day-2: deploy, watch, roll back, set app variables, recreate, add an app, tear down |
 | [Troubleshooting](troubleshooting.md) | Symptom → fix table and FAQ |
 | [Reference](reference.md) | Commands, flags, env vars, scripts, Terraform roots, costs, security |
