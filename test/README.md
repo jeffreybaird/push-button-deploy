@@ -36,6 +36,7 @@ automatically. Fixtures and assertion helpers live in subdirectories.
 | `provider-contract.sh` | Provider dispatch, authentication, repo lifecycle, secret stdin, variable update/create, workflow dispatch, transport and Git argument forwarding. |
 | `provider-failures.sh` | Error classification, origin preservation, variable deletion failures, paginated full-workflow matching and polling errors. |
 | `provider-runs.sh` | GitHub query identity and empty results; Gitea response envelopes, commit filtering, ordering, status normalization and malformed responses. |
+| `teardown.sh` | Host/tenant/repository-only plans, static registry exclusion, confirmation, failure ordering and override restoration. |
 | `swap.sh` | Both colors, first deployment, no supporting services, SQLite support services, failed candidates/configuration/support startup and missing containers. |
 | `bootstrap-app.sh` | Generated deployment artifacts across 18 stack/backend/provider combinations. |
 | `workflow-scripts.sh` | Literal env serialization, private permissions, staging backup omission, remote destinations and shared-edge preservation. |
