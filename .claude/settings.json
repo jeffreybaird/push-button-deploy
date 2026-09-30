@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/workflow_audit.py\" --root \"$CLAUDE_PROJECT_DIR\" --policy \"$CLAUDE_PROJECT_DIR/.claude/hooks/policy.json\"",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/workflow_audit.py\" --root \"$CLAUDE_PROJECT_DIR\" --policy \"$CLAUDE_PROJECT_DIR/.claude/hooks/policy.json\"",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/workflow_guard.py\" --platform claude --root \"$CLAUDE_PROJECT_DIR\" --policy \"$CLAUDE_PROJECT_DIR/.claude/hooks/policy.json\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|NotebookEdit"
+      },
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/workflow_audit.py\" --root \"$CLAUDE_PROJECT_DIR\" --policy \"$CLAUDE_PROJECT_DIR/.claude/hooks/policy.json\"",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ]
+  }
+}
