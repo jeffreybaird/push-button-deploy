@@ -9,7 +9,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Bash"
+        "matcher": "Bash|Write|Edit|NotebookEdit"
       }
     ],
     "PostToolUseFailure": [
@@ -21,7 +21,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Bash"
+        "matcher": "Bash|Write|Edit|NotebookEdit"
       }
     ],
     "PreToolUse": [
@@ -43,7 +43,7 @@
             "type": "command"
           }
         ],
-        "matcher": "Bash"
+        "matcher": "Bash|Write|Edit|NotebookEdit"
       }
     ]
   }

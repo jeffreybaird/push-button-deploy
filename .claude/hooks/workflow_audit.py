@@ -1,4 +1,4 @@
-"""Audit log for Bash: record which role changed which files. Never blocks or grants."""
+"""Audit log for Bash: record source and test changes observed during each call. Never blocks or grants."""
 import argparse
 from datetime import datetime, timezone
 import difflib
@@ -14,7 +14,9 @@ LOG = '.agent-audit/bash.jsonl'
 EXCLUDED_PREFIX = '.agent-audit/'
 MAX_DIFF_LINES = 200
 STALE_SECONDS = 24 * 60 * 60
+EDIT_SECONDS = 60
 POST_EVENTS = {'PostToolUse': 'success', 'PostToolUseFailure': 'failure'}
+TRACKED_TOOLS = ('Bash', 'Write', 'Edit', 'NotebookEdit')
 
 _spec = importlib.util.spec_from_file_location('_audit_workflow_guard', Path(__file__).resolve().parent / 'workflow_guard.py')
 guard = importlib.util.module_from_spec(_spec)
@@ -31,6 +33,11 @@ def git(root, *args, stdin=None, check=True):
 def head_of(root):
     result = git(root, 'rev-parse', '--verify', '-q', 'HEAD', check=False)
     return result.stdout.decode().strip() or None
+
+
+def scoped(root, paths, policy):
+    """Keep source and test paths only; other files are never read or stored."""
+    return {p for p in paths if guard.classification(root / p, root, policy)}
 
 
 def dirty_paths(root):
@@ -82,7 +89,7 @@ def paths_changed_between(root, before, after):
 def pending_dir(root):
     raw = git(root, 'rev-parse', '--git-path', 'agent-audit').stdout.decode().strip()
     path = Path(raw) if Path(raw).is_absolute() else root / raw
-    path.mkdir(parents=True, exist_ok=True)
+    (path / 'done').mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -94,17 +101,43 @@ def pending_name(tool_use_id):
 
 def discard_stale_snapshots(folder):
     cutoff = time.time() - STALE_SECONDS
-    for snapshot in folder.glob('*.json'):
+    for snapshot in [*folder.glob('*.json'), *(folder / 'done').glob('*.json')]:
         if snapshot.stat().st_mtime < cutoff:
             snapshot.unlink(missing_ok=True)
 
 
-def record_snapshot(root, event):
+def record_start(root, event, policy):
+    """Mark a call as running; Bash calls also snapshot dirty source and test files."""
     folder = pending_dir(root)
     discard_stale_snapshots(folder)
-    snapshot = {'tool_use_id': event['tool_use_id'], 'head': head_of(root),
-                'files': stored_blobs(root, dirty_paths(root))}
-    (folder / pending_name(event['tool_use_id'])).write_text(json.dumps(snapshot))
+    marker = {'tool_use_id': event['tool_use_id'], 'tool': event['tool_name'], 'started': time.time()}
+    if event['tool_name'] == 'Bash':
+        marker.update(head=head_of(root), files=stored_blobs(root, scoped(root, dirty_paths(root), policy)))
+    (folder / pending_name(event['tool_use_id'])).write_text(json.dumps(marker))
+
+
+def still_running(marker, now):
+    """Edits that never report back (a denied Write) stop counting after EDIT_SECONDS."""
+    return marker.get('tool') == 'Bash' or now - marker['started'] < EDIT_SECONDS
+
+
+def overlapping_calls(folder, own_id, started):
+    """Calls running at any moment between this call's start and now."""
+    now, found = time.time(), set()
+    for path in folder.glob('*.json'):
+        marker = json.loads(path.read_text())
+        if marker['tool_use_id'] != own_id and still_running(marker, now):
+            found.add(marker['tool_use_id'])
+    for path in (folder / 'done').glob('*.json'):
+        marker = json.loads(path.read_text())
+        if marker['tool_use_id'] != own_id and marker['ended'] >= started:
+            found.add(marker['tool_use_id'])
+    return sorted(found)
+
+
+def record_finish(folder, snapshot_path, marker):
+    (folder / 'done' / snapshot_path.name).write_text(json.dumps({**marker, 'ended': time.time()}))
+    snapshot_path.unlink(missing_ok=True)
 
 
 def text_of_blob(root, blob):
@@ -127,14 +160,14 @@ def describe_diff(root, path, before, change):
 
 
 def owner_accepts(category, role):
-    return category is None or role == ('spec_writer' if category == 'test' else 'implementer')
+    return role == ('spec_writer' if category == 'test' else 'implementer')
 
 
 def file_changes(root, snapshot, policy, role):
     head_after = head_of(root)
     candidates = set(snapshot['files']) | dirty_paths(root) | paths_changed_between(root, snapshot['head'], head_after)
     changes = []
-    for path in sorted(candidates):
+    for path in sorted(scoped(root, candidates, policy)):
         before = snapshot['files'][path] if path in snapshot['files'] else blob_at(root, snapshot['head'], path)
         after = current_blob(root, path)
         if before == after:
@@ -142,8 +175,7 @@ def file_changes(root, snapshot, policy, role):
         change = 'added' if before is None else 'deleted' if after is None else 'modified'
         category = guard.classification(root / path, root, policy)
         record = {'path': path, 'change': change, 'class': category, 'owner_ok': owner_accepts(category, role)}
-        if category:
-            record.update(describe_diff(root, path, before, change))
+        record.update(describe_diff(root, path, before, change))
         changes.append(record)
     return head_after, changes
 
@@ -160,19 +192,23 @@ def record_outcome(root, event, policy):
     if not snapshot_path.exists():
         return
     snapshot = json.loads(snapshot_path.read_text())
+    if snapshot.get('tool') != 'Bash':
+        record_finish(folder, snapshot_path, snapshot)
+        return
     role = role_label(event)
     head_after, changes = file_changes(root, snapshot, policy, role)
-    snapshot_path.unlink(missing_ok=True)
+    overlapping = overlapping_calls(folder, snapshot['tool_use_id'], snapshot['started'])
+    record_finish(folder, snapshot_path, snapshot)
     if not changes:
         return
-    overlapping = sorted(p.stem for p in folder.glob('*.json'))
     entry = {'timestamp': datetime.now(timezone.utc).isoformat(timespec='seconds'),
              'session_id': event.get('session_id'), 'tool_use_id': event['tool_use_id'],
              'agent_id': event.get('agent_id'), 'agent_type': event.get('agent_type'), 'role': role,
              'command': (event.get('tool_input') or {}).get('command'),
              'outcome': POST_EVENTS[event['hook_event_name']],
              'head_before': snapshot['head'], 'head_after': head_after,
-             'overlapping_tool_use_ids': overlapping, 'changes': changes,
+             'overlapping_tool_use_ids': overlapping,
+             'attribution': 'ambiguous' if overlapping else 'exclusive', 'changes': changes,
              'violations': [c['path'] for c in changes if not c['owner_ok']]}
     log = root / LOG
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +217,7 @@ def record_outcome(root, event, policy):
 
 
 def handle(event, root, policy):
-    if not isinstance(event, dict) or event.get('tool_name') != 'Bash':
+    if not isinstance(event, dict) or event.get('tool_name') not in TRACKED_TOOLS:
         return
     name = event.get('hook_event_name')
     if name not in ('PreToolUse', *POST_EVENTS):
@@ -189,10 +225,11 @@ def handle(event, root, policy):
     root = guard.repository_root(root)
     if git(root, 'rev-parse', '--show-toplevel', check=False).returncode:
         return
+    policy = guard.validate_policy(policy)
     if name == 'PreToolUse':
-        record_snapshot(root, event)
+        record_start(root, event, policy)
     else:
-        record_outcome(root, event, guard.validate_policy(policy))
+        record_outcome(root, event, policy)
 
 
 def main():
