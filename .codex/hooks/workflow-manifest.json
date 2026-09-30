@@ -1,0 +1,27 @@
+{
+  "sha256": {
+    ".claude/agents/workflow-implementer.md": "f3c095220f2739baff2b753c780be8425564c34fd64668a3735ca9f8a85d3eea",
+    ".claude/agents/workflow-orchestrator.md": "3a42c158009bcf941da1f98c034f0e8de71e81d40b81307ccdb7b2766c373e02",
+    ".claude/agents/workflow-reviewer.md": "31f2820b89952f5bcc4fa95c10e176d8799ccee0b388c3b9091fa28a5409d655",
+    ".claude/agents/workflow-runner.md": "4222db9445213a2904f98bfbc05adda1cd62ae8a1b32c0857cee6d948a8eac8f",
+    ".claude/agents/workflow-spec-writer.md": "18fc29290a20f7226c7802e71a4a2ae1d50baae4569a4562d91cb26556e14e69",
+    ".claude/hooks/policy.json": "ffec8b588ae893fca07dbaa62bb382cb5510d657fddc32bad187a6576e09acf5",
+    ".claude/hooks/workflow_audit.py": "9bff980ee0d1b8fb7d78010edd7135286ce602bfa2f7e3c344fc064709b82a9b",
+    ".claude/hooks/workflow_guard.py": "65994a7959d9cfd06a7ba5114706fcae8316914cd8b1e950aafd529b1a747807",
+    ".claude/settings.json": "613532c60084045b73bd03229a2cba10eb7bf28988029c4f26e0f76d07ac8cd5",
+    ".codex/agents/workflow_implementer.toml": "c1408070071b35e6336c3a6e679e313066cc948ecb1bd17c3bfafebe9bc37081",
+    ".codex/agents/workflow_orchestrator.toml": "a54b1cd4555ef1c141b8bf7a6228a41b56c8e3ea42a7081e1fda6d8a568aa561",
+    ".codex/agents/workflow_reviewer.toml": "db019ae62379c473bb03a44943da0a22fcaceb3647628f8a359112a6d45c4576",
+    ".codex/agents/workflow_runner.toml": "33dc52779943238a061732b82a33ef95fcd0d96c7e7a6935768b4a4d19a244b0",
+    ".codex/agents/workflow_spec_writer.toml": "7a50fb0268225412edc602479d5fe64fe3cfb3aa156c991cf13030be62917b65",
+    ".codex/config.toml": "48ad6a21fc22f83dee228c346601ad47486da4062d40069853f38b55ffdac5b7",
+    ".codex/hooks.json": "7f294a208af7b4b3770d06ad1c8cd88c23dee926af87a5b78a1ec5259fa19635",
+    ".codex/hooks/policy.json": "ffec8b588ae893fca07dbaa62bb382cb5510d657fddc32bad187a6576e09acf5",
+    ".codex/hooks/workflow_guard.py": "65994a7959d9cfd06a7ba5114706fcae8316914cd8b1e950aafd529b1a747807",
+    ".docs/agent-workflow.md": "61cfdd0225813776d2aa851fede00a190594c3690737026018a6a5bea353cfd3",
+    ".gitattributes": "2292927f73ce12c647a5f03fc0fc1b5847709bc1dfd5ec1493bbde4dddd6f326",
+    "AGENTS.md": "a607e0cdb5a05789b1b821d5d86df0dc3ee374c09f4a4d4822fa192e371886db",
+    "CLAUDE.md": "a607e0cdb5a05789b1b821d5d86df0dc3ee374c09f4a4d4822fa192e371886db"
+  },
+  "version": "2.0.0"
+}

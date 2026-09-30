@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B /Users/jeffreybaird/src/push-button-deploy/.codex/hooks/workflow_guard.py --platform codex --root /Users/jeffreybaird/src/push-button-deploy --policy /Users/jeffreybaird/src/push-button-deploy/.codex/hooks/policy.json",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": ".*"
+      }
+    ]
+  }
+}
