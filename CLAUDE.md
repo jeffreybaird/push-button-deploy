@@ -1,4 +1,15 @@
+# Repository instructions
 
+Before working in this repository, read and follow
+[.docs/project-guidance.md](.docs/project-guidance.md), the shared project rules
+for both Codex and Claude, and its relevant supporting documents. Keep project
+guidance there; keep this entry point equivalent to the other platform's file.
+
+Claude Code does not load markdown links automatically, so the guidance is
+imported here. The imports are this file's only difference from `AGENTS.md`.
+
+@.docs/project-guidance.md
+@.docs/agent-workflow.md
 
 <!-- BEGIN MANAGED AGENT WORKFLOW -->
 Shared native agent workflow version 2.0.0 applies to every behavior

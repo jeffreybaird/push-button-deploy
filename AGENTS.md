@@ -1,4 +1,9 @@
+# Repository instructions
 
+Before working in this repository, read and follow
+[.docs/project-guidance.md](.docs/project-guidance.md), the shared project rules
+for both Codex and Claude, and its relevant supporting documents. Keep project
+guidance there; keep this entry point equivalent to the other platform's file.
 
 <!-- BEGIN MANAGED AGENT WORKFLOW -->
 Shared native agent workflow version 2.0.0 applies to every behavior

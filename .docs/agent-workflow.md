@@ -118,7 +118,7 @@ explicitly accepted limitation. There is no separate Git delivery prohibition.
 
 ## Bash audit log
 
-Claude Bash calls are audited, not blocked. Only source and test files, as the
+Claude and Codex Bash calls are audited, not blocked. Only source and test files, as the
 policy classifies them, are examined. Before each call the audit hook snapshots
 dirty source and test files; afterwards it compares. When a source or test file
 changed, it appends one JSON line to `.agent-audit/bash.jsonl` with the command,
@@ -126,24 +126,42 @@ session, agent id, agent type, role (`main` for the parent session), outcome,
 HEAD before and after, each changed source or test path with a unified diff
 capped at 200 lines, and `violations` for changes the role does not own. Other
 files are never read, stored or listed, and calls that change only them are not
-logged. Ignored files are not audited.
+logged. Ignored files are not audited. Codex entries include `platform: codex`;
+existing Claude entries retain their format. Codex before-call context preserves
+the command and agent identity when a completion event omits those fields.
+
+Claude uses PreToolUse, PostToolUse and PostToolUseFailure. Codex uses only
+PreToolUse and PostToolUse; a reported integer exit status determines success
+or failure, otherwise outcome is `unknown`. No completion event means no
+completed audit entry. Audit hooks run synchronously and return an empty object;
+they never approve, deny or alter a call, and audit failures do not stop work.
 
 The command is recorded verbatim, so a secret typed into a command that also
 changes a source or test file enters the log. Keep secrets out of commands.
 Snapshots write the contents of dirty source and test files to the local Git
 object store as unreferenced blobs; `git gc` prunes them and they are never
 pushed. Pending markers live under `.git/agent-audit/`.
+Codex pending markers temporarily store raw commands and agent identity even for
+calls that change only noncode files or no files. They do not store other tool
+arguments. Completion replaces them with timing-only markers; interrupted calls
+can leave command context behind. Stale markers are removed only when a later
+tracked call starts after they are 24 hours old, not by a background timer.
+Claude pending markers do not add command or identity storage.
 
 An entry records changes observed while the command ran, not proof of who made
-them. Write, Edit and NotebookEdit calls are tracked for timing only. Every
-call that ran at any moment during the command, finished or not, is listed in
+them. Claude Write, Edit and NotebookEdit and Codex apply_patch calls are tracked
+for timing only. Every tracked call that ran at any moment during the command,
+finished or not, is listed in
 `overlapping_tool_use_ids`, and `attribution` is `ambiguous` when that list is
 not empty, otherwise `exclusive`. An edit that never reports back, such as one
 the guard denied, stops counting after 60 seconds. Treat ambiguous violations
 as leads to check against the other calls, not findings.
 
 Commit the log with the work. `.gitattributes` uses union merge for it. Reviewers
-check `violations` before accepting. Codex shell calls are not audited.
+check `violations` before accepting. These registrations cover native Bash
+events, not arbitrary MCP commands or external processes. CLI and desktop audit
+activation must each be validated separately; installed files are not evidence
+that hooks are trusted or running.
 
 ## Platform setup and activation
 
