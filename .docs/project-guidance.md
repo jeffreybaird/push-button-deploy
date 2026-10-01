@@ -19,6 +19,9 @@ directory; its project rules apply to both platforms. Native tool names, model
 choices, slash commands, and hook settings remain platform-specific: use the
 documented procedure with your platform's tools, not another platform's commands.
 
+Before committing, follow the correction and security-review requirements in
+[the shared agent workflow](agent-workflow.md#precommit-corrections).
+
 # Project rules
 
 Read `README.md` and the relevant `docs/` before changing bootstrap or deployment

@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"$(git rev-parse --show-toplevel)/.codex/hooks/workflow_audit.py\" --platform codex --root \"$(git rev-parse --show-toplevel)\" --policy \"$(git rev-parse --show-toplevel)/.codex/hooks/policy.json\"",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "^(Bash|apply_patch)$"
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -10,6 +22,16 @@
           }
         ],
         "matcher": ".*"
+      },
+      {
+        "hooks": [
+          {
+            "command": "python3 -B \"$(git rev-parse --show-toplevel)/.codex/hooks/workflow_audit.py\" --platform codex --root \"$(git rev-parse --show-toplevel)\" --policy \"$(git rev-parse --show-toplevel)/.codex/hooks/policy.json\"",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "^(Bash|apply_patch)$"
       }
     ]
   }

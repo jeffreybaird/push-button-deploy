@@ -17,6 +17,41 @@ an implementation defect. Changes to expected behavior require a test-writer
 revision and renewed reviewer acceptance. New regression tests are permitted.
 Record hashes of accepted tests before implementation and compare afterward.
 
+## Security advisory review
+
+Every agent review must check and explicitly report security advisories, including
+pre-existing findings unrelated to the current diff. Use the project's dependency
+security audit with current advisory data where available; record the command,
+result, and any unavailable audit or stale data rather than claiming a clean scan.
+For each finding, report the advisory identifier, affected dependency and installed
+version, patched versions, and known exposure conditions or uncertainty.
+
+Route findings to the implementer. Apply available compatible security upgrades
+and rerun the relevant tests and security audit. Before an upgrade that requires
+significant application changes (such as broad API rewrites, data migrations, or
+substantial compatibility work), explain the required changes and obtain explicit
+user permission. If no compatible fix is available, report the remaining advisory
+and options. Do not suppress advisories, weaken checks, or silently accept the risk.
+
+## Precommit corrections
+
+For Elixir projects, run `mix format --force` before the remaining precommit
+checks. For Ruby projects using RuboCop, run `bundle exec rubocop --autocorrect`
+first, then recheck the corrected result. Correctable offenses are not a reason
+to stop before attempting safe autocorrection; unresolved lint offenses block the
+commit. Do not use `--autocorrect-all`, disable cops, or weaken lint rules to pass.
+Other required test, audit, and verification failures still block completion.
+CI may retain read-only formatting and lint checks.
+
+Formatters and autocorrectors can edit both source and tests. Preserve role
+ownership: the implementer corrects source; the spec writer corrects tests.
+Partition correction commands by owned paths where needed. The reviewer must
+verify that test corrections preserve the accepted contract; refresh test hashes
+only after that review, then have the runner rerun the relevant checks. A changed
+hash is not permission to weaken an assertion or change expected behavior.
+The runner uses equivalent read-only checks rather than invoking a precommit
+alias that performs corrections; source and test owners complete corrections first.
+
 ## Scope and roles
 
 - Spec writer owns edits to matched tests and test fixtures.
