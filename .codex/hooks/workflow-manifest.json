@@ -1,4 +1,8 @@
 {
+  "installer": {
+    "source_commit": "06df0aa54732c9f7d9d99b3c5b82fa596b52eab0",
+    "version": "0.2.0"
+  },
   "sha256": {
     ".claude/agents/workflow-implementer.md": "9c33b96bf9455afa108765a1f9d350bfd46c0788d5e2e861be1034d1e609d38d",
     ".claude/agents/workflow-orchestrator.md": "3a42c158009bcf941da1f98c034f0e8de71e81d40b81307ccdb7b2766c373e02",
