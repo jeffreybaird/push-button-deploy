@@ -33,6 +33,21 @@ substantial compatibility work), explain the required changes and obtain explici
 user permission. If no compatible fix is available, report the remaining advisory
 and options. Do not suppress advisories, weaken checks, or silently accept the risk.
 
+## Committing
+
+Make small, focused, atomic commits. Each commit has one coherent purpose and
+contains the smallest complete logical next step that leaves the project in a
+working state. It must be independently reviewable and reversible. Stage only
+the files and changes relevant to that purpose; preserve unrelated work.
+Commit each complete logical step rather than waiting to combine several steps
+into one large feature commit.
+
+Tests must be green before every commit, and all required project checks still
+apply. Keep the TDD red phase local until the accepted tests and the implementation
+needed to satisfy them pass together. Do not commit failing tests, incomplete
+implementation or WIP. Do not bundle unrelated work into one commit or split a
+logical change into commits that leave broken intermediate states.
+
 ## Precommit corrections
 
 For Elixir projects, run `mix format --force` before the remaining precommit
