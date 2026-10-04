@@ -8,7 +8,7 @@ One command takes you from an **empty directory** to a **freshly generated Phoen
 # ==> LIVE: https://myapp.example.com
 ```
 
-If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. If it already contains an app (a `mix.exs` for Phoenix, a `Gemfile` for Sinatra, a `config.toml` for Zola), that app is used as-is — so you can point it at output from your own generator instead.
+If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. An existing app with the selected framework's marker (`mix.exs`, `Gemfile`, or `config.toml`) skips generation. Bootstrap still prepares release files, installs deployment templates, and adopts agent docs if no lifecycle manifest exists. Review and commit local work first: bootstrap stages all app changes when committing the pipeline.
 
 **Not everything worth building is a website.** `--cli` and `--no-droplet` build a command-line
 program or a reusable package instead: same repo creation, same pipeline wiring, same one
@@ -33,13 +33,13 @@ mytool --format json hello there    # not FORMAT=json ./mytool.sh hello there
 |---|---|
 | Compute | One Ubuntu droplet running Docker Compose — which can host **several apps** (see [Tenancy](docs/tenancy.md)) |
 | TLS | Caddy with automatic Let's Encrypt issuance + renewal |
-| Database | DigitalOcean Managed Postgres, private-VPC only, TLS **verified** against the cluster CA (`verify_peer`) — or SQLite (see [Databases](docs/databases.md)) |
+| Database | SQLite by default, replicated to Spaces; Phoenix can instead use managed Postgres with private-VPC access and verified TLS. Zola has no database. See [Databases](docs/databases.md). |
 | DNS | A record at DNSimple pointing at a reserved IP that survives droplet recreation |
 | Images | Built on amd64 CI runners (GitHub-hosted, or your own for Gitea — see [Gitea](docs/gitea.md)), pushed to DO Container Registry, SHA-pinned |
-| Deploys | Every push to `main`: test (gate) → build → migrate (gated) → health-checked blue/green swap (zero downtime) |
-| Staging | Every PR against `main`: a full environment on the same droplet at `<app>-stg.<zone>`, destroyed when the PR closes (see [Staging](docs/staging.md)) |
-| Tests | `mix test` against a Postgres 17 service container; red tests block the build and deploy |
-| Rollback | Pins a prior image, no rebuild — `gh workflow run rollback.yml -f tag=<previous sha>` (GitHub) or the Actions tab (Gitea) |
+| Deploys | Dynamic services: tests → image build → migrations → health-checked blue/green swap. Zola builds and publishes files by symlink. CLI/library apps run build/test CI. |
+| Staging | GitHub dynamic services share one PR slot per app at `<app>-stg.<zone>`; closing the owning PR removes it. See [Staging](docs/staging.md). |
+| Tests | Phoenix: `mix test` using the app's configured adapter (CI also starts Postgres 17); Sinatra: RSpec; Zola: build gate. CLI/library gates vary by stack. |
+| Rollback | Dynamic services repin an existing image; Zola selects a retained release. `gh workflow run rollback.yml -f tag=<previous-sha>` or the Gitea Actions tab. No database rollback. |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
 | Agent docs | Every generated app ships managed Codex and Claude guidance, workflow roles, and hooks; `agent-docs.sh` handles future updates — see [Agent docs](docs/claude-docs.md) |
 | Terraform state | Versioned DO Spaces bucket (S3-compatible backend) |
@@ -50,6 +50,9 @@ compute/data lifecycle isolation are explained in [Concepts](docs/concepts.md).
 
 ## Get started
 
+Use a checkout of this repository. Homebrew packaging is being developed
+separately; this branch does not yet provide a `pbd` executable or formula.
+
 1. Install the tools and set your credentials — [Prerequisites](docs/prerequisites.md).
 2. Follow the [Quickstart](docs/quickstart.md): empty directory to live HTTPS, step by step.
 
@@ -58,6 +61,17 @@ compute/data lifecycle isolation are explained in [Concepts](docs/concepts.md).
 ./bootstrap.sh ~/src/myapp           # go
 ./bootstrap.sh --interactive         # or be prompted for every choice, then deploy
 ```
+
+After generation, manage shared agent guidance independently of deployment:
+
+```bash
+./agent-docs.sh check ~/src/myapp
+./agent-docs.sh diff ~/src/myapp
+./agent-docs.sh update ~/src/myapp
+```
+
+Keep app-specific rules in `.docs/project-guidance.md`. See [Agent docs](docs/claude-docs.md)
+for configuration, drift handling, and the preserved legacy frontend.
 
 ## Documentation
 

@@ -7,7 +7,8 @@ perform work.
 - `config.sh`: resolve database/staging policy, validate it, and derive required
   tools and credentials. Shared `.env` loading lives in `../config.sh`.
 - `app.sh`: generate application files, read identity, derive infrastructure
-  names, prepare framework releases, and install deployment templates.
+  names, prepare framework releases, install deployment templates, and adopt
+  managed agent docs when an app has no lifecycle manifest.
 - `infrastructure.sh`: apply host or tenant Terraform roots and read their
   outputs. Shared state-bucket operations live in `../tfstate.sh`.
 - `repository.sh`: create the repository and configure CI secrets/variables
@@ -25,6 +26,12 @@ prepare files, seed CI, push, and confirm.
 Offline checks live in `test/`. Run `bash test/bootstrap-app.sh` to exercise file
 installation across both providers and all supported stack/backend combinations.
 Build-tool discovery is stubbed; no cloud services are contacted.
+
+Existing apps skip scaffolding, not preparation. `prepare_app` refreshes selected
+deployment templates and installs agent docs only when their manifest is absent.
+Use `agent-docs.sh` for updates to already-managed guidance; Terraform files are
+seeded separately and preserved on reruns. `commit_push` stages all app changes,
+so callers should commit unrelated work before invoking a full bootstrap.
 
 Configuration is loaded before defaults are applied. Flags and interactive input
 then feed `resolve_app_config()`: app type/stack resolution, backend normalization,

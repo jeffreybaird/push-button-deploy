@@ -581,8 +581,11 @@ end
 
 ## 9. CI Gates
 
-All must pass before merge/deploy. Run the fast suite locally before every
-commit.
+The generated workflow runs `bundle exec rspec`. Browser drivers, WebMock/VCR,
+RuboCop, bundler-audit, ERB lint, and separate browser CI jobs below are additions
+to configure; the starter Gemfile does not include all of them. Once adopted,
+require the applicable checks before merge/deploy. Run the fast suite locally
+before every commit.
 
 ```bash
 bundle exec rspec --tag ~js               # fast: unit + request + rack-test feature specs

@@ -13,8 +13,10 @@ Phoenix ships with esbuild, which handles TypeScript natively — no webpack, no
 babel, no additional config. Files are named `.ts` and esbuild strips types and
 bundles them.
 
-A `tsconfig.json` exists in `assets/` for editor support and CI type checking.
-esbuild does **not** type-check — `tsc --noEmit` runs as a separate CI step.
+When adopting TypeScript, add `assets/tsconfig.json` for editor support and
+type checking, and add `tsc --noEmit` to CI. Bootstrap does not create this file,
+convert `app.js` to `app.ts`, or add a type-checking job. esbuild does **not**
+type-check. The layout and configuration below are examples to adopt.
 
 ---
 

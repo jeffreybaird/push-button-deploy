@@ -2,7 +2,8 @@
 
 One command takes you from an empty directory to a running app — a web service on
 its own HTTPS droplet, or a command-line program / library built and tested by
-CI — with a pipeline that deploys every push to `main` from then on.
+CI. Services deploy pushes to `main`; CLI/library pipelines build and test them.
+All app types receive managed agent guidance with a separate update lifecycle.
 
 This is the full guide. The [README](../README.md) is the short overview; start
 there if you just want the pitch and a three-command quickstart.
@@ -51,6 +52,21 @@ there if you just want the pitch and a three-command quickstart.
 | [Operations](operations.md) | Day-2: deploy, watch, roll back, set app variables, recreate, add an app, tear down |
 | [Troubleshooting](troubleshooting.md) | Symptom → fix table and FAQ |
 | [Reference](reference.md) | Commands, flags, env vars, scripts, Terraform roots, costs, security |
+
+### Implementation and maintenance
+
+- [Repository tests](../test/README.md) — offline coverage and its limits.
+- [Bootstrap modules](../scripts/bootstrap/README.md), [provider adapters](../scripts/providers/README.md),
+  [deployment helpers](../deploy/ci/README.md), [teardown](../scripts/teardown/README.md),
+  and [Terraform backends](../scripts/terraform-backend.md).
+- [Shared workflow maintenance](../scripts/agent-workflow/MAINTENANCE.md) — releases
+  and the registered-repository compatibility CLI.
+- [Migration evidence](agent-workflow-migration.md) and [security review](agent-workflow-security-review.md)
+  — dated records, not live status monitors.
+
+`DIRECTIONS.md` and archived version-one test contracts are historical. Generated
+app guidance under `app-template*/` contains architectural patterns and examples;
+those examples do not mean bootstrap has implemented every feature described.
 
 ---
 

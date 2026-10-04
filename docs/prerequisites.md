@@ -2,27 +2,31 @@
 
 [← Docs index](index.md) · push-button-deploy
 
-Everything you install and set before the first `./bootstrap.sh` — tools, accounts, credentials, and the full `.env` reference — plus how `--check` verifies it.
+Tools, accounts, credentials, and bootstrap configuration, plus how `--check` verifies readiness. `.env.example` is the starting configuration; framework generator options and Gitea-host settings are described separately below.
 
 ## Tools
 
-These are what a **service** (the default app type) needs. `--check` verifies
-every one and exits naming the first that is missing.
+These are what a **service** (the default app type) needs. `--check` checks the
+selected path's required binaries, Python version, credentials, and configuration;
+Terraform enforces its own minimum version during initialization.
 
 | Tool | Why | Install (macOS) |
 |---|---|---|
 | `git` | repo + pushes | xcode-select / brew |
 | `python3` >= 3.11 | shared agent docs and workflow generation/updates | `brew install python` |
-| `terraform` >= 1.6 | provisioning | `brew install terraform` |
+| `terraform` >= 1.6 | provisioning | `brew tap hashicorp/tap`, then `brew install hashicorp/tap/terraform` |
 | `doctl` | DO registry + firewall ops | `brew install doctl` |
 | `gh` | **GitHub only** (default) — repo creation, secrets, run status | `brew install gh` |
-| `jq` | **Gitea only** (`GIT_PROVIDER=gitea`) — safe JSON bodies + run-status parsing against the Gitea REST API | `brew install jq` |
+| `jq` | every service: Terraform backend metadata; also all Gitea runs for API JSON | `brew install jq` |
 | Elixir + `mix` | **Phoenix only** — app generation, deps, secret generation | `brew install elixir` |
 | `phx_new` archive | **Phoenix only** — generating the app (needed when the target dir is empty) | `mix archive.install hex phx_new` |
 | `openssl` | **Sinatra only** — session-secret generation (the Ruby build runs in Docker/CI, so no local Ruby is required) | preinstalled on macOS |
 | `curl`, `ssh`, `scp`, `dig` | plumbing + diagnostics | preinstalled on macOS |
 
 Docker is **not** required locally — images build in CI.
+
+Use a maintained Python patch release. Bash and standard Unix tools are assumed;
+Phoenix injection and the legacy guided docs frontend also use Perl for rendering.
 
 ### Droplet-free runs need far less
 
@@ -37,7 +41,8 @@ them.
 
 ## Accounts and credentials
 
-One-time setup, needed only for a **service**.
+DigitalOcean and DNSimple setup is for services. Code-host authentication is
+required for services, CLIs, and libraries.
 
 1. **DigitalOcean**
    - An API token with write access: *API → Tokens → Generate New Token*.
@@ -62,8 +67,9 @@ One-time setup, needed only for a **service**.
 ## Environment variables
 
 The easiest way: copy `.env.example` to `.env` next to `bootstrap.sh` and fill
-it in. The script sources it automatically (values in the file override the
-calling shell). It is gitignored; still, `chmod 600 .env`.
+it in. Caller-supplied assignment values override the file, including explicit
+empty strings; command-line choices are resolved afterwards. The file is trusted
+Bash, not a passive dotenv parser. It is gitignored; still, `chmod 600 .env`.
 
 ```bash
 cp .env.example .env && chmod 600 .env
@@ -115,7 +121,7 @@ export SPACES_SECRET_ACCESS_KEY="..."
 | `DOCR_REGISTRY` | no | Registry name if one must be created (`PROJECT_NAME`). |
 | `STATE_BUCKET` | no | Spaces bucket for TF state (`<PROJECT_NAME>-tfstate`) — globally unique per region; override on collision. |
 | `SPACES_REGION` | no | Bucket region (`REGION`) — must be a region that offers Spaces. |
-| `LIVE_TIMEOUT_SECS` | no | HTTPS liveness poll timeout (`900`). |
+| `LIVE_TIMEOUT_SECS` | no | Expected-workflow timeout (`900` seconds), then a separate HTTPS timeout of the same duration for services. |
 | `GIT_PROVIDER` | no | `github` (default) or `gitea` (self-hosted). See [Gitea](gitea.md). |
 | `GITEA_URL` | Gitea only | Base URL of the instance, e.g. `https://git.example.com`. |
 | `GITEA_TOKEN` | Gitea only | Personal access token (repo create/delete, Actions secrets/vars). |
@@ -125,6 +131,15 @@ export SPACES_SECRET_ACCESS_KEY="..."
 The `GITEA_*` block above configures Gitea as a code host. A separate set of
 `GITEA_*` variables belongs to `bootstrap-gitea.sh`, which provisions the Gitea
 instance itself — see [Gitea](gitea.md).
+
+`APP_EXTRA_DEPS` overrides Phoenix's injected dependency entries (`|`-separated;
+an empty value disables them). The default adds Req, Oban, and Cucumberex;
+copying agent docs alone does not install dependencies or implement examples.
+`ELIXIR_VERSION` and `OTP_VERSION` override Phoenix Dockerfile toolchain pins;
+`RUBY_VERSION` overrides the Sinatra Dockerfile pin. `TF_PLUGIN_CACHE_DIR`
+overrides the Terraform plugin cache and `TF_DATA_DIR` is honored by the
+[backend helper](../scripts/terraform-backend.md). `PBD_ROOT` selects the bundle
+for agent-doc commands; it is not a general bootstrap installation setting yet.
 
 ## Verify with `--check`
 
@@ -140,7 +155,10 @@ required variable, an absent credential — so you fix them one at a time. Pass 
 same flags you intend to use (`--cli`, `--no-droplet`, `GIT_PROVIDER=gitea`,
 and so on): `--check` scopes its checks to that run, so a droplet-free check does
 not demand the DigitalOcean, DNSimple, or Spaces credentials. A clean `--check`
-means the real bootstrap has what it needs to start.
+means the real bootstrap has what it needs to start. This contacts the code host
+and, for services, DigitalOcean to validate authentication and the SSH key. It
+does not generate app files or provision resources, but is not an offline check
+or a guarantee that later Terraform/provider calls will succeed.
 
 Next: the [Quickstart](quickstart.md) walks a service from empty directory to
 live HTTPS.

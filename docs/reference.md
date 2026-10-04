@@ -3,7 +3,7 @@
 [← Docs index](index.md) · push-button-deploy
 
 Commands and their flags, the `scripts/` and `infra-*/` layout, costs and the
-security model. For the full environment-variable list see
+security model. For the main configuration variables see
 [Prerequisites](prerequisites.md); for how the pieces fit, [Concepts](concepts.md).
 
 ## Commands
@@ -20,7 +20,7 @@ Stand up an app, its repo and its pipeline. `app_dir` defaults to `.`.
 |---|---|
 | `--check` | verify prerequisites and exit; provisions nothing |
 | `--interactive`, `-i` | prompt step by step for every choice, then deploy |
-| `--docs` | guided creation of the app's Claude docs only — provisions nothing (delegates to `claude-docs.sh`) |
+| `--docs` | guided agent-doc configuration only — provisions nothing (delegates to `claude-docs.sh`) |
 | `--host <dir>` | tenant mode: deploy onto the droplet `<dir>`'s app already owns |
 | `--lang <language>` | which language, within the app type (also `--cli=ruby`, `--cli ruby`) |
 | `--service` / `--cli` / `--library` | pick the app type; each takes its language as `--cli ruby` or `--cli=ruby` |
@@ -46,6 +46,22 @@ Python 3.11 or newer is required. Full guide: [Agent docs](claude-docs.md).
 `configure` changes it. `--all` on `configure` resets optional selections.
 Local project rules belong in `.docs/project-guidance.md`.
 
+| Option | Meaning |
+|---|---|
+| `--framework <name>` | one of the eight stack names in [App types](app-types.md); otherwise use recorded framework or infer from a recognized marker |
+| `--app-type <type>` | optional type assertion; must match the framework |
+| `--skip-module <basename.md>` | repeat to set the complete optional-module skip list |
+| `--skip-agent <basename.md>` | repeat to set the complete starter-agent skip list |
+| `--no-setup` | omit optional template setup; workflow guards/auditing remain |
+| `--hook format` | choose the formatter-hook variant where provided |
+| `--all` | reset configuration choices to defaults |
+| `--json` | emit status and changed/removed/drift file lists |
+
+`check`/`diff` return 0 for current, 1 for action needed, and 2 for errors.
+`update`/`configure` return 0 on success and 2 on errors or blocked drift.
+Use `configure` to change an installed selection. For workflow-only registered
+repositories, see [the compatibility CLI](../scripts/agent-workflow/MAINTENANCE.md).
+
 ### `claude-docs.sh`
 
 Compatibility frontend for the same managed agent-docs lifecycle. Provisions
@@ -66,11 +82,12 @@ nothing. `app_dir` defaults to `.`. Full guide: [Agent docs](claude-docs.md).
 Destroy what a bootstrap created. Confirms by having you type the project name.
 
 ```bash
-./teardown.sh [--yes] [--delete-repo] [app_dir]
+./teardown.sh [--plan] [--yes] [--delete-repo] [app_dir]
 ```
 
 | Option | Meaning |
 |---|---|
+| `--plan` | preview selected operations without remote requests, credentials, or changes |
 | `--yes` | skip the type-the-project-name confirmation |
 | `--delete-repo` | also delete the code-host repo (the local directory is never touched) |
 
@@ -84,13 +101,14 @@ guide: [Gitea](gitea.md).
 
 ```bash
 ./bootstrap-gitea.sh [--check] [--replace-droplet]
-./teardown-gitea.sh
+./teardown-gitea.sh [--yes]
 ```
 
 | Option | Meaning |
 |---|---|
 | `--check` | verify prerequisites and exit |
 | `--replace-droplet` | recreate the droplet instead of resizing (keeps the data volume, IP, certs, runner registration) |
+| `--yes` (teardown only) | skip the project-name confirmation; there is no Gitea teardown `--plan` flag |
 
 ## `scripts/`
 
@@ -101,7 +119,9 @@ guide: [Gitea](gitea.md).
 | `provider.sh` | code-host + CI abstraction (GitHub vs Gitea) (sourced) |
 | `tfstate.sh` | Spaces state-bucket bootstrap, shared by both bootstrap scripts (sourced) |
 | `prompt.sh` | interactive prompt primitives (sourced) |
-| `claude-docs.sh` | the shared Claude-docs injector (sourced + runnable) |
+| `claude-docs.sh` | sourced compatibility library; bundled templates route into the unified lifecycle |
+| `agent-workflow/lifecycle.py` | app-local docs rendering, selections, drift detection, and update planning behind `agent-docs.sh` |
+| `agent-workflow/workflow.py` | registered-repository `check` / `diff` / `apply` compatibility CLI |
 | `inject-skill-docs.sh` | Phoenix: inject deps + Claude docs (runnable) |
 | `new-sinatra-app.sh` / `new-zola-site.sh` | scaffold + inject docs for those frameworks |
 | `new-mix-app.sh` / `new-ruby-cli.sh` / `new-bash-cli.sh` / `new-ts-cli.sh` | CLI / library scaffolds |
@@ -118,9 +138,9 @@ Terraform from there, so an app's infrastructure is versioned alongside its code
 | Root | Owns | Lifecycle |
 |---|---|---|
 | `infra-state` | the Spaces bucket that stores the other roots' state | its own state is local (chicken/egg) |
-| `infra-persistent` | VPC, reserved IP, managed Postgres, DNS records, the DO project | must survive — `prevent_destroy` |
-| `infra-app` | droplet, reserved-IP assignment, firewall | disposable — destroy never touches data |
-| `infra-tenant` | a tenant's single DNS record | reads the host's state for IP/firewall |
+| `infra-persistent` | VPC, reserved IP, optional managed Postgres, DNS records, the DO project | separate state; reserved IP and DB cluster have `prevent_destroy` |
+| `infra-app` | droplet, reserved-IP assignment, firewall | disposable compute; destroying it also loses local volumes, including SQLite data |
+| `infra-tenant` | tenant production and optional staging DNS records | reads the host's state for IP/firewall |
 | `infra-gitea` | the self-hosted Gitea host (its own combined root) | applied directly, not per-app |
 
 For manual Terraform runs, `cd` into the app and export the same env vars plus
@@ -128,6 +148,14 @@ For manual Terraform runs, `cd` into the app and export the same env vars plus
 backend reads those names). Each app's `infra/README.md` documents this.
 
 ## Costs (approximate, monthly)
+
+Estimates below are for the listed sizes, excluding taxes and overages. Check
+current DigitalOcean pricing for [Droplets](https://www.digitalocean.com/pricing/droplets),
+[databases](https://www.digitalocean.com/pricing/managed-databases),
+[Spaces](https://www.digitalocean.com/pricing/spaces-object-storage),
+[registry](https://www.digitalocean.com/pricing/container-registry), and
+[reserved IPs](https://docs.digitalocean.com/products/networking/reserved-ips/details/pricing/)
+before provisioning.
 
 | Item | Cost |
 |---|---|
@@ -150,7 +178,7 @@ SQLite-vs-Postgres cost tradeoff.
 - Port 22 is restricted to your CIDR; on GitHub, CI gets a temporary per-run
   `/32` exception that's revoked even on failure. On Gitea the runner's IP is
   allow-listed once (see [Gitea](gitea.md)).
-- The database is private-VPC only; its firewall trusts the droplet's **tag**,
+- Managed Postgres uses its private-VPC endpoint; its firewall trusts the droplet's **tag**,
   not its ID; connections are TLS with full certificate verification against the
   cluster CA.
 - The DO API token is shared with the app repo's Actions secrets (registry +

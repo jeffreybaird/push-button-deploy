@@ -35,16 +35,17 @@ writers or SQL that SQLite lacks, not by habit.
 Framework choice can decide this for you: `sinatra` forces `sqlite`, and `zola`
 (a static site) has no database at all. See [Frameworks](frameworks.md).
 
-## The flag only affects newly generated apps
+## Backend selection does not convert an existing app
 
-`DATABASE_BACKEND` shapes the app at generation time — it does **not** convert an
-existing app.
+`DATABASE_BACKEND` selects generation, infrastructure resources, CI variables,
+and runtime templates on each run. It does **not** convert an existing app's
+adapter or data. Use the backend matching that app.
 
 Because the default is `sqlite`, re-running the bootstrap against an existing
 **Postgres** project without setting `DATABASE_BACKEND=postgres` would ask
 Terraform to tear that cluster down. The cluster's `prevent_destroy` would abort
-the apply, but its database and user carry no such guard and would be deleted
-first — so bootstrap detects a cluster in state and **refuses to apply** instead.
+the apply, but its database and user carry no such guard. Bootstrap detects a
+cluster in state and **refuses to apply** instead of attempting the transition.
 The fix is simply to set `DATABASE_BACKEND=postgres` for that project's runs.
 
 Converting a live Postgres app to SQLite is a **data migration**, not a flag

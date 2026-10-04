@@ -7,6 +7,10 @@ may host other apps too — each gets its own stack directory, compose project a
 `/root/apps/<slug>/`, and adds one site file to the shared Caddy. Every push to `main`
 runs the same pipeline. You do not run Kamal, Capistrano, or `docker` by hand.
 
+Workflow paths and commands below show the default GitHub backend. With Gitea,
+use `.gitea/workflows/` and Gitea's workflow controls and secrets. PR staging is
+currently generated only for GitHub when enabled.
+
 Related: `.claude/database.md` (the DB file + Litestream), `.claude/testing.md` (the test gate),
 `.claude/observability.md` (logs/traces in production).
 
@@ -30,9 +34,9 @@ git push main
   the committed `.app-name` file). `:latest` and `:<git-sha>` are both pushed; deploys pin the SHA.
 - **Migrations run before the swap.** `rake db:migrate` runs as a one-off container against the
   live DB volume. If it exits non-zero the job fails and the swap is skipped — the old release
-  keeps serving. A bad migration can never serve a half-updated schema. This is why migrations
+  keeps running, but database changes already applied are not undone. This is why migrations
   must be additive and backward-compatible (see `.claude/database.md`).
-- **Zero-downtime swap.** Exactly one of `app_blue`/`app_green` serves at a time. The deploy
+- **Health-checked swap.** Both colors can run during the transition. The deploy
   starts the idle color from the new image, waits for its container healthcheck (`up --wait`),
   and only then stops the old one. Caddy holds and retries requests across the window.
 - **Rollback is a repin, not a rebuild:** `gh workflow run rollback.yml -f tag=<prior-sha>`.
@@ -52,8 +56,8 @@ PR closed / merged  ─> deploy/staging-down.sh over SSH: stack, volumes and rou
 
 On the droplet the environment is just another app: compose project `<slug>-stg`
 in `/root/apps/<slug>-stg`, its own containers, its own `app_data` volume, its own
-site file in the shared Caddy. It cannot reach production's data because it does
-not share a volume with it, and it cannot reach production's *backups* because
+site file in the shared Caddy. The normal runtime uses separate volumes and
+backup configuration:
 `litestream.staging.yml` replicates into its own volume rather than Spaces and
 `compose.override.yaml` switches the archive loop off — its `.env` carries no
 Spaces keypair at all. It signs sessions with a key derived from
@@ -64,6 +68,9 @@ There is **one staging slot per app**, held by the most recent PR to deploy
 (`.staging-owner` on the droplet); a second PR takes it over and says so in a
 comment. Fork PRs are skipped — GitHub withholds secrets from them, and this
 workflow holds the droplet's SSH key.
+
+This is not a security boundary for untrusted code: staging shares the host and
+edge network, and the job holds privileged deployment credentials.
 
 Changing `deploy.yml` usually means changing `staging.yml` the same way (a new
 secret in `.env`, a new file scp'd to the stack directory, a new release step) —

@@ -2,11 +2,11 @@
 
 [← Docs index](index.md) · push-button-deploy
 
-A full copy of the app on every pull request, at `<app>-stg.<zone>`, built when the PR opens and destroyed when it closes — and how to turn it off.
+A shared staging slot per app at `<app>-stg.<zone>`, updated by eligible pull requests and removed when the owning PR closes.
 
 Opening a pull request against `main` stands a **complete copy of the app** up on
 the same droplet and serves it at `<app>-stg.<zone>`; closing the PR destroys it.
-Pushing to an open PR redeploys it. This is on for every app with a server-side
+Pushing to an open PR redeploys it. This is on by default on GitHub for apps with a server-side
 runtime — Phoenix and Sinatra, host apps and tenants alike. **Static (`zola`)
 sites are excluded**: they have no environment to build, only files a symlink
 points at.
@@ -20,8 +20,9 @@ PR closed/merged   stack + volumes + route destroyed, staging images deleted
 The environment is a normal app stack in every respect the droplet can see: its
 own compose project (`<slug>-stg`), its own volumes, its own container names, its
 own site file in the shared Caddy. That is exactly the isolation two *different*
-apps on one droplet get — which is the point: a PR cannot reach production's
-containers, route, or data.
+apps on one droplet get. This separates normal runtime names and volumes; it is
+not a security boundary for untrusted PR code. Deploy jobs hold privileged host
+credentials, and apps share the edge network and host.
 
 ## Production vs staging
 
@@ -52,8 +53,9 @@ containers, route, or data.
   Spaces and the periodic archive is switched off, so the staging deploy carries
   no Spaces keypair at all. On Postgres, staging gets its own database **on the
   app's existing managed cluster** — no second instance is provisioned and the
-  bill does not change; only the database name differs from production's, so a
-  PR's migrations can never run against production data. That database is **not**
+  bill does not change; only the database name differs from production's, so
+  normal staging migrations target that database. The user/cluster are shared,
+  so this is not database privilege isolation from production. That database is **not**
   reset per PR, since dropping it would need a cluster-admin credential in CI.
   Migrations accumulate; when that stops being useful, delete the database in the
   DO console and re-run the bootstrap. See [Databases](databases.md).

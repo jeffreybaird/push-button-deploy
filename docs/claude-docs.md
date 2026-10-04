@@ -47,11 +47,24 @@ Framework values follow the app generators. Web templates are available for
 `bash-cli`, and `ts-cli`, and the library framework is `mix`. CLI and library
 apps receive generic project
 entry points and the shared workflow with language-appropriate ownership policy.
-The command accepts `--skip-module` and `--skip-agent` repeatedly. Pass `--all`
-to `configure` to reset optional selections to their defaults. `--no-setup`
+Use explicit `escript`, `mix`, or `ruby-cli` for those apps: inference treats
+`mix.exs` as Phoenix and `Gemfile` as Sinatra. `package.json` infers `ts-cli`;
+an empty directory or Bash CLI needs an explicit framework.
+
+The command accepts `--skip-module` and `--skip-agent` repeatedly. Each supplied
+option replaces that category's complete skip list; omitted categories retain
+their saved choices. Pass `--all` to `configure` to reset selections to their
+defaults, then add any desired skips. `--no-setup`
 omits the optional template setup hook; `--hook format` selects the template's
 formatter hook when available. These template choices do not disable the shared
-workflow guards or audit registration. See `./agent-docs.sh --help` for all flags.
+workflow guards or audit registration. Reset with `--all` to restore the setup
+hook. See `./agent-docs.sh --help` for all flags.
+
+The optional formatter hook runs project-wide after Claude writes: `mix format`
+for Phoenix, `bundle exec rubocop -A --fail-level fatal` for Sinatra. Failures are
+ignored by those hooks, and RuboCop is not included in the starter Gemfile.
+Treat formatting as a separate reviewed operation where role-owned source/test
+boundaries require it; selecting the hook does not install formatter dependencies.
 
 Existing `./claude-docs.sh` and `./bootstrap.sh --docs` commands remain compatible
 frontends. Their guided framework and module choices use the same lifecycle;

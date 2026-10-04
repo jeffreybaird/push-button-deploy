@@ -13,8 +13,8 @@ a Ruby web app are different things written in the same language.
 - **App type** — the *shape* of the thing, and therefore what infrastructure it
   needs. A `service` is a long-running web app: it wants a droplet, DNS, TLS and
   maybe a database. A `cli` or a `library` needs none of that — there is nothing
-  to serve, so there is nothing to provision, no credentials to hold and nothing
-  to tear down.
+  to serve, so there is no cloud infrastructure to provision. Code-host
+  authentication and optional remote-repository deletion still apply.
 - **Framework** — the *stack* inside that shape: which scaffold generates the
   app, which file proves one already exists, and which CI workflows it gets. Each
   framework belongs to exactly one type.
@@ -59,9 +59,9 @@ touching the others:
 
 | Root | Holds | Lifecycle |
 |---|---|---|
-| `infra/state/` | the DO Spaces bucket that stores the other two roots' state | its own state is local (chicken/egg); losing it is a non-event — `terraform import` re-adopts the bucket |
-| `infra/persistent/` | VPC, reserved IP, managed Postgres, DNSimple A records, and a DO *project* grouping the app's resources | must **survive** — `prevent_destroy` everywhere |
-| `infra/app/` | droplet, reserved-IP assignment, firewall | **disposable** — `terraform destroy` here never touches data |
+| `infra/state/` | the DO Spaces bucket holding other roots' state and SQLite backups | local state; the bucket has `prevent_destroy` and can be re-imported if local state is lost |
+| `infra/persistent/` | VPC, reserved IP, optional managed Postgres, DNS and DO project | separate state; only reserved IP and DB cluster have `prevent_destroy` here |
+| `infra/app/` | droplet, reserved-IP assignment, firewall | destroying it leaves persistent-root resources intact but deletes the droplet's local disk |
 
 A **tenant** app (one deployed onto a droplet another app owns) has a fourth,
 much smaller root instead of these three — `infra/tenant/`, holding only its DNS
@@ -76,29 +76,30 @@ survive re-runs.
 
 ## Compute and data are isolated
 
-The separation of roots is the tool's central safety property: **compute is
-disposable, data is not.**
+Separate state keeps an app-root destroy from deleting the managed Postgres
+cluster, reserved IP, or DNS. The database firewall trusts a **tag**, so a
+replacement droplet can reconnect without replacing the cluster.
 
-- `infra/persistent/` carries `prevent_destroy` on everything that must survive a
-  droplet's life — the reserved IP, the database, the DNS records.
-- `infra/app/` is the disposable half. `terraform destroy` there tears down the
-  droplet and its firewall and touches no data, because the database firewall
-  trusts a **tag** the droplet wears, not the droplet's identity. A recreated
-  droplet wears the same tag and is trusted again on the next apply, with no
-  change to the database.
+Local disk is different: SQLite volumes, static releases, and Caddy certificate
+volumes are on the app droplet. SQLite recovers from the latest available
+Litestream replica in Spaces, potentially losing unreplicated writes. Static
+sites must be redeployed, and Caddy obtains certificates again. Verify backups
+before replacement; see [Operations](operations.md#recreate-the-droplet).
 
 ## Host-owned Caddy and the blue/green swap
 
-The droplet runs an `app_blue`/`app_green` pair, **exactly one live at a time**,
-behind Caddy. A deploy:
+The droplet uses an `app_blue`/`app_green` pair behind Caddy. One remains running
+after a successful deploy; both can run during the transition. A deploy:
 
 1. starts the idle color from the new image,
 2. waits for its container healthcheck to pass,
 3. stops the old color.
 
-Caddy holds and retries requests across the swap window, so the change is
-zero-downtime. Migrations run via a release task **before** traffic switches; a
-failed migration leaves the old release serving.
+Caddy lists both upstreams and retries failed connections. The script waits for
+the new container's healthcheck before stopping the old one; it does not perform
+an exclusive route switch or guarantee uninterrupted long-lived connections.
+Migrations run first; a failure prevents the swap, but cannot undo database
+changes already applied. Use backward-compatible migrations.
 
 Caddy is **host-owned, not app-owned**: one instance per droplet, in
 `/root/caddy`, importing one site file per app. Each app's stack lives in
@@ -113,7 +114,8 @@ site has no container to swap — it releases with a symlink flip instead. See
 
 Secrets are **never** written into cloud-init or droplet metadata. They arrive
 over SSH at deploy time, so nothing sensitive is recoverable from the droplet's
-provisioning data. Port 22 is closed to the world; CI opens a temporary hole for
-its own runner IP at the start of a deploy and revokes it afterward. See
+provisioning data. SSH is restricted to configured CIDRs. GitHub CI opens a
+temporary runner-IP exception and revokes it afterwards; Gitea uses configured
+static runner CIDRs. See
 [Prerequisites](prerequisites.md) for the credentials involved and
 [Operations](operations.md) for the deploy flow.

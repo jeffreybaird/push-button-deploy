@@ -3,6 +3,10 @@
 Load this file when working on CI/CD, host configuration, Dockerfiles,
 release scripts, or environment configuration.
 
+Workflow paths and commands below show the default GitHub backend. With Gitea,
+use `.gitea/workflows/` and Gitea's workflow controls and secrets. PR staging is
+currently generated only for GitHub when enabled.
+
 > **Baseline:** Phoenix 1.8 (Bandit) · mix releases · OTP 27. Scaffold releases
 > with `mix phx.gen.release`.
 
@@ -25,7 +29,7 @@ as a Docker Compose stack. The pieces, all provisioned by the bootstrap:
 | Database | **SQLite** by default — a file on a named Docker volume, replicated to DO Spaces by a **Litestream** sidecar. With `DATABASE_BACKEND=postgres`, DigitalOcean Managed Postgres instead: **private-VPC only**, TLS **verified** against the cluster CA (`verify_peer`) |
 | DNS | An A record at DNSimple → a **reserved IP** that survives droplet recreation |
 | Images | Built on GitHub's amd64 runners, pushed to **DO Container Registry (DOCR)**, **SHA-pinned** |
-| Releases | An `app_blue`/`app_green` pair behind Caddy — exactly one live at a time (zero-downtime swap) |
+| Releases | An `app_blue`/`app_green` pair; the old container stops after the new healthcheck passes. Both can run during the transition. |
 | Neighbours | The droplet may host **other apps**. Each lives in `/root/apps/<slug>/` as its own compose project, with its own volumes, and adds one site file to the shared Caddy |
 
 ### If this app is on SQLite (the default)
@@ -33,8 +37,8 @@ as a Docker Compose stack. The pieces, all provisioned by the bootstrap:
 The database is a single file at `DATABASE_PATH` on the `app_data` volume, shared
 by both colors and the migrate runner. A Litestream sidecar streams the WAL to DO
 Spaces continuously; a one-shot `litestream restore` repopulates the volume on
-boot when it is empty, so a recreated droplet recovers rather than starting
-blank. There is no `DATABASE_URL`, no `db-ca.pem` and no DB TLS — SQLite has no
+boot when it is empty. Recovery requires an available replica; writes not yet
+replicated can be lost. There is no `DATABASE_URL`, no `db-ca.pem` and no DB TLS — SQLite has no
 network. Anything below describing those is the Postgres path.
 
 Constraints that follow, and that a change to this app has to respect:
@@ -83,10 +87,12 @@ any other app sharing the droplet.
 - Cheap and predictable: one droplet, no per-request edge pricing, and on the
   SQLite default no database bill at all.
 - Caddy gives automatic HTTPS with zero cert plumbing.
-- Blue/green on a single host gives zero-downtime deploys without an orchestrator.
-- Destroying/recreating the droplet never risks data: on Postgres the data lives
-  in a managed cluster; on SQLite the Litestream replica in Spaces is the real
-  copy, and an empty volume restores from it on boot.
+- Blue/green keeps the old process running while the new color starts; availability
+  still depends on health checks, compatible migrations and the shared host.
+- Managed Postgres lives separately from the droplet. SQLite relies on its
+  Litestream replica in Spaces after droplet loss; verify replication before
+  replacement and expect possible loss of unreplicated writes. Caddy certificate
+  volumes are local to the app droplet and must be reissued after replacement.
 
 > **Single-node by design.** This is one droplet — no Erlang clustering. `dns_cluster`
 > is wired in the supervision tree but resolves to `:ignore` (no `DNS_CLUSTER_QUERY`
@@ -360,8 +366,9 @@ health probe.
 **How the swap uses health here.** The new color's container has a Docker
 `healthcheck`; the deploy runs `docker compose up -d --wait <new color>`, which
 **blocks until that healthcheck passes** before `swap.sh` stops the old color. If
-it never turns healthy the deploy fails and the old color keeps serving — that's
-the zero-downtime guarantee. So get the container healthcheck right:
+it never turns healthy the deploy fails and the old color keeps running. Caddy
+lists both upstreams, so this is not an exclusive traffic switch after readiness.
+Get the container healthcheck right:
 
 - **`start_period` must exceed BEAM startup time.** The BEAM, Ecto pool, and
   endpoint take a few seconds to come up; failures during `start_period` don't
@@ -433,7 +440,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
-      postgres: { image: postgres:17-alpine, ... }   # mix test runs against this
+      postgres: { image: postgres:17-alpine, ... }   # SQLite apps use their own adapter
     steps:
       - uses: actions/checkout@v6
       - uses: erlef/setup-beam@v1          # Elixir/OTP pins parsed from the Dockerfile ARGs
@@ -487,7 +494,7 @@ is destroyed by `deploy/staging-down.sh` over SSH.
 
 On the droplet the environment is just another app: compose project
 `<slug>-stg` in `/root/apps/<slug>-stg`, its own volumes and containers, its own
-site file in the shared Caddy. What keeps it away from production's data:
+site file in the shared Caddy. Its normal runtime configuration separates data:
 
 - **Postgres** — `STAGING_DATABASE_URL` names a *separate database on the same
   managed cluster* (no second instance). It is not reset per PR, so migrations
@@ -504,6 +511,10 @@ There is **one staging slot per app**, held by the most recent PR to deploy
 (`.staging-owner` on the droplet). Fork PRs are skipped — GitHub withholds
 secrets from them, and this workflow holds the droplet's SSH key.
 
+This is not a security boundary for untrusted code: staging shares the host and
+edge network, the job holds privileged deployment credentials, and Postgres uses
+the same database user for both databases.
+
 When you change `deploy.yml`, ask whether `staging.yml` needs the same change: a
 new secret in `.env`, a new file scp'd to the stack directory, or a new step in
 the release sequence has to be mirrored, or staging silently stops matching what
@@ -515,7 +526,8 @@ production runs — which is the whole point of having it.
   **a red test blocks the build, which blocks the deploy.** Non-negotiable.
 - **The migration step is a gate**: it runs the new image as a one-off *before* the
   swap. A failed migration fails the job, the swap is skipped, and the old release
-  keeps serving — a bad migration can never front a half-updated DB.
+  keeps running. Database changes already applied are not undone; migrations
+  must remain compatible with that running version.
 - **Images are SHA-pinned** (`:${{ github.sha }}`), built on **native amd64 runners**
   — no QEMU, no Apple-Silicon cross-build architecture mismatch.
 - **The SSH hole-punch is revoked in an `always()` step** — even on failure. The

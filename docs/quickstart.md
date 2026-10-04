@@ -36,31 +36,35 @@ Goal: provision everything and deploy.
 ./bootstrap.sh ~/src/myapp
 ```
 
-This runs ~13 steps. You don't drive them — this is what it does, in order, so
-you know what you're watching:
+The default host run has 16 progress steps (a tenant has 14). In order:
 
 1. **Preflight** — the `--check` checks again.
 2. **Generate** the Phoenix app with `mix phx.new` (if the directory is
-   empty/missing), and inject the [Claude Code docs](claude-docs.md) plus the
-   deps they assume. An existing `mix.exs` app is used as-is.
-3. **Code host repo** — `git init`, create a private repo (GitHub or Gitea), push
-   an initial commit. No workflows exist yet, so this push triggers nothing.
-4. **State bucket** — create the DO Spaces bucket that holds Terraform state.
-5. **Persistent infra** — VPC, reserved IP, managed Postgres (+ its CA cert), and
-   the DNS record. These are the things that must survive (`prevent_destroy`).
-6. **Registry** — reuse or create a DO Container Registry.
-7. **App infra** — the droplet (cloud-init installs Docker only, no secrets), the
+   empty/missing), with SQLite by default, and install [agent docs](claude-docs.md)
+   plus the injected development dependencies. Existing apps skip generation.
+3. **Identity** — read app/module names and derive infrastructure names.
+4. **Code host repo** — initialize Git if needed, create/reuse a private repo,
+   and push the app. Fresh scaffolds have no deployment workflow yet; existing
+   repositories may already have workflows that run on this push.
+5. **Terraform templates** — seed the app's `infra/` roots without overwriting them.
+6. **State bucket** — create/reuse the DO Spaces bucket holding Terraform state.
+7. **Persistent infra** — VPC, reserved IP and DNS; managed Postgres and its CA
+   only when `DATABASE_BACKEND=postgres`. SQLite backups use the Spaces bucket.
+8. **Registry** — reuse or create a DO Container Registry.
+9. **SSH access** — resolve your allowed CIDR.
+10. **App infra** — the droplet (cloud-init installs Docker only, no secrets), the
    reserved-IP assignment, and the firewall (22 restricted to your IP, 80/443
    open).
-8. **Wait** until the droplet answers `docker info` over SSH.
-9. **Grant** the app's DB user `CREATE`/`USAGE` on schema `public`.
-10. **Prepare the app** — release config, migration task, verified DB TLS,
-    Dockerfile, compose stack, and the deploy + rollback workflows.
-11. **Seed CI secrets + variables** — the tokens and config the pipeline needs.
-12. **Commit + push the pipeline** — this triggers the **first deploy** through
+11. **Wait** until the droplet answers `docker info` over SSH.
+12. **Grant** schema privileges for Postgres; skip this on SQLite.
+13. **Prepare the app** — release/migration files, Dockerfile, compose stack,
+    workflow files, and agent-doc adoption if needed. Verified DB TLS is Postgres-only.
+14. **Seed CI secrets + variables** — the tokens and config the pipeline needs.
+15. **Commit + push the pipeline** — this triggers a fresh app's **first deploy** through
     the exact pipeline every later push uses: test → build image → migrate →
     health-checked blue/green swap.
-13. **Poll `https://<domain>`** until it answers.
+16. **Confirm the exact commit's workflow succeeds**, then poll HTTPS. Each wait
+    has its own `LIVE_TIMEOUT_SECS` budget (900 seconds by default).
 
 What happens at the end:
 
@@ -75,6 +79,11 @@ tells you whether the deploy **failed** or just **isn't ready yet** — see
 
 > The run is **idempotent**. If a step fails, fix what it named and run the exact
 > same command again — every step detects work already done.
+
+Bootstrap stages all app changes when it commits the pipeline. Commit or set
+aside unrelated work first. Deployment files are refreshed on reruns; existing
+Terraform roots and already-managed agent docs follow their separate ownership
+rules. See [Operations](operations.md).
 
 ### 3. Deploy a change
 
@@ -115,8 +124,9 @@ commit, push, and poll until CI is green.
 ==> done. cli 'mytool' built and green — no infrastructure was provisioned.
 ```
 
-Verify: the repo exists and its CI run is green. There is nothing to bill and
-nothing to tear down.
+Verify: the repo exists and its CI run is green. No cloud infrastructure is
+provisioned; code-host and CI usage may still have costs. The remote repository
+can be removed with `teardown.sh --delete-repo` if no longer needed.
 
 See [App types](app-types.md) for the full list of types and languages, and
 `./bootstrap.sh --help` for everything on one screen.
@@ -129,4 +139,4 @@ See [App types](app-types.md) for the full list of types and languages, and
 
 The interactive walkthrough covers app type, language, code host, and (for a
 service) database, staging and tenancy — and can also tailor which
-[Claude Code docs](claude-docs.md) the app gets. See [App types](app-types.md).
+[agent docs](claude-docs.md) the app gets. See [App types](app-types.md).

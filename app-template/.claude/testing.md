@@ -156,7 +156,7 @@ mix test                    # Runs everything EXCEPT :e2e
 # Run only E2E
 mix test --only e2e         # Requires Chrome + ChromeDriver
 
-# CI runs both as separate jobs
+# To add browser coverage, configure CI to run both as separate jobs
 ```
 
 ---
@@ -911,9 +911,13 @@ mix test --include e2e
 mix cucumber
 ```
 
-### CI requirements
+### CI requirements to configure in the application
 
-All of the following must pass before deploy:
+The shipped deployment workflow runs `mix test`; it does not install or wire
+the extra jobs below. Add their dependencies, support files, and CI steps when
+adopting these test conventions. Docs-only installation adds no dependencies;
+the Phoenix bootstrap injector adds Cucumberex, but not its feature/support files.
+Once configured, require the applicable checks before deploy:
 - `mix test --exclude e2e` — all unit and integration tests green
 - `mix test --only e2e` — all Wallaby E2E tests green (separate CI job)
 - `mix cucumber --strict` — all acceptance scenarios green, none undefined/pending

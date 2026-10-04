@@ -20,12 +20,15 @@ shape. Each `(type, language)` pair also has a **framework** name — `sinatra`,
 | Droplet, DNS, TLS | yes | **none** | **none** |
 | Database | `postgres` / `sqlite` / none | **none** | **none** |
 | Container registry | yes (except `zola`) | **none** | **none** |
-| PR staging | yes (except `zola`) | **none** | **none** |
+| PR staging | GitHub dynamic services only; one shared slot per app | **none** | **none** |
 | Credentials needed | DO + DNSimple + Spaces + SSH | **code host only** | **code host only** |
-| Local tools | `mix` for Phoenix | `git`, `curl` | `git`, `curl` |
-| Pipeline | `.github/workflows/deploy.yml` | `.github/workflows/ci.yml` | `.github/workflows/ci.yml` |
+| Local tools | service tools in [Prerequisites](prerequisites.md), plus `mix` for Phoenix | `git`, `curl`, Python 3.11+, `gh` or `jq` | same as CLI |
+| Pipeline | `deploy.yml` | `ci.yml` | `ci.yml` |
 | The bootstrap ends when | `https://<domain>` answers | CI goes green | CI goes green |
-| Teardown | droplet, DB, DNS, bucket, registry | nothing exists to destroy | nothing exists to destroy |
+| Teardown | owned infrastructure and image repository; tenant scope is smaller | optional remote-repo deletion | optional remote-repo deletion |
+
+Workflows live under `.github/workflows/` or `.gitea/workflows/` for the chosen
+provider. Every stack gets the managed [agent-doc lifecycle](claude-docs.md).
 
 The droplet-free types (`cli`, `library`) are a genuinely smaller run: eight
 steps instead of sixteen, no Terraform, no `doctl`, no SSH, and preflight asks
@@ -117,7 +120,7 @@ Enter accepts the `[default]` (marked `*`); a menu choice takes either the numbe
 or the name. The menu is rendered from the registry, so a stack added there shows
 up here with no extra work. For a service it goes on to ask about the code host,
 database, staging and tenancy — and can also tailor the
-[Claude Code docs](claude-docs.md) the app gets.
+[agent docs](claude-docs.md) the app gets where framework templates are available.
 
 ## How to choose
 

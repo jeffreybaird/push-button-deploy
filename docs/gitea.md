@@ -23,7 +23,7 @@ default; `gitea` selects the self-hosted path.
 | CI-runner SSH access | temporary `/32` hole punched per deploy, because a GitHub-hosted runner's IP is unpredictable | `GITEA_RUNNER_IP` allow-listed **once**, statically, in `infra-app/firewall.tf` — the self-hosted runner has a known IP, so there's nothing to punch or revoke |
 | Local tool | `gh` | `curl` (already required) + `jq` |
 | Repo/secret/variable API | `gh repo`/`gh secret`/`gh variable` | the instance's REST API directly (`scripts/provider.sh`) |
-| Run status | `gh run list --json status,conclusion` | the instance's Actions task-listing API, normalized to the same shape |
+| Run status | GitHub CLI workflow-run queries | `/actions/runs`, filtered by commit and workflow across pages |
 | Rollback trigger | `gh workflow run rollback.yml -f tag=...` | the repo's Actions tab, or `POST .../actions/workflows/rollback.yml/dispatches` |
 | PR staging | on by default (`ENABLE_STAGING`) | **not yet** — see [gaps](#current-gaps) |
 | Repo deletion (`teardown.sh --delete-repo`) | needs the `delete_repo` OAuth scope (`gh auth refresh -s delete_repo`) | needs `GITEA_TOKEN` to carry delete rights on the repo |
@@ -34,14 +34,15 @@ backends, several apps on one droplet — works identically regardless of
 
 ## Required Gitea-only env
 
-Three variables are required on the Gitea path, all documented in
+Two variables are required for all Gitea apps; a service also needs the runner
+IP for SSH access. They are documented in
 `.env.example`:
 
 | Variable | Meaning |
 |---|---|
 | `GITEA_URL` | the public URL of your instance, e.g. `https://git.example.com` |
 | `GITEA_TOKEN` | a personal access token; auth, and the repo owner unless `GITEA_OWNER` is set |
-| `GITEA_RUNNER_IP` | the runner's **egress** address (`/32`), allow-listed in the app firewall |
+| `GITEA_RUNNER_IP` | service only: the runner's **egress** address (`/32`), allow-listed in the app firewall |
 | `GITEA_OWNER` | *optional* — create repos under this org instead of the token's account |
 
 ### `GITEA_RUNNER_IP` is an egress address, not a reserved IP
@@ -88,6 +89,16 @@ upgrade guidance, back up the data volume, and rerun `./bootstrap-gitea.sh` when
 ready. Editing this repository does not change a running instance.
 
 ## Standing up your own instance
+
+Instance provisioning requires `git`, `terraform`, `doctl`, `curl`, `ssh`,
+`scp`, `dig`, `jq`, and `openssl`. Its configuration uses the same caller-over-file
+precedence as app bootstrap. Additional variables (defaults in parentheses):
+`GITEA_ADMIN_EMAIL` (required), `GITEA_ADMIN_USER` (`gitea-admin`),
+`GITEA_DNS_RECORD` (`git`), `GITEA_PROJECT_NAME` (`gitea-infra`),
+`GITEA_REGION` (`nyc3`, independent of the app's `REGION`),
+`GITEA_DROPLET_SIZE` (`s-1vcpu-1gb`), `GITEA_DATA_VOLUME_GB` (`40`), and
+`GITEA_RUNNER_NAME` (`gitea-host`). `GITEA_ADMIN_PASSWORD` may be supplied;
+otherwise bootstrap generates and caches it.
 
 `GIT_PROVIDER=gitea` needs an actual instance and a registered Actions runner to
 talk to. `bootstrap-gitea.sh` stands both up, reusing the same
@@ -140,7 +151,8 @@ and IP; only Docker and the pulled images are rebuilt.
 ### Tearing it down
 
 ```bash
-./teardown-gitea.sh
+./teardown-gitea.sh          # asks for the project name
+# ./teardown-gitea.sh --yes  # explicit confirmation bypass
 ```
 
 Destroys it all — droplet, firewall, reserved IP, DNS record, and **the data

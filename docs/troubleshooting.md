@@ -21,9 +21,11 @@ name — `PROJECT_NAME` is infra-naming only and is independent of the app name.
 
 ### Timeout with "CI still running"
 
-Not a failure. First deploys compile everything from a cold cache (~5–10 min).
-Watch it with `gh run watch` (GitHub) or the repo's Actions tab (Gitea); it will
-go green on its own.
+Bootstrap exits nonzero if the expected workflow has not succeeded before its
+timeout. CI may still be running, or it may have failed. Watch that commit's
+run with `gh run watch` or the Gitea Actions tab; do not assume it will turn
+green. Fix failures, or increase `LIVE_TIMEOUT_SECS` for a slow build and rerun.
+A healthy page from an older release does not satisfy CI confirmation.
 
 ### "deploy succeeded but HTTPS not answering"
 
@@ -56,10 +58,11 @@ not). Update `GITEA_RUNNER_IP` to the current egress address and re-run
 
 ### Bootstrap fails on a 404 partway through a Gitea run
 
-The instance is older than the required **1.25** floor — secret/variable seeding
-works on older releases, but full-workflow confirmation needs `/actions/runs`. Preflight now reads `/api/v1/version` and stops with the version
-as the reason. Upgrade the instance (re-running `./bootstrap-gitea.sh` upgrades in
-place). See [Gitea](gitea.md).
+Check the failing endpoint and credentials. A 404 can mean a missing resource,
+an inaccessible private repository, or an unsupported API; it does not prove
+the instance is outdated. Preflight explicitly rejects Gitea older than **1.25**
+because full-workflow confirmation needs `/actions/runs`. For that version
+error, back up the instance and upgrade deliberately. See [Gitea](gitea.md).
 
 ## Agent docs
 

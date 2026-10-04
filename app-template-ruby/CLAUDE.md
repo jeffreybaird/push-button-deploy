@@ -7,6 +7,17 @@ its routes) to yours.
 
 Detail patterns live in `.claude/`. Load the relevant file when working in that area.
 
+The scaffold supplies the Note example, SQLite configuration, and a basic RSpec
+suite. Authentication, memberships, policies, telemetry, caching, background jobs,
+and expanded test/lint infrastructure below are conventions and examples to
+implement when needed; copying docs does not install them. Check the actual
+Gemfile and workflows before invoking optional tools such as RuboCop or VCR.
+
+Shared docs are managed by push-button-deploy's `agent-docs.sh`. Put local
+rules in `.docs/project-guidance.md`; edits to generated modules block shared
+updates. The managed workflow section governs role ownership and supersedes
+legacy role instructions in these examples.
+
 ### Stack Baseline
 
 Ruby 3.3+ · **modular Sinatra** (`class App < Sinatra::Base`, served by **Puma** via

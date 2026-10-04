@@ -1,5 +1,10 @@
 # My Site
 
+Shared guidance and workflow hooks are managed by push-button-deploy's
+`agent-docs.sh`. Put local rules in `.docs/project-guidance.md`; generated module
+edits block shared updates. Zola has no framework-specific SessionStart hook,
+but still receives the common Codex and Claude workflow roles and hooks.
+
 A static site built with **Zola** and deployed by **push-button-deploy**: every
 push to `main` builds the site in CI, ships it to a DigitalOcean droplet as a
 numbered release, and flips a symlink. A shared Caddy on that droplet serves the

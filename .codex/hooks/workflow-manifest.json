@@ -1,6 +1,6 @@
 {
   "installer": {
-    "source_commit": "6f6a332460053dc8376e65a2390be819d21bbf90129b49ab704956caafc73dbd",
+    "source_commit": "390d6f01689305b5cb752943d9990802dc8aeeffaf49ebc7cd52814ce3d7360c",
     "version": "0.3.0"
   },
   "sha256": {

@@ -6,6 +6,19 @@ OTP app and web module names, and adapt the example contexts/resources to your d
 
 Detail patterns live in `.claude/`. Load the relevant file when working in that area.
 
+These modules describe architectural conventions and example extensions, not a
+list of features already generated. Bootstrap uses your installed `phx_new`,
+defaults to SQLite, and adds Req, Oban, and Cucumberex dependencies unless
+overridden. It does not run `phx.gen.auth`, build the example contexts, configure
+Oban queues or telemetry, or install every test/lint tool described below.
+Check this app's actual `mix.exs`, configuration, and workflows before using an
+example. Postgres-specific patterns apply only to apps using that backend.
+
+Shared docs are managed by push-button-deploy's `agent-docs.sh`. Put local
+rules in `.docs/project-guidance.md`; edits to generated modules block shared
+updates. The managed workflow section governs role ownership and supersedes
+legacy role instructions in these examples.
+
 ### Stack Baseline
 
 Phoenix 1.8 · LiveView 1.1 · Ecto 3.13+ · Tailwind v4 + daisyUI v5 · Bandit · OTP 27. Key

@@ -20,8 +20,10 @@ git push               # to main
 ```
 
 **What happens:** the push to `main` triggers the deploy pipeline every later
-push uses — tests, image build, migration gate, blue/green swap. No new color
-serves traffic until it passes its healthcheck.
+push uses — tests, image build, migration gate, blue/green swap. The old color
+is stopped only after the new one passes its healthcheck; Caddy lists both
+upstreams during the transition. Zola instead builds and publishes a directory;
+CLI/library apps run build/test CI without a deployment.
 
 **Verify:** watch the run (below), or hit `https://<domain>` once it concludes.
 
@@ -46,7 +48,7 @@ runs.
 **Goal:** put a previous build back in service.
 
 ```bash
-gh workflow run rollback.yml -f tag=<previous commit sha>   # GitHub
+gh workflow run rollback.yml -f tag=<previous-sha>   # GitHub, from the app repo
 ```
 
 On **Gitea**, run the `rollback` workflow from the repo's Actions tab (with the
@@ -57,7 +59,9 @@ POST .../actions/workflows/rollback.yml/dispatches
 ```
 
 **What happens:** the pipeline redeploys the image built for `<tag>` and swaps
-it into service — same blue/green swap as a forward deploy, no rebuild.
+it into service — same blue/green swap as a forward deploy, no rebuild or
+migration reversal. The prior image must still exist and support the current
+schema. Zola rollback selects a release directory still retained on the droplet.
 
 **Verify:** `https://<domain>` serves the rolled-back build; the rollback run
 concludes green.
@@ -83,9 +87,11 @@ variables the pipeline manages (`SECRET_KEY_BASE`, `PHX_HOST`, `DATABASE_URL`,
 appended. The next deploy or rollback picks the change up; a running container
 does not.
 
-**Verify:** the deploy's migration gate boots the release with the new `.env`,
-so a variable the app requires at boot (`System.fetch_env!/1`) fails there, not
-after the swap. `ssh root@<reserved-ip> cat /root/apps/<slug>/.env` shows the appended lines.
+**Verify:** check the app's behavior after a successful deployment. The generated
+app services read `.env` through Compose's `env_file`; explicit `environment`
+entries such as `PORT` take precedence. Avoid overriding pipeline-owned keys.
+Rollback skips migrations, so only code paths actually exercised during startup
+are checked before serving. Do not print the full `.env` into shared logs.
 
 ## Change the infrastructure
 
@@ -99,25 +105,31 @@ git -C <app_dir> commit -am 'infra: ...'
 ```
 
 **What happens:** `bootstrap.sh` is idempotent and applies all three Terraform
-roots (`state`, `persistent`, `app`); every step detects work already done and
-applies only your change.
+roots for hosts (or the tenant root). Existing Terraform files are not overwritten.
+It also refreshes deployment files and stages all app changes for its pipeline
+commit. Commit unrelated work first. Review template changes if you customized
+Dockerfiles, Compose, or workflow files.
 
 **Verify:** re-run `./bootstrap.sh <app_dir>` — a clean second run reports no
 changes.
 
 ## Recreate the droplet
 
-**Goal:** replace the disposable compute (resize, image bump) without losing
-data.
+**Goal:** replace the compute (resize, image bump) after confirming recovery of
+all data stored on that droplet.
 
 ```bash
 terraform -chdir=<app_dir>/infra/app destroy
 ./bootstrap.sh <app_dir>
 ```
 
-**What happens:** only the droplet, firewall and IP binding are destroyed and
-rebuilt. The database, reserved IP, DNS records and issued certificates all live
-in the `persistent` root and survive.
+**What happens:** the droplet, firewall and IP binding are destroyed and rebuilt.
+Managed Postgres, reserved IP and DNS survive in the separate persistent root.
+SQLite volumes do not: verify a current Spaces replica first; the new stack
+restores it when no local database exists. Unreplicated writes can be lost.
+Caddy certificates and static-site releases are also local to the app droplet;
+certificates must be issued again and static sites redeployed. This operation
+has downtime. Gitea's separate data-volume design is different.
 
 **Verify:** `https://<domain>` answers again after the redeploy.
 
@@ -174,6 +186,15 @@ re-run the bootstrap (it re-detects) or set `SSH_CIDRS`.
 
 The scope depends on what the app is. `teardown.sh` reads `.app-type` to decide.
 
+### Preview the scope
+
+```bash
+./teardown.sh --plan <app_dir>
+```
+
+This lists operations using local metadata without remote calls or credentials.
+It is not a Terraform plan and does not verify that remote resources exist.
+
 ### A service or host app — everything
 
 ```bash
@@ -182,7 +203,10 @@ The scope depends on what the app is. `teardown.sh` reads `.app-type` to decide.
 
 **What happens:** it prints what it will destroy and asks for confirmation, then
 tears down the droplet, firewall, reserved IP, database, DNS records and state
-bucket — **data included**. Add `--yes` to skip the prompt.
+bucket — **data and SQLite backup replicas included**. Add `--yes` to skip the
+prompt. The shared registry itself stays; only this app's image repository is
+deleted. Destroying a host also removes its tenants' running stacks with the
+droplet; remove tenant DNS/state separately before destroying the shared bucket.
 
 ### A tenant — just that app
 
@@ -218,7 +242,7 @@ If you'd rather run Terraform directly — e.g. to destroy only the disposable
 compute and keep the data:
 
 ```bash
-# disposable compute only, data survives:
+# compute only; verify SQLite replicas and plan recovery/redeployment first:
 terraform -chdir=<app_dir>/infra/app destroy
 
 # The DB cluster, reserved IP and state bucket are protected with
@@ -227,11 +251,20 @@ terraform -chdir=<app_dir>/infra/persistent destroy
 terraform -chdir=<app_dir>/infra/state destroy
 ```
 
-Also delete the container registry (`doctl registry delete`) and the code-host
-repo (`teardown.sh --delete-repo`, or by hand) if you're done with them.
+If no longer needed, remove this app's image repository with
+`doctl registry repository delete <app-name>` and its code-host repository.
+The registry can be shared by other apps; `teardown.sh` preserves it.
 
 **Verify:** `https://<domain>` stops answering; the DigitalOcean project shows
-no droplet.
+no droplet after host teardown.
+
+## Maintain agent docs
+
+Use `agent-docs.sh check`, `diff`, and `update` against the app directory to
+update shared guidance without redeploying. Use `configure` for selection changes.
+Keep local rules in `.docs/project-guidance.md`; commit the manifests and generated
+changes after review. See [Agent docs](claude-docs.md).
+
 
 ## See also
 

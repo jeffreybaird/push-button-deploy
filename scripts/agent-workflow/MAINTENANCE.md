@@ -34,6 +34,13 @@ preflights every selected repository before writing, rejects drift and local
 managed edits that would be overwritten, and never commits, pushes, fetches, or
 changes native hook trust.
 
+The compatibility command rejects targets with `.agent-docs-manifest.json`;
+use `agent-docs.sh` for those apps. It requires target Git checkout roots, but
+does not require a Git checkout for the installed tool itself. The retained
+`installer.source_commit` field is now a 64-character component fingerprint,
+not a Git commit SHA. `dirty` is always false for bundled-content provenance;
+it is not a claim that a development checkout is clean.
+
 ## Release and verification
 
 Follow `.docs/agent-workflow.md` when changing this component: test writer,
@@ -44,7 +51,11 @@ accepted test hashes. Run `bash test/run.sh` from the repository root.
 The component release is recorded in `release.json`. Installed provenance uses
 a deterministic content fingerprint, independent of the repository's Git HEAD.
 Changes to inputs that generate app files can require updates; unrelated commits
-do not. Release and workflow-contract versions are separate identifiers.
+do not. The fingerprint includes all component Python files, `release.json`,
+and bundled framework templates, including templates not selected by a target.
+Release and workflow-contract versions are separate identifiers. Update the
+component release for implementation releases; template-only corrections are
+also detected by the fingerprint.
 
 Preview a representative app before applying a new release. Review its generated
 diff and run its own checks before committing it. Update other repositories only
