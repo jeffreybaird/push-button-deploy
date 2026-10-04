@@ -325,6 +325,11 @@ install_pipeline_files() { # $1 app directory, $2 provider
 # supplied by wants_staging(); toolchain overrides remain optional environment.
 prepare_app() {
   local APP_DIR="$1" APP_TYPE="$2" FRAMEWORK="$3" DATABASE_BACKEND="$4" GIT_PROVIDER="$5"
+  # Adopt unmanaged apps once. Subsequent document changes are an explicit
+  # lifecycle operation, independent of deploying application code.
+  if [ ! -e "$APP_DIR/.agent-docs-manifest.json" ]; then
+    bash "${PBD_ROOT:-$SCRIPT_DIR}/agent-docs.sh" update "$APP_DIR" --framework "$FRAMEWORK" --app-type "$APP_TYPE"
+  fi
   printf '%s\n' "$APP_TYPE" > "$APP_DIR/.app-type"
   if is_phoenix; then
     prepare_phoenix_release "$APP_DIR" "$DATABASE_BACKEND"

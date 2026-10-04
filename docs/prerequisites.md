@@ -12,6 +12,7 @@ every one and exits naming the first that is missing.
 | Tool | Why | Install (macOS) |
 |---|---|---|
 | `git` | repo + pushes | xcode-select / brew |
+| `python3` >= 3.11 | shared agent docs and workflow generation/updates | `brew install python` |
 | `terraform` >= 1.6 | provisioning | `brew install terraform` |
 | `doctl` | DO registry + firewall ops | `brew install doctl` |
 | `gh` | **GitHub only** (default) — repo creation, secrets, run status | `brew install gh` |
@@ -27,7 +28,7 @@ Docker is **not** required locally — images build in CI.
 
 The table above is for a service. The droplet-free types — `--cli` and
 `--no-droplet` (see [App types](app-types.md)) — provision no infrastructure, so
-they need only `git`, `curl`, and the code host's tool (`gh`, or `jq` for
+they need `git`, `curl`, Python 3.11 or newer for agent docs, and the code host's tool (`gh`, or `jq` for
 Gitea): no Terraform, no `doctl`, no SSH, and **no local runtime of the language
 you pick**. Every scaffold is written in bash and built in CI, so
 `./bootstrap.sh --cli typescript` works on a machine with no Node installed. The

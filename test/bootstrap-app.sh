@@ -39,6 +39,13 @@ EOF
     [ "$APP_DIR" = caller-directory ]
     [ "$FRAMEWORK" = caller-framework ]
     [ "$(cat "$app_dir/.app-type")" = "$app_type" ]
+    for artifact in AGENTS.md CLAUDE.md .docs/project-guidance.md .docs/agent-workflow.md \
+      .agent-docs-manifest.json .codex/hooks.json .claude/settings.json; do
+      [ -f "$app_dir/$artifact" ]
+    done
+    [ "$(jq -r .framework "$app_dir/.agent-docs-manifest.json")" = "$framework" ]
+    [ "$(jq -r .app_type "$app_dir/.agent-docs-manifest.json")" = "$app_type" ]
+    bash "$SCRIPT_DIR/agent-docs.sh" check "$app_dir" --json >/dev/null
     for pair in $(framework_workflows "$app_type" "$framework"); do
       cmp "$SCRIPT_DIR/app/.$provider/workflows/${pair%%:*}" "$app_dir/.$provider/workflows/${pair##*:}"
     done

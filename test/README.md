@@ -6,7 +6,7 @@ Run the deployment tool's tests from any directory:
 bash /path/to/push-button-deploy/test/run.sh
 ```
 
-Requirements: Bash, Ruby (standard library only), jq, Perl, Git, and standard
+Requirements: Bash, Ruby (standard library only), jq, Perl, Git, Python 3.11+, and standard
 Unix utilities. No Docker daemon, Terraform installation, cloud credentials,
 Elixir, Ruby gems, or generated application dependencies are required. The
 repository workflow runs the same command with `/bin/bash` on Linux and macOS,
@@ -23,7 +23,9 @@ on exit, and failed suites print their captured output. The runner continues
 through all suites and exits nonzero if any test or syntax check failed.
 
 All top-level `test/*.sh` (except the runner) and `test/*.rb` files are discovered
-automatically. Fixtures and assertion helpers live in subdirectories.
+automatically. Fixtures and assertion helpers live in subdirectories. The agent workflow and
+agent document lifecycle suites use Python unittest; archived v1 contracts are
+retained for history and are not discovered.
 
 ## Covered behavior
 
@@ -38,7 +40,9 @@ automatically. Fixtures and assertion helpers live in subdirectories.
 | `provider-runs.sh` | GitHub query identity and empty results; Gitea response envelopes, commit filtering, ordering, status normalization and malformed responses. |
 | `teardown.sh` | Host/tenant/repository-only plans, static registry exclusion, confirmation, failure ordering and override restoration. |
 | `swap.sh` | Both colors, first deployment, no supporting services, SQLite support services, failed candidates/configuration/support startup and missing containers. |
-| `bootstrap-app.sh` | Generated deployment artifacts across 18 stack/backend/provider combinations. |
+| `bootstrap-app.sh` | Deployment artifacts and managed agent documentation across 18 stack/backend/provider combinations. |
+| `agent-workflow.sh` | Imported native guard, audit, installer and registered maintenance contracts. |
+| `agent-docs.sh` | Arbitrary app paths, framework policies, managed updates, preservation, drift rejection, selection changes, relocated bundles and scaffold integration. |
 | `workflow-scripts.sh` | Literal env serialization, private permissions, staging backup omission, remote destinations and shared-edge preservation. |
 | `workflow-templates.rb` | YAML parsing, shell syntax, helper availability, migration-before-swap and no-migration rollback contracts. |
 | `claude-docs-regression.sh` | App-owned docs preservation, reruns, literal replacement, hook validation and symlink rejection. |

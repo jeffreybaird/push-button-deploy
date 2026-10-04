@@ -95,7 +95,7 @@ have_file "CLAUDE.md written"                    "$d/AGENTS.md"
 have_file "content.md copied"                    "$d/doc/content.md"
 have_file "templates.md copied"                  "$d/doc/templates.md"
 have_file "deployment.md copied"                 "$d/doc/deployment.md"
-no_file   "no settings.json"                     "$d/.claude/settings.json"
+have_file "workflow settings.json"               "$d/.claude/settings.json"
 no_dir    "no agents dir"                        "$d/doc/agents"
 no_greps  "no 'My Site' placeholder left"        "$d/AGENTS.md" 'My Site'
 no_greps  "no 'my_site' placeholder left"        "$d/AGENTS.md" 'my_site'

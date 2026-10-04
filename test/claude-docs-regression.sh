@@ -106,7 +106,8 @@ for framework in phoenix sinatra; do
     [ -f "$target/.claude/agents/test-writer.md" ]
     [ -x "$target/.claude/cloud-setup.sh" ]
     grep -q 'CLAUDE.md' "$target/.claude/agents/test-writer.md"
-    assert_not grep -R -E 'CLAUDE\.md|\.claude/' "$target/AGENTS.md" "$target/doc/agents"
+    assert_not grep -R -E 'CLAUDE\.md|\.claude/' "$target/doc/agents"
+    grep -q '.docs/project-guidance.md' "$target/AGENTS.md"
     [ -x "$target/doc/hooks/cloud-setup.sh" ]
     cmp "$target/.claude/cloud-setup.sh" "$target/doc/hooks/cloud-setup.sh"
     command="$(jq -er '.hooks.SessionStart[0].hooks[0].command' "$target/.claude/settings.json")"
@@ -120,6 +121,7 @@ for framework in phoenix sinatra; do
   target="$WORK/$framework no hook"
   CD_NO_SETUP=1 cd_inject "$(cd_template_dir "$framework")" "$target" CoolApp cool_app
   assert_not test -e "$target/doc/hooks/cloud-setup.sh"
-  assert_not test -e "$target/.claude/settings.json"
+  jq -e '.hooks.PreToolUse | length > 0' "$target/.claude/settings.json" >/dev/null
+  jq -e '.hooks.SessionStart // [] | length == 0' "$target/.claude/settings.json" >/dev/null
 done
 printf 'docs injection regression checks passed\n'

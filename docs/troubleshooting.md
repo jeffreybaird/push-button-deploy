@@ -86,10 +86,11 @@ pipe, a CI step). Use the non-interactive path, which needs an explicit framewor
 
 ### An optional module I skipped is still referenced
 
-It shouldn't be — skipping a module also removes its bullet from the `AGENTS.md`
-index. If you edited `AGENTS.md` by hand and re-ran, the template wins on re-run
-(docs are overwritten); your own files are never touched. Re-run and re-apply your
-edits, or keep them in a section the template doesn't own.
+Use `agent-docs.sh configure /path/to/app --skip-module <name.md>` to change
+the installed selection. Updates preserve the recorded choices. Shared index
+entries follow that selection; locally edited managed sections block updates
+until reconciled. Keep project-specific additions in `.docs/project-guidance.md`
+or outside managed entry-point sections.
 
 ## Interactive mode
 
@@ -105,13 +106,14 @@ in a real terminal.
 the droplet.
 
 **Does a CLI or library need DigitalOcean/DNSimple/Spaces credentials?** No.
-Droplet-free types (`--cli`, `--no-droplet`) need only `git`, `curl` and the code
-host's tool. See [App types](app-types.md).
+Droplet-free types (`--cli`, `--no-droplet`) need `git`, `curl`, Python 3.11 or
+newer for agent docs, and the code host's tool. See [App types](app-types.md).
 
 **I bootstrapped an app before the starter agents existed — what changed?** A
-normal (non-interactive) `bootstrap.sh` run now also emits the two starter agents
-(`test-writer`, `code-reviewer`) under `doc/agents/`. Docs are otherwise
-identical. Retrofit an existing app with `./claude-docs.sh <app_dir>`.
+new-app generation installs shared workflow roles and hooks for Codex and Claude,
+plus template-specific guidance. Retrofit an existing app with
+`./agent-docs.sh configure <app_dir> --framework <framework>`, then maintain it
+with `check`, `diff`, and `update`.
 
 **Can I switch a live app between SQLite and Postgres by flipping the flag?** No.
 The flag only affects newly generated apps; converting a live app is a data

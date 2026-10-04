@@ -2,259 +2,117 @@
 
 [← Docs index](index.md) · push-button-deploy
 
-Generated apps receive both Claude Code files and agent-neutral docs. Both
-layouts are rendered from the same templates with the app's names filled in.
+`push-button-deploy` generates an app's agent guidance and manages its future
+updates. New services, CLIs, and libraries receive the shared workflow for both
+Codex and Claude. Framework modules, starter profiles, and setup hooks are
+included where the selected template supplies them.
 
-## What gets generated
+Applications keep committed, self-contained copies. They do not need this tool
+to run their agents; use it when installing or updating shared guidance.
+Python 3.11 or newer is required for generation and maintenance.
 
-```text
-CLAUDE.md                  Claude Code project guide
-.claude/
-  *.md                     Claude guidance modules
-  agents/*.md              registered Claude agent profiles
-  cloud-setup.sh            cloud-session setup script
-  settings.json            automatic Claude hook registration
-AGENTS.md                  project guide for coding agents
-doc/
-  *.md                     the same guidance with doc/ references
-  agents/*.md              reference copies of the agent profiles
-  hooks/cloud-setup.sh      cloud-session setup script
+## Maintain an app
+
+Run the command from any working directory with an explicit app path:
+
+```sh
+/path/to/push-button-deploy/agent-docs.sh check /path/to/app
+/path/to/push-button-deploy/agent-docs.sh diff /path/to/app
+/path/to/push-button-deploy/agent-docs.sh update /path/to/app
 ```
 
-Claude hook registration remains in `.claude/settings.json` and invokes
-`doc/hooks/cloud-setup.sh`. The `.claude/cloud-setup.sh` copy remains available.
-Optional formatter hooks keep their existing commands. These hooks are
-Claude Code-specific; copying them does not register hooks with other agents.
-Zola ships guidance only, without agents or hooks.
+`check` reports installation status. `diff` previews the changes. Neither writes
+to the app. `update` applies reviewed shared changes using the framework and
+selections already recorded in the app. Repeating an update with the same inputs
+leaves the generated content unchanged.
 
-The Claude guide and profiles retain `CLAUDE.md` and `.claude/` references.
-The new guide and profiles use `AGENTS.md` and `doc/` references. These are
-generated copies, not symlinks: rerun the injector to refresh both layouts from
-the template. Local edits to selected generated files are overwritten.
+The app-local `.agent-docs-manifest.json` records selections, component provenance,
+and managed content. Keep it under version control with the generated files.
+Provenance follows the bundled component and template content, not unrelated
+commits in the central repository.
 
-The docs come from static **template roots** in this repo, copied into the app
-with the `MyApp`/`my_app` placeholders (or `My Site`/`my_site` for Zola)
-rewritten to the app's real name:
+## Install and configure
 
-| Framework | Template root | Placeholders |
-|---|---|---|
-| Phoenix | `app-template/` | `MyApp` / `my_app` |
-| Sinatra | `app-template-ruby/` | `MyApp` / `my_app` |
-| Zola | `app-template-zola/` | `My Site` / `my_site` |
+Normal app generation installs the workflow automatically. To install into an
+existing app, or change its selections, use `configure`:
 
-A normal `bootstrap.sh` run injects **everything** automatically. You only need
-the commands below to generate docs on their own, retrofit an existing repo, or
-**choose** what lands.
-
-> CLI and library app types (`--cli`, `--no-droplet`) ship no docs yet — the
-> engine is ready for them, but the template roots aren't written.
-
-## Core vs optional modules
-
-Each guide indexes the modules in its own layout (`.claude/*.md` or `doc/*.md`) in two groups.
-**Core** modules always ship. **Optional** modules ship by default but can be
-left out; skipping one also removes its line from the `AGENTS.md` index, so the
-guide never points at a file that isn't there.
-
-The optional modules (Phoenix and Sinatra):
-
-| Module | For |
-|---|---|
-| `multi-tenancy.md` | tenant scoping, query patterns, test isolation |
-| `rbac.md` | roles, enforcement, authorization |
-| `external-service-integration.md` | wrapping a third-party API behind a client |
-| `payment-integration.md` | billing / subscriptions / checkout |
-| `object-storage-integration.md` | S3-compatible file/blob storage |
-
-Zola ships three core docs (`content.md`, `templates.md`, `deployment.md`), no
-optional modules, no agents and no hook.
-
-## The command
-
-`./claude-docs.sh` generates the docs on their own — guided by default, off the
-same templates, provisioning nothing.
-
-```bash
-./claude-docs.sh                       # guided; framework inferred from the cwd
-./claude-docs.sh ~/src/myapp           # guided, into that directory
-./claude-docs.sh --framework sinatra ~/src/myapp
-./claude-docs.sh --all ~/src/myapp     # non-interactive: include everything
-./claude-docs.sh --help
+```sh
+./agent-docs.sh configure ~/src/myapp --framework phoenix
+./agent-docs.sh configure ~/src/myapp --skip-module payment-integration.md
+./agent-docs.sh configure ~/src/mytool --app-type cli --framework bash-cli
 ```
 
-| Option | Meaning |
-|---|---|
-| `--framework, -f <name>` | `phoenix`, `sinatra` or `zola`. Inferred from the app's marker file (`mix.exs` / `Gemfile` / `config.toml`) when omitted; you are prompted if it can't be inferred. |
-| `--all` | include everything without prompting (works with no terminal) |
-| `--help, -h` | usage |
-| `<app_dir>` | target directory (defaults to `.`) |
+Framework values follow the app generators. Web templates are available for
+`phoenix`, `sinatra`, and `zola`; CLI frameworks are `escript`, `ruby-cli`,
+`bash-cli`, and `ts-cli`, and the library framework is `mix`. CLI and library
+apps receive generic project
+entry points and the shared workflow with language-appropriate ownership policy.
+The command accepts `--skip-module` and `--skip-agent` repeatedly. Pass `--all`
+to `configure` to reset optional selections to their defaults. `--no-setup`
+omits the optional template setup hook; `--hook format` selects the template's
+formatter hook when available. These template choices do not disable the shared
+workflow guards or audit registration. See `./agent-docs.sh --help` for all flags.
 
-It writes both guides and selected files in `.claude/` and `doc/` — never your code.
+Existing `./claude-docs.sh` and `./bootstrap.sh --docs` commands remain compatible
+frontends. Their guided framework and module choices use the same lifecycle;
+they no longer provide an independent overwrite path. Bootstrap safely adopts an existing app if it has no lifecycle manifest, preserving
+its local guidance and settings. It does not refresh docs in an already-managed
+app; use the maintenance commands for those updates. `bootstrap.sh --check`
+remains read-only.
 
-## How-to
+## What belongs to the app
 
-### Generate docs for a brand-new app
+Put project-specific rules in `.docs/project-guidance.md`. The lifecycle preserves
+that file and local text outside bounded generated sections of `AGENTS.md` and
+`CLAUDE.md`. It also preserves unrelated native settings and separate hook registrations.
+An installed managed hook registration is owned as a unit: editing it, including
+adding another hook inside that same registration, is treated as drift. Keep
+custom hooks in separate registrations.
+Shared modules and generated role definitions are tool-owned; edit their source
+templates here if the change should propagate to generated applications.
 
-Goal: put a tailored set of agent docs into a fresh or existing app directory.
+The installation includes:
 
-```bash
-./claude-docs.sh ~/src/myapp
-```
+- `AGENTS.md` and `CLAUDE.md` entry points, plus framework guidance under `doc/`
+  and `.claude/` where templates provide it.
+- `.docs/agent-workflow.md`, five role definitions per platform, ownership
+  policies, direct-edit guards, and shell-audit hooks.
+- Native registration in `.codex/hooks.json` and `.claude/settings.json`.
+- The lifecycle manifest and `.codex/hooks/workflow-manifest.json` for workflow
+  installation metadata.
 
-What happens: it detects the framework from the directory's marker file (or asks),
-walks you through each optional module, each starter agent, and the hook
-(defaulting to *include* at every step), shows a recap, writes the files, then
-offers to open `AGENTS.md` in your editor.
+Changing selections removes only unchanged content owned by the lifecycle.
+Locally edited managed content blocks the update; it is not silently deleted.
+Template customization and lifecycle changes are preflighted together before
+writes. Symlink destinations and unsafe managed paths are rejected.
 
-Verify: `ls ~/src/myapp/doc` shows the modules you kept;
-`grep -r MyApp ~/src/myapp/AGENTS.md` returns nothing (placeholders were
-rewritten).
+## Resolve drift
 
-### Retrofit an existing repo
+If `check` reports drift, use `diff` and your app's Git history to identify the
+changed managed files. Preserve intentional project-specific text in the app-owned
+guidance file. For shared changes, update the central templates or implementation,
+then restore the app's managed section to its recorded version and preview again.
+Do not edit manifest hashes to hide a conflict. There is no force-overwrite mode.
 
-Goal: add agent docs to a repo that doesn't have them, without touching its code.
+Preflight detects conflicts before writing, but updates are not a filesystem
+transaction. An operating-system write failure can interrupt an update. Review
+the app's Git diff and installation status before retrying.
 
-```bash
-./claude-docs.sh --framework phoenix ~/src/existing-app
-```
+## Runtime and packaging
 
-What happens: same guided flow. Selected template files overwrite matching
-paths, including any local edits to those files. Other files under `.claude/` and `doc/`
-are left byte-for-byte unchanged; placeholder replacement runs only on the files
-selected for this run. Nothing else in the repo is touched. (For a Phoenix app you can also
-use `./scripts/inject-skill-docs.sh <app_dir>`, which additionally injects the
-`req`/`oban`/`cucumberex` deps the docs assume into `mix.exs`.)
+The tool resolves its bundle independently of the current working directory and
+supports a symlinked entry point. `PBD_ROOT` can point at the installed bundle.
+The bundle may be read-only and need not contain Git metadata; mutable state
+belongs to the target app. Python bytecode caches are not written into the bundle.
+Homebrew packaging itself remains separate work; its eventual formula must
+provide Python 3.11 or newer.
 
-### Run it again
+Installing hooks does not establish native trust or invocation. Review changed
+hook definitions when prompted by the host and validate Codex CLI, desktop, and
+Claude Code separately. The maintenance tool reports native activation as
+`UNKNOWN` and never changes trust settings.
 
-The same template, names, and selections produce the same generated content.
-Skipping a module, agent, or cloud hook leaves any existing copy untouched; it
-does not delete files from a previous run. Remove unwanted old files yourself
-after reviewing local edits. Skipped module bullets are removed from the newly
-generated `CLAUDE.md` and `AGENTS.md` indexes.
-
-Selected file destinations and the `doc/`, `doc/agents/`, `doc/hooks/`, and
-`.claude/` directories
-must not be symlinks. Invalid hook variants and symlink destinations are rejected
-before writing. File writes are sequential, so an I/O failure during generation
-can leave a partially updated set; correct the failure and rerun.
-
-### Take everything, non-interactively
-
-Goal: script the injection, or run it where there's no terminal (CI, a pipe).
-
-```bash
-./claude-docs.sh --all --framework sinatra ~/src/myapp
-```
-
-What happens: every module, both agents and the SessionStart hook are written
-with no prompts. `--all` needs an explicit `--framework` if the directory has no
-marker file to infer from.
-
-### Do it from bootstrap
-
-Goal: generate docs via the main entry point, without provisioning anything.
-
-```bash
-./bootstrap.sh --docs ~/src/myapp
-```
-
-`--docs` delegates straight to `./claude-docs.sh` (guided, no provisioning). If
-`FRAMEWORK` is set in your environment it is honored; otherwise the framework is
-inferred or prompted.
-
-### Tailor docs while bootstrapping a new app
-
-Goal: pick which docs land as part of a full `--interactive` bootstrap run.
-
-```bash
-./bootstrap.sh --interactive ~/src/myapp
-```
-
-During the interactive flow, after you choose the app type and language, answer
-**yes** to *"Customize which Claude docs (modules, agents, hooks) the app gets?"*
-You'll get the same per-module / per-agent / hook prompts; your choices flow
-through to the app that's generated moments later. Answer **no** (the default) to
-take everything.
-
-### Add the "format on write" hook
-
-Goal: have Claude Code run the formatter after every edit.
-
-During a guided run, when asked about the SessionStart hook, accept it, then
-answer **yes** to the `format` hook. This installs a `PostToolUse` hook that runs
-`mix format` (Phoenix) or `rubocop -A` (Sinatra) after `Edit`/`Write`/`MultiEdit`.
-It never blocks (`|| true`) and runs project-wide, so expect it to reformat more
-than the file you touched.
-
-### Open the result in your editor
-
-At the end of a guided run you're asked whether to open `AGENTS.md`. It uses
-`$VISUAL`, then `$EDITOR`, then `vi`. Skip it with **no** (the default) or by
-running non-interactively.
-
-## Manifest format (reference)
-
-Each template root carries a `claude-docs.manifest` that declares what the
-injector offers. It is never copied into the app.
-
-```
-# role|arg1|arg2  (blank lines and #-comments ignored)
-placeholders|MyApp|my_app                       # the two strings rewritten to the app's name
-optional|rbac.md|roles, enforcement, authorization
-agent|test-writer.md|drafts tests to the testing rules
-hook|format|also run the formatter on file writes (PostToolUse)
-```
-
-- `placeholders|<Module>|<app>` — the two search strings the rewrite replaces
-  (module name and app name). Defaults to `MyApp`/`my_app` when absent.
-- `optional|<file.md>|<summary>` — a `doc/` module the user may skip. Every
-  `doc/*.md` NOT listed here is core (always included).
-- `agent|<file.md>|<summary>` — a `doc/agents/` file the user may include.
-- `hook|<id>|<summary>` — an optional hook variant. `format` swaps `settings.json`
-  for `settings.<id>-hook.json`.
-
-If a template root has no manifest, the injector includes everything and prompts
-for nothing — the safe default.
-
-## Under the hood
-
-Template sources retain their existing `CLAUDE.md` and `.claude/` layout. The
-injector renders both the original layout and the additional destination names,
-updating references only in the new layout.
-
-All paths share one injector, `scripts/claude-docs.sh`, so a guided run and an
-automatic bootstrap run place docs identically:
-
-- `scripts/prompt.sh` — the interactive prompt primitives (also used by
-  `bootstrap.sh --interactive`).
-- `scripts/claude-docs.sh` — the public API and injection sequence.
-- `scripts/claude-docs/manifest.sh` — template metadata queries.
-- `scripts/claude-docs/framework.sh` — framework detection and app names.
-- `scripts/claude-docs/selection.sh` — guided questions and selection options.
-- `scripts/claude-docs/files.sh` — selected paths, hook sources, destination checks.
-- `scripts/claude-docs/render.sh` — literal placeholder replacement and index pruning.
-- `bootstrap.sh` and the framework scaffolds (`scripts/inject-skill-docs.sh`,
-  `scripts/new-sinatra-app.sh`, `scripts/new-zola-site.sh`) all call into it.
-  Non-interactively (skip nothing) they generate every module and profile in
-  both layouts, with hook registration for frameworks that ship hooks.
-
-## Test it
-
-An offline smoke test covers the injector across all three frameworks (copy,
-placeholder rewrite, optional-module prune, agent/hook selection, `bash -n`):
-
-```bash
-bash test/claude-docs-smoke.sh
-bash test/claude-docs-regression.sh
-```
-
-The regression suite covers app-owned files, reruns, skipped existing files,
-placeholder-like replacement values, hook variants, and rejected symlinks. Both
-suites also run through `bash test/run.sh`. They need no network and no
-`mix`/`bundle`/`zola` — just Bash and standard text/file tools, including Perl.
-
-## Troubleshooting
-
-See [Troubleshooting](troubleshooting.md) for: framework can't be inferred, a
-guided run in a no-terminal context, and placeholder-collision edge cases.
+For registered workflow-only repositories and release procedures, see
+[Maintaining shared workflows](../scripts/agent-workflow/MAINTENANCE.md).
+For migration validation and audit limitations, see
+[Migration evidence](agent-workflow-migration.md).

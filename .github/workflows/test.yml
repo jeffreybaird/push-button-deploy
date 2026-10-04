@@ -24,6 +24,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
       - name: Run repository tests
         # /bin/bash exercises Apple's Bash 3.2 on macOS and Bash 5 on Linux.
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}

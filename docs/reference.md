@@ -30,10 +30,26 @@ Stand up an app, its repo and its pipeline. `app_dir` defaults to `.`.
 Selection can also come from the environment: `APP_TYPE`, `FRAMEWORK`,
 `LANGUAGE`. See [App types](app-types.md).
 
+### `agent-docs.sh`
+
+Manage shared guidance and agent workflow files for an explicit application path.
+Python 3.11 or newer is required. Full guide: [Agent docs](claude-docs.md).
+
+```bash
+./agent-docs.sh check /path/to/app
+./agent-docs.sh diff /path/to/app
+./agent-docs.sh update /path/to/app
+./agent-docs.sh configure /path/to/app --framework phoenix
+```
+
+`check` and `diff` are read-only. `update` retains the installed selection;
+`configure` changes it. `--all` on `configure` resets optional selections.
+Local project rules belong in `.docs/project-guidance.md`.
+
 ### `claude-docs.sh`
 
-Guided creation of an app's Claude Code docs (`CLAUDE.md` + `.claude/`). Provisions
-nothing. `app_dir` defaults to `.`. Full guide: [Claude Code docs](claude-docs.md).
+Compatibility frontend for the same managed agent-docs lifecycle. Provisions
+nothing. `app_dir` defaults to `.`. Full guide: [Agent docs](claude-docs.md).
 
 ```bash
 ./claude-docs.sh [options] [app_dir]
@@ -42,7 +58,7 @@ nothing. `app_dir` defaults to `.`. Full guide: [Claude Code docs](claude-docs.m
 | Option | Meaning |
 |---|---|
 | `--framework`, `-f <name>` | `phoenix` / `sinatra` / `zola`; inferred from the marker file when omitted |
-| `--all` | include everything without prompting (needs no terminal) |
+| `--all` | non-interactive; include everything initially, retain installed choices on reruns |
 | `--help`, `-h` | usage |
 
 ### `teardown.sh`

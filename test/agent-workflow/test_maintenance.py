@@ -276,15 +276,28 @@ class MaintenanceCLI(MaintenanceFixture):
         self.assertEqual(provenance, json.loads(manifest_path.read_text())['installer'])
 
 
+class LifecycleOwnership(MaintenanceFixture):
+    def test_registered_cli_refuses_lifecycle_owned_target_without_writes(self):
+        root = self.installed()
+        (root / '.agent-docs-manifest.json').write_text('{"schema_version": 1}\n')
+        before = self.snapshot(root)
+        for operation in ('check', 'diff', 'apply'):
+            with self.subTest(operation=operation):
+                result = self.cli(operation)
+                self.result(result, 2)
+                self.assertIn('agent-docs.sh', result.stdout + result.stderr)
+                self.assertEqual(before, self.snapshot(root))
+
+
 class InstallerProvenance(MaintenanceFixture):
     # Reuse fixture helpers; only provenance cases are collected in this class.
-    def test_release_and_manifest_identify_clean_installer_commit(self):
+    def test_release_and_manifest_identify_installer_component_content(self):
         release = json.loads((self.source / 'release.json').read_text())
-        self.assertEqual('0.2.0', release['installer_version'])
+        self.assertEqual('0.3.0', release['installer_version'])
         root = self.installed()
         manifest = json.loads((root / '.codex/hooks/workflow-manifest.json').read_text())
-        self.assertEqual({'version': release['installer_version'],
-                          'source_commit': self.git(self.source, 'rev-parse', 'HEAD')}, manifest['installer'])
+        self.assertEqual(release['installer_version'], manifest['installer']['version'])
+        self.assertRegex(manifest['installer']['source_commit'], r'^[0-9a-f]{64}$')
         report = json.loads(self.cli('check').stdout)
         self.assertEqual(False, report['installer']['dirty'])
         self.assertEqual(manifest['installer']['source_commit'], report['installer']['source_commit'])
@@ -301,31 +314,34 @@ class InstallerProvenance(MaintenanceFixture):
         self.result(self.cli('diff'), 1)
         self.assertEqual(before, self.snapshot(root))
         self.result(self.cli('apply'), 0)
-        self.assertEqual(self.git(self.source, 'rev-parse', 'HEAD'),
+        self.assertEqual(json.loads(self.cli('check').stdout)['installer']['source_commit'],
                          json.loads(path.read_text())['installer']['source_commit'])
 
-    def test_dirty_installer_is_previewable_but_apply_rejected(self):
+    def test_component_updates_apply_without_source_git_or_clean_checkout(self):
         root = self.installed()
-        for state in ('unstaged', 'staged', 'untracked'):
-            with self.subTest(state=state):
-                path = self.source / ('untracked.py' if state == 'untracked' else 'installer.py')
-                original = path.read_text() if path.exists() else ''
-                path.write_text(original + '\n# dirty source fixture\n')
-                if state == 'staged':
-                    self.git(self.source, 'add', 'installer.py')
-                before = self.snapshot(root)
-                check = self.cli('check')
-                self.assertIn(check.returncode, (0, 1))
-                self.assertTrue(json.loads(check.stdout)['installer']['dirty'])
-                diff = self.cli('diff')
-                self.assertIn(diff.returncode, (0, 1))
-                self.assertTrue(json.loads(diff.stdout)['installer']['dirty'])
-                self.result(self.cli('apply'), 2)
-                self.assertEqual(before, self.snapshot(root))
-                if state == 'untracked':
-                    path.unlink()
-                else:
-                    self.git(self.source, 'reset', '--hard', '-q', 'HEAD')
+        initial = json.loads(self.cli('check').stdout)['installer']['source_commit']
+        path = self.source / 'installer.py'
+        path.write_text(path.read_text() + '\n# component update fixture\n')
+        before = self.snapshot(root)
+        check = self.cli('check')
+        self.assertEqual('update', self.result(check, 1)['heybridge']['status'])
+        metadata = json.loads(check.stdout)['installer']
+        self.assertFalse(metadata['dirty'])
+        self.assertNotEqual(initial, metadata['source_commit'])
+        self.assertEqual(before, self.snapshot(root))
+        shutil.rmtree(self.source / '.git')
+        self.result(self.cli('apply'), 0)
+        self.assertEqual(metadata['source_commit'], json.loads(self.cli('check').stdout)['installer']['source_commit'])
+
+    def test_unrelated_files_and_git_commits_do_not_change_component_provenance(self):
+        root = self.installed()
+        initial = json.loads(self.cli('check').stdout)['installer']['source_commit']
+        (self.source / 'unrelated.md').write_text('Not part of the workflow component.\n')
+        self.result(self.cli('check'), 0)
+        self.commit(self.source)
+        self.result(self.cli('check'), 0)
+        self.assertEqual(initial, json.loads(self.cli('check').stdout)['installer']['source_commit'])
+        self.assertEqual('current', self.result(self.cli('check'), 0)['heybridge']['status'])
 
 
 class HumanStatusHelp(MaintenanceFixture):

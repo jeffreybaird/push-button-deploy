@@ -303,6 +303,8 @@ preflight() {
   for b in $REQUIRED_BINS; do
     have "$b" || fail "missing binary: $b"
   done
+  python3 -B -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
+    || fail "Python 3.11 or newer is required for agent document management"
 
   # Bootstrap injects ALL terraform variables via TF_VAR_ env, which tfvars
   # files silently OVERRIDE (terraform precedence: tfvars > env). A leftover

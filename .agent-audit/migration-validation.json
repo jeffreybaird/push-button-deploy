@@ -1,0 +1,122 @@
+{
+  "accepted_test_sha256": {
+    "test/README.md": "685ebd4863b245e16ac2ca839226e5853810f16200b9eba3f32cd7ed6c5c8ec2",
+    "test/agent-docs.sh": "bc8c2b77b4a1afc6186ea47683269a221372f8ad54c38d1657150a3f7d90a185",
+    "test/agent-docs/CONTRACT.md": "0d26d3219d94f191788671954e04d32f6380ac926b01d3fe8e278a2ff3d197dd",
+    "test/agent-docs/test_bootstrap_preservation.py": "28dff340729de6217d668c0e857263dfddd367ecb955d932860fe566abca3ff7",
+    "test/agent-docs/test_invalid_native_config.py": "a8df8881b138797be1277c296831b1ed8d281e3664e6991a322e74a41c22493d",
+    "test/agent-docs/test_lifecycle.py": "4568ea7eef8ae7518766ab217ed35e0faae30412c5dca98f93ab1c1fbb192101",
+    "test/agent-docs/test_policy_scope.py": "67524cd3d5fbf13dfde4aeb87c8af67e9cde20d93f64ce5cc736f6a21a8539bb",
+    "test/agent-docs/test_python_preflight.py": "79378b8d4f4cd71f3c0b047d37217b710cfbaa7a57ab752d874ffe549be17802",
+    "test/agent-docs/test_saved_selection_evolution.py": "98000a412ef55b5b444f58a6e06241d716ba0001a2433765aeea74cd9d1528fe",
+    "test/agent-docs/test_template_evolution.py": "11f42672368bbd6c134dad8cfe6a1f0cf1a48c24aff554d1414aec955e591d70",
+    "test/agent-workflow.sh": "e55c0f289532baf5de8eb8effc3b880755d30ba97719a72985c61c50536085be",
+    "test/agent-workflow/CONTRACT.md": "fee80c385270e05c35623d275f04f7dd3b93a6c26f35d99370870930c7f2e643",
+    "test/agent-workflow/archive_v1/CONTRACT.md": "5137275348504dc8083a08285c9699b12e20976c1bd654560c3f6cefbd75ab5f",
+    "test/agent-workflow/archive_v1/DELIVERY_CONTRACT.md": "d1342f2c493626159de8f8e8fce3fe83caa3209a8730d6bd266f103a8fec5b09",
+    "test/agent-workflow/archive_v1/REPO_PROTECTIONS_CONTRACT.md": "5390f6cbae955b45d8982f33406952b9d7eb4a717f98e7255ea099b82e32bf99",
+    "test/agent-workflow/archive_v1/SHA256.json": "60e433fda0e044c7a1dd19e92929d04c54011c0b51d3f94755bad804877a90ea",
+    "test/agent-workflow/archive_v1/test_coordination.py": "76690a5d7afb935bbd073e88302788c2641740e98b59f836f3000b6e78f85b0a",
+    "test/agent-workflow/archive_v1/test_delivery.py": "810ac3e7f8b9c9ceaf60764c31a197e9c00a547ed09ea3ca81909d4728000dd5",
+    "test/agent-workflow/archive_v1/test_delivery_refs.py": "886f52d66f4a6ec53951a7aae5d74831a664cfbfc79c5e704a40b70cb643bd39",
+    "test/agent-workflow/archive_v1/test_hash_inspection.py": "354c801bbe99c5f08545bdf76db941b2039c1d51ec3f4169aaab849ebce6668f",
+    "test/agent-workflow/archive_v1/test_install_regressions.py": "b64859e2dcd3375deed75ff6d045b670a17c03026d131cdd18c04087e38c00fe",
+    "test/agent-workflow/archive_v1/test_installer.py": "76f3c40921ff24e65d17abdc0c3e397008b6f889b97baeccc7ca669ef27e535e",
+    "test/agent-workflow/archive_v1/test_native_claude_resume.py": "b449fe6fdeb8e3bdc0632cfc62fe7d806625de2d07912363804014f8d3bfb0fb",
+    "test/agent-workflow/archive_v1/test_native_coordination.py": "d5df1f964e361603859a1ff733c3e927e859f121110b06e4bd2fa00ae726d8a7",
+    "test/agent-workflow/archive_v1/test_repo_protections.py": "094a597773a44dfab8c45dd46eef05ee1d60af75742ad04f44ec8b2b4c7c4e92",
+    "test/agent-workflow/archive_v1/test_workflow_guard.py": "483819e87d103bd9a7fb1a84e8738a0f82fe3281eef2e3411b58b74307a49bfb",
+    "test/agent-workflow/test_claude_registration.py": "960e205ee6b5ed103fe10a064f50c1b1e1dc5781fa6392edcd3be83636ee64c8",
+    "test/agent-workflow/test_codex_audit.py": "a643a97b9d5cc34cebf5e6c90447d342af32733fad8b5849d6e19062b0197f16",
+    "test/agent-workflow/test_codex_audit_privacy.py": "1a41263c7bc2a20644409674677874ef6862778d3df9d778ef0924f1ee5e6a77",
+    "test/agent-workflow/test_install_regressions.py": "f4d084cc68b89210b4e0479fd61704ce3f173da1eac3a5918fbe2b6c44ef9476",
+    "test/agent-workflow/test_installer.py": "432781b83c183e4608833f69e654dc7c6567cd6628811c3faa6c1021b26cb78a",
+    "test/agent-workflow/test_maintenance.py": "22753b8fffe648149edc364987c9499750c01723cf1ab7afb00696fc3252c935",
+    "test/agent-workflow/test_scope_migration.py": "6298ac872ed0aeb8e88179a5773b4b07b6a833a3127c85cbafc5f958ac46f9f4",
+    "test/agent-workflow/test_workflow_audit.py": "7cdf1524a661402535a79cca68f239e4e0dd191733dcfd7ee521f87ec8de597f",
+    "test/agent-workflow/test_workflow_guard.py": "1f1b9140a1cf357f6f7bb17b90d0620b224c13653948044d31892dc455a03bb6",
+    "test/bootstrap-app.sh": "640c395ec6ce1ffc3cd0a4d3021f9201739ee389009e9f6bcb4d9b70e05a5454",
+    "test/claude-docs-regression.sh": "e16e6f26baf3f26d598b5fd86c8447e500fbf40a2bf4b70759354f082e76cd9f",
+    "test/claude-docs-smoke.sh": "8e92c3f122812c4cabc8029381f146b3de90d04774737c3ffdc155caa2a93124",
+    "test/config.sh": "f5b7f1185af6e361c4bcb6bafab14920b79043d9eb8ecea7ae966e717923c084",
+    "test/run.sh": "545276de5d40dc1bb354bd44a13710fd6d9c8b8ee0f9637a4b45c14ddcb1ecb8"
+  },
+  "additional_checks": {
+    "accepted_hash_comparison": "all 40 files unchanged",
+    "git_diff_check": "passed",
+    "python_ast_source_files": 6
+  },
+  "baselines": {
+    "deployment_suites": 16,
+    "original_workflow_tests": 97,
+    "result": "passed"
+  },
+  "fixture_signing": "Command-scoped commit.gpgsign=false for disposable unittest fixture commits only; real repository signing configuration unchanged.",
+  "green": {
+    "command": "bash test/run.sh",
+    "exit_code": 0,
+    "failures": 0,
+    "includes": "shell and Ruby regressions, shell syntax checks",
+    "lifecycle_tests": 28,
+    "suites": 18,
+    "workflow_tests": 99
+  },
+  "limits": [
+    "Offline regressions only; no live cloud deployment or native hook activation validation.",
+    "Security advisory review recorded separately by independent reviewer."
+  ],
+  "python_version": "3.14.6",
+  "recorded_at_utc": "2026-10-04T11:59:34.977876+00:00",
+  "red_evidence": [
+    {
+      "command": "PYTHONPATH=\"$PWD/scripts/agent-workflow\" python3 -B -m unittest discover -s test/agent-workflow -v",
+      "result": "exit 1: missing imported modules/scripts; 37 failures, 15 errors",
+      "scope": "import"
+    },
+    {
+      "command": "bash test/run.sh",
+      "result": "exit 1: 18 suites, 6 failures",
+      "scope": "lifecycle"
+    },
+    {
+      "command": "python3 -B -m unittest discover -s test/agent-docs -p test_bootstrap_preservation.py -v",
+      "result": "exit 1: lifecycle implementation absent",
+      "scope": "bootstrap preservation"
+    },
+    {
+      "command": "python3 -B -m unittest discover -s test/agent-docs -p <test_policy_scope.py|test_python_preflight.py> -v (separate calls)",
+      "result": "each exit 1: JSON incorrectly scoped; Python 3.10 accepted; recorded after implementer reverted premature fixes",
+      "scope": "policy and Python preflight"
+    },
+    {
+      "command": "python3 -B -m unittest discover -s test/agent-docs -p test_template_evolution.py -v; targeted InstallerProvenance release test (separate calls)",
+      "result": "exit 1: 3 evolution failures; release expected 0.3.0 versus 0.2.0",
+      "scope": "template evolution and release"
+    },
+    {
+      "command": "python3 -B -m unittest discover -s test/agent-docs -p <test_saved_selection_evolution.py|test_invalid_native_config.py> -v (separate calls)",
+      "result": "each exit 1: retired selections rejected; malformed native TOML produced traceback",
+      "scope": "saved selections and malformed native configuration"
+    }
+  ],
+  "role": "workflow_runner",
+  "schema_version": 1,
+  "self_check": {
+    "command": "check",
+    "installer": {
+      "dirty": false,
+      "source_commit": "6f6a332460053dc8376e65a2390be819d21bbf90129b49ab704956caafc73dbd",
+      "version": "0.3.0"
+    },
+    "repositories": [
+      {
+        "changed_files": [],
+        "drift_files": [],
+        "name": "push-button-deploy",
+        "native_activation": "UNKNOWN",
+        "path": "/Users/jeffreybaird/src/push-button-deploy",
+        "status": "current"
+      }
+    ]
+  }
+}

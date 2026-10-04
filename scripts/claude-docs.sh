@@ -25,7 +25,7 @@
 # Portable: BSD/macOS bash, awk, perl.
 
 CD_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CD_ROOT="$(cd "$CD_LIB_DIR/.." && pwd)"
+CD_ROOT="${PBD_ROOT:-$(cd "$CD_LIB_DIR/.." && pwd)}"
 
 declare -F fail >/dev/null 2>&1 || fail() { printf 'claude-docs: %s\n' "$*" >&2; exit 1; }
 declare -F log  >/dev/null 2>&1 || log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
@@ -39,6 +39,26 @@ declare -F log  >/dev/null 2>&1 || log()  { printf '\033[32m==>\033[0m %s\n' "$*
 
 cd_inject() { # template_dir, app_dir, module_value, app_value
   local tdir="$1" adir="$2" modval="$3" appval="$4"
+  local framework="" module agent
+  case "$tdir" in
+    "$CD_ROOT/app-template"|"$CD_LIB_DIR/../app-template") framework=phoenix ;;
+    "$CD_ROOT/app-template-ruby"|"$CD_LIB_DIR/../app-template-ruby") framework=sinatra ;;
+    "$CD_ROOT/app-template-zola"|"$CD_LIB_DIR/../app-template-zola") framework=zola ;;
+  esac
+  if [ -n "$framework" ]; then
+    # Existing lifecycle selections are authoritative. Configuration changes
+    # use agent-docs configure; legacy reruns cannot reset an app's choices.
+    set -- update "$adir"
+    if [ ! -e "$adir/.agent-docs-manifest.json" ]; then
+      set -- "$@" --framework "$framework" --module-name "$modval" --app-name "$appval"
+      for module in ${CD_SKIP_MODULES:-}; do set -- "$@" --skip-module "$module"; done
+      for agent in ${CD_SKIP_AGENTS:-}; do set -- "$@" --skip-agent "$agent"; done
+      [ -z "${CD_HOOK:-}" ] || set -- "$@" --hook "$CD_HOOK"
+      [ -z "${CD_NO_SETUP:-}" ] || set -- "$@" --no-setup
+    fi
+    bash "$CD_ROOT/agent-docs.sh" "$@"
+    return
+  fi
   [ -n "$tdir" ] && [ -n "$adir" ] || fail "cd_inject: template_dir and app_dir required"
   [ -f "$tdir/CLAUDE.md" ] || fail "no CLAUDE.md in $tdir"
   [ -d "$tdir/.claude" ] || fail "no .claude/ in $tdir"

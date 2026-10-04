@@ -59,6 +59,7 @@ for provider in github gitea; do
       TOTAL_STEPS=sentinel
       resolve_app_config
       [ "$TOTAL_STEPS" = sentinel ]
+      contains "$REQUIRED_BINS" python3
       if [ "$APP_TYPE" != service ]; then
         [ "$DATABASE_BACKEND" = none ]
         assert_not contains "$REQUIRED_BINS" terraform

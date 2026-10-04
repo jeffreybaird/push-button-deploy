@@ -428,4 +428,6 @@ The BEAM versions are pinned in \`.tool-versions\`, which CI reads directly.
 EOF
 } > "$APP_DIR/README.md"
 
+if [ "$KIND" = escript ]; then _docs_framework=escript; else _docs_framework=mix; fi
+bash "${PBD_ROOT:-$SCRIPT_DIR/..}/agent-docs.sh" update "$APP_DIR" --framework "$_docs_framework"
 log "scaffolded $APP_DIR ($KIND): mix.exs, lib/, test/, .tool-versions, README.md"

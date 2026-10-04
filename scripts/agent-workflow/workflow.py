@@ -1,6 +1,7 @@
 """Read-only maintenance previews and explicit, preflighted harness updates."""
 import argparse
 import difflib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,16 +16,15 @@ BASE = Path(__file__).resolve().parent
 ACTIVATION_HELP = (
     'Native activation UNKNOWN: host trust and hook invocation remain unverified. '
     'File integrity and a successful apply do not verify native activation. '
-    'See MAINTENANCE.md for host validation.'
+    'See scripts/agent-workflow/MAINTENANCE.md for host validation.'
 )
 STATUS_HELP = (
     'current: generated content and installer provenance match.\n'
     'update: generated content or installer provenance differs; use diff to preview.\n'
     'drift: installed files differ from their manifest hashes; use diff and '
-    'reconcile local changes before apply, following MAINTENANCE.md.\n'
+    'reconcile local changes before apply, following scripts/agent-workflow/MAINTENANCE.md.\n'
     'missing: the harness manifest is absent. error: inspection could not complete.\n'
-    'Provenance compares the current installer Git HEAD, so even a documentation-only '
-    'commit can require a manifest update.\n\n' + ACTIVATION_HELP
+    'Provenance compares bundled component content, independently of Git HEAD.\n\n' + ACTIVATION_HELP
 )
 
 
@@ -44,10 +44,20 @@ def release_metadata():
     version = release.get('installer_version')
     if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Invalid installer release version')
-    if Path(git(BASE, 'rev-parse', '--show-toplevel').strip()).resolve() != BASE:
-        raise ValueError('Installer source must have its own Git repository')
-    return {'version': version, 'source_commit': git(BASE, 'rev-parse', 'HEAD').strip(),
-            'dirty': bool(git(BASE, 'status', '--porcelain', '--untracked-files=all'))}
+    digest = hashlib.sha256()
+    inputs = list(BASE.glob('*.py')) + [BASE / 'release.json']
+    bundle = BASE.parent.parent
+    for name in ('app-template', 'app-template-ruby', 'app-template-zola'):
+        template = bundle / name
+        inputs.extend(p for p in template.rglob('*') if p.is_file() and
+                      (p.name in ('CLAUDE.md', 'claude-docs.manifest') or
+                       '.claude' in p.relative_to(template).parts) and
+                      '__pycache__' not in p.parts and p.suffix != '.pyc')
+    for path in sorted(inputs):
+        label = str(path.relative_to(bundle)) if path.is_relative_to(bundle) else path.name
+        data = path.read_bytes()
+        digest.update(label.encode() + b'\0' + str(len(data)).encode() + b'\0' + data)
+    return {'version': version, 'source_commit': digest.hexdigest(), 'dirty': False}
 
 
 def target_root(base, name):
@@ -70,6 +80,8 @@ def inspect(base, name, metadata):
              'native_activation': 'UNKNOWN', 'changed_files': [], 'drift_files': []}
     try:
         root = target_root(base, name)
+        if (root / '.agent-docs-manifest.json').exists():
+            raise ValueError('Target is managed by agent-docs.sh; use agent-docs.sh check|diff|update TARGET')
         # Validate every possible managed location before reading any configuration.
         for rel in installer.MANAGED_PATHS:
             installer.safe_destination(root, rel)
@@ -119,7 +131,7 @@ def emit(result, plans, json_output):
             print('  Drift files:')
             for rel in entry['drift_files']:
                 print('    ' + rel)
-            print('  Use diff to review; reconcile local changes before apply. See MAINTENANCE.md.')
+            print('  Use diff to review; reconcile local changes before apply. See scripts/agent-workflow/MAINTENANCE.md.')
         if entry.get('error'):
             print(entry['error'])
         if result['command'] == 'diff' and plan:
@@ -137,7 +149,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog=STATUS_HELP,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('command', choices=('check', 'diff', 'apply'))
-    parser.add_argument('--root', type=Path, default=BASE.parent,
+    default_root = BASE.parent.parent.parent if BASE.name == 'agent-workflow' else BASE.parent
+    parser.add_argument('--root', type=Path, default=default_root,
                         help='Directory containing the registered repositories')
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument('--repo', action='append', help='Explicit repository name; repeat as needed')

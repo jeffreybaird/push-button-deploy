@@ -18,7 +18,7 @@ GUARD
   chmod +x "$WORK/bin/$command"
 done
 
-for dependency in bash ruby jq perl; do
+for dependency in bash ruby jq perl python3; do
   command -v "$dependency" >/dev/null || { printf 'missing test dependency: %s\n' "$dependency" >&2; exit 1; }
 done
 

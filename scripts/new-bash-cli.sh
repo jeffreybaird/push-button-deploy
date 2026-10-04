@@ -313,4 +313,6 @@ This project provisions no infrastructure — no droplet, no DNS, no database.
 It was created with \`bootstrap.sh --cli bash\`.
 EOF
 
+_docs_root="${PBD_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+bash "$_docs_root/agent-docs.sh" update "$APP_DIR" --framework bash-cli
 log "scaffolded $APP_DIR (bash cli): bin/$APP_NAME, lib/$APP_NAME/core.sh, test/run.sh"

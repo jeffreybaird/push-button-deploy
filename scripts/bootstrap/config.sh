@@ -80,7 +80,7 @@ required_binaries() { # $1 type, $2 framework, $3 provider
   # the code host and nothing else, so it needs neither the DigitalOcean CLI nor
   # Terraform nor an SSH client — and its scaffolds are pure bash, so it does not
   # even need a local Elixir.
-  local bins="git curl"
+  local bins="git curl python3"
   if needs_droplet; then bins="$bins terraform doctl ssh scp dig jq"; fi
   # Framework-specific local tooling: Phoenix generates + prepares the app with
   # `mix`; Sinatra scaffolds with bash and only needs `openssl` (fresh session

@@ -364,4 +364,6 @@ This project provisions no infrastructure — no droplet, no DNS, no database.
 It was created with \`bootstrap.sh --cli typescript\`.
 EOF
 
+_docs_root="${PBD_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+bash "$_docs_root/agent-docs.sh" update "$APP_DIR" --framework ts-cli
 log "scaffolded $APP_DIR (typescript cli): src/cli.ts, src/index.ts, package.json"

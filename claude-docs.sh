@@ -24,7 +24,13 @@ fail() { printf '\033[31mclaude-docs: %s\033[0m\n' "$*" >&2; exit 1; }
 log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m==> WARN\033[0m %s\n' "$*" >&2; }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_cd_self="${BASH_SOURCE[0]}"
+while [ -L "$_cd_self" ]; do
+  _cd_dir="$(cd -P "$(dirname "$_cd_self")" && pwd)"
+  _cd_self="$(readlink "$_cd_self")"
+  case "$_cd_self" in /*) ;; *) _cd_self="$_cd_dir/$_cd_self" ;; esac
+done
+SCRIPT_DIR="${PBD_ROOT:-$(cd -P "$(dirname "$_cd_self")" && pwd)}"
 # shellcheck source=scripts/claude-docs.sh
 . "$SCRIPT_DIR/scripts/claude-docs.sh"
 . "$SCRIPT_DIR/scripts/prompt.sh"
@@ -76,6 +82,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 APP_DIR="${APP_DIR:-.}"
+if [ -e "$APP_DIR/.agent-docs-manifest.json" ]; then
+  exec bash "$SCRIPT_DIR/agent-docs.sh" update "$APP_DIR"
+fi
 
 abs_dir() { # best-effort absolute path (dir may not exist yet)
   if [ -d "$1" ]; then (cd "$1" && pwd); else printf '%s\n' "$1"; fi

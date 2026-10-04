@@ -365,4 +365,6 @@ This project provisions no infrastructure — no droplet, no DNS, no database.
 It was created with \`bootstrap.sh --cli ruby\`.
 EOF
 
+_docs_root="${PBD_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+bash "$_docs_root/agent-docs.sh" update "$APP_DIR" --framework ruby-cli
 log "scaffolded $APP_DIR (ruby cli): exe/$APP_NAME, lib/, spec/, ${APP_NAME}.gemspec"
