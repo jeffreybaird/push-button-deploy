@@ -189,8 +189,30 @@ improves readability.
 ### Doctests on Every Public Function
 
 Every public function (`def`, not `defp`) must have an `@doc` block with at least one
-doctest for the happy path. Exempt: functions that hit the DB or call external services —
-use unit tests with mocks instead.
+doctest for the happy path. Doctests must demonstrate meaningful use of the function
+with representative valid inputs and assert its intended result. Include at least
+one happy-path example; nil, empty-input, fallback, or error examples alone are
+insufficient. For predicates, include an input that satisfies the predicate. For
+time-dependent predicates, show valid inputs on both sides of the time condition,
+using a stable clock or generous relative offsets to avoid brittle date-dependent
+examples. Keep useful edge cases as additional examples, not substitutes for the
+happy path.
+
+Inventory `@doc` and `@moduledoc` `iex>` examples across the project. Ensure every
+module containing doctests is registered with `doctest` in ExUnit. Run all doctests
+through the normal `mix test` suite, including CI; do not leave registrations
+skipped, excluded, filtered out, or confined to a separate command. Verify actual
+execution of all doctests in the normal suite; registration alone is insufficient.
+
+Verify the module is registered with `doctest` in an ExUnit test and run those
+tests. An `iex>` block alone does not make an example execute. Review examples
+by asking whether an implementation that always returns the fallback value would
+still pass; if so, add an example exercising the intended behavior.
+
+Exempt: functions that hit the DB or call external services. Follow project rules
+for functions requiring database or external-service setup; cover their successful
+behavior with appropriate tests rather than token fallback doctests. Use unit tests
+with fixtures or mocks as appropriate.
 
 ### Error Handling with Tagged Tuples
 

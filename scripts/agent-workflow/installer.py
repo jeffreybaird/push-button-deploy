@@ -221,6 +221,30 @@ an implementation defect. Changes to expected behavior require a test-writer
 revision and renewed reviewer acceptance. New regression tests are permitted.
 Record hashes of accepted tests before implementation and compare afterward.
 
+## Elixir doctests
+
+For Elixir projects, doctests must demonstrate meaningful use of the function with
+representative valid inputs and assert its intended result. Include at least one
+happy-path example; nil, empty-input, fallback, or error examples alone are
+insufficient. For predicates, include an input that satisfies the predicate. For
+time-dependent predicates, show valid inputs on both sides of the time condition,
+using a stable clock or generous relative offsets to avoid brittle date-dependent
+examples. Keep useful edge cases as additional examples, not substitutes for the
+happy path.
+
+Inventory `@doc` and `@moduledoc` `iex>` examples across the project. Ensure every
+module containing doctests is registered with `doctest` in ExUnit. Run all doctests
+through the normal `mix test` suite, including CI; do not leave registrations
+skipped, excluded, filtered out, or confined to a separate command. Verify actual
+execution of all doctests in the normal suite; registration alone is insufficient.
+
+Verify the module is registered with `doctest` in an ExUnit test and run those
+tests. An `iex>` block alone does not make an example execute. Review examples
+by asking whether an implementation that always returns the fallback value would
+still pass; if so, add an example exercising the intended behavior. Follow project
+rules for functions requiring database or external-service setup; cover their
+successful behavior with appropriate tests rather than token fallback doctests.
+
 ## Security advisory review
 
 Every agent review must check and explicitly report security advisories, including

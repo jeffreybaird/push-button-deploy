@@ -11,6 +11,13 @@ Applications keep committed, self-contained copies. They do not need this tool
 to run their agents; use it when installing or updating shared guidance.
 Python 3.11 or newer is required for generation and maintenance.
 
+The shared workflow includes Elixir doctest requirements for Phoenix, escript,
+and Mix library projects: representative happy paths, matching predicate inputs,
+stable time-dependent examples, and verified ExUnit registration and execution
+for every module containing doctests in the normal `mix test` suite and CI.
+Fallback-only examples do not satisfy these requirements. New installations and
+shared updates receive this guidance for both Codex and Claude.
+
 ## Maintain an app
 
 Run the command from any working directory with an explicit app path:

@@ -104,6 +104,48 @@ class Lifecycle(unittest.TestCase):
         self.command('update')
         self.assertEqual(before, self.snapshot())
 
+    def test_elixir_guidance_requires_executable_meaningful_doctests(self):
+        requirements = {
+            'representative valid inputs': r'representative valid inputs',
+            'intended result': r'assert (?:its|the|their) intended result',
+            'happy path': r'at least one happy-path example',
+            'fallback examples are insufficient':
+                r'nil, empty-input, fallback, or error examples alone are insufficient',
+            'satisfied predicates': r'input that satisfies the predicate',
+            'both time outcomes': r'valid inputs on both sides of the time condition',
+            'stable time examples': r'stable clock or generous relative offsets',
+            'additional edge cases': r'edge cases as additional examples',
+            'ExUnit registration': r'registered with `doctest` in an ExUnit test',
+            'execution': r'run those tests',
+            'iex blocks do not execute themselves':
+                r'`iex>` block alone does not make an example execute',
+            'constant fallback check': r'always returns the fallback value would still pass',
+            'setup rules': r'project rules for functions requiring database or external-service setup',
+            'successful behavior with setup': r'cover their successful behavior with appropriate tests',
+            'project-wide inventory': r'Inventory `@doc` and `@moduledoc` `iex>` examples across the project',
+            'every module registered': r'every module containing doctests is registered with `doctest` in ExUnit',
+            'normal suite and CI execution': r'Run all doctests through the normal `mix test` suite, including CI',
+            'no skipped or excluded registrations':
+                r'do not leave registrations skipped, excluded, filtered out, or confined to a separate command',
+            'verify actual execution':
+                r'Verify actual execution of all doctests in the normal suite; registration alone is insufficient',
+        }
+        for framework in ('phoenix', 'mix', 'escript'):
+            app = self.work / framework
+            app.mkdir()
+            self.install(framework, app=app)
+            paths = ['.docs/agent-workflow.md']
+            if framework == 'phoenix':
+                paths.extend(['AGENTS.md', 'CLAUDE.md'])
+            for path in paths:
+                guidance = ' '.join((app / path).read_text().split())
+                for requirement, pattern in requirements.items():
+                    with self.subTest(framework=framework, path=path, requirement=requirement):
+                        self.assertRegex(guidance, pattern)
+            with self.subTest(framework=framework, requirement='language scope'):
+                workflow = ' '.join((app / '.docs/agent-workflow.md').read_text().split())
+                self.assertRegex(workflow, r'For Elixir projects, doctests must')
+
     def test_preserves_custom_guidance_settings_and_user_added_hooks(self):
         (self.app / '.docs').mkdir()
         (self.app / '.docs/project-guidance.md').write_text('App-specific constraints.\n')
