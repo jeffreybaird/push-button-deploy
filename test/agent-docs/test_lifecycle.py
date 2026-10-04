@@ -153,8 +153,20 @@ class Lifecycle(unittest.TestCase):
             'test-only references': 'Test-only references do not prove code is live or dead',
             'grep absence': 'Grep absence alone does not prove code is unused',
             'external callers': 'Account for external public API consumers',
-            'remove dead code and exclusive tests':
-                'Delete confirmed dead code and tests that exclusively exercise the removed behavior',
+            'remove confirmed dead code': 'Delete confirmed dead code',
+            'propose exclusive test removal':
+                'Propose removing tests that exclusively exercise the removed behavior',
+            'concrete proposed diff':
+                'Present a concrete unapplied diff with test file paths and deletion hunks',
+            'explain obsolete tests': 'explain why each proposed test removal is obsolete',
+            'human approval': 'Obtain explicit user approval before deleting tests',
+            'review is not human approval': 'Reviewer approval does not substitute for user approval',
+            'pending approval': 'Keep tests unchanged while approval is pending',
+            'roles and hooks remain': 'Approval preserves source/test role ownership and hook restrictions',
+            'approved patch application': 'spec writer applies only the approved test-removal patch when permitted',
+            'blocked patch': 'If deletion remains blocked, present the exact patch and blocker',
+            'no bypass': 'Never use an alternate editing route or bypass hooks',
+            'no false completion': 'Do not claim green tests or commit cleanup that leaves tests failing',
             'retain live behavior coverage': 'Preserve or adapt tests for live behavior, including mixed coverage',
             'do not hide failures': 'Never delete failing tests merely to make the suite pass',
             'source ownership': 'implementer removes source',
@@ -178,6 +190,7 @@ class Lifecycle(unittest.TestCase):
                     if path.endswith('.toml'):
                         instructions = tomllib.loads(instructions)['developer_instructions']
                     self.assertIn(requirements['every PR'], instructions)
+                    self.assertIn(requirements['human approval'], instructions)
                     self.assertIn('.docs/agent-workflow.md#dead-code-review', instructions)
 
     def test_preserves_custom_guidance_settings_and_user_added_hooks(self):

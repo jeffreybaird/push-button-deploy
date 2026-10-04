@@ -229,15 +229,27 @@ Account for external public API consumers. Test-only references do not prove cod
 is live or dead. Grep absence alone does not prove code is unused; verify the
 usage paths and retain code when its use is uncertain.
 
-Delete confirmed dead code and tests that exclusively exercise the removed
-behavior. Preserve or adapt tests for live behavior, including mixed coverage.
-Never delete failing tests merely to make the suite pass. Follow role ownership:
-the implementer removes source, the spec writer removes or adapts tests, and the
-reviewer approves the changed test contract before implementation. Do not bypass
-the accepted-test contract or weaken assertions to justify removal.
+Delete confirmed dead code. Propose removing tests that exclusively exercise the
+removed behavior. Present a concrete unapplied diff with test file paths and
+deletion hunks, and explain why each proposed test removal is obsolete. Obtain
+explicit user approval before deleting tests. Reviewer approval does not
+substitute for user approval. Keep tests unchanged while approval is pending.
+Preserve or adapt tests for live behavior, including mixed coverage. Never delete
+failing tests merely to make the suite pass.
 
-Run the affected test suite after cleanup. The PR description must record the
-removed code and tests, or state that no dead code was found.
+Approval preserves source/test role ownership and hook restrictions. The
+implementer removes source, the spec writer removes or adapts tests, and the
+reviewer approves the changed test contract before implementation. After user
+approval, the spec writer applies only the approved test-removal patch when
+permitted. If deletion remains blocked, present the exact patch and blocker for
+the user to resolve. Never use an alternate editing route or bypass hooks. Do not
+bypass the accepted-test contract or weaken assertions to justify removal.
+
+Source cleanup may proceed while test-removal approval is pending. Run the
+affected test suite after cleanup. Do not claim green tests or commit cleanup
+that leaves tests failing; do not commit incomplete cleanup. The PR description
+must record the removed code and tests, or state that no dead code was found.
+Record any test-removal patch still awaiting user approval or blocked by hooks.
 
 ## Elixir doctests
 
@@ -539,7 +551,7 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
                         'The orchestrator coordinates delegation for this workflow.')
         if role == 'reviewer':
             instructions += ' Always check and report security advisories, including pre-existing findings, affected and patched versions, and exposure uncertainty; follow the security advisory review in .docs/agent-workflow.md.'
-            instructions += ' Every PR must include a dead-code review; verify confirmed-unused evidence, source and test removal ownership, retained live-behavior coverage, and the PR report under .docs/agent-workflow.md#dead-code-review.'
+            instructions += ' Every PR must include a dead-code review; verify confirmed-unused evidence, source and test removal ownership, retained live-behavior coverage, and the PR report under .docs/agent-workflow.md#dead-code-review. Obtain explicit user approval before deleting tests; reviewer acceptance is not user approval. Review the concrete unapplied test-removal patch, preserve tests while approval is pending, and verify that only the approved patch is applied by the spec writer when permitted. Report the exact patch and blocker if hooks prevent deletion; never bypass them.'
         elif role == 'implementer':
             instructions += ' Apply compatible security upgrades and verify them. Obtain explicit user permission before upgrades requiring significant application changes, API rewrites, migrations, or substantial compatibility work; report unresolved advisories.'
         files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(instructions) + '\n'

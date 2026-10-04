@@ -19,9 +19,13 @@ Fallback-only examples do not satisfy these requirements. New installations and
 shared updates receive this guidance for both Codex and Claude.
 
 Across all frameworks, every PR must review dead code, remove confirmed unused
-code and tests solely for that behavior, retain coverage for live behavior, and
-report removals or that none were found. Generated reviewer instructions reinforce
-this requirement and the source/test ownership rules.
+code, and propose a concrete unapplied patch for tests solely covering that
+behavior. Test deletion requires explicit user approval; tests remain unchanged
+until approval, and role ownership and hook restrictions still apply. If hooks
+block an approved deletion, present the exact patch and blocker without bypassing
+them. Retain live-behavior coverage and report removals, pending approval or
+blockers, or that no dead code was found. Generated reviewer instructions reinforce
+these requirements.
 
 ## Maintain an app
 
