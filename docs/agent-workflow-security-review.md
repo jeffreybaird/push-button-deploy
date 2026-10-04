@@ -25,12 +25,19 @@ scan or a production exposure assessment.
 
 ## Pre-existing host Python findings
 
-The installed runtime is CPython **3.14.6**. The compatible patched release for
+The runtime at the initial review was CPython **3.14.6**. The compatible patched release for
 the applicable findings below is **3.14.8**, according to the
 [official release notes](https://www.python.org/downloads/release/python-3148/).
-No host Python or Homebrew modification is part of this repository migration.
-Use a maintained, patched interpreter for subsequent runs; the report does not
-assert that the host issue has been resolved.
+The user subsequently upgraded Homebrew Python. On 2026-10-04, verification found
+`python3` at `/opt/homebrew/bin/python3` reporting **3.14.8**, and
+`brew list --versions python@3.14` also reported **3.14.8**. The six findings
+below are therefore remediated for this active interpreter according to the
+release notes. This verification does not cover other Python installations,
+virtual environments, or processes already running the older interpreter.
+
+Post-upgrade verification: `bash test/run.sh` passed all **18 suites** with
+zero failures, including the lifecycle and workflow Python tests and shell
+syntax checks. No application source or test changes were needed.
 
 | Advisory | Affected range relevant to this host | Exposure condition |
 | --- | --- | --- |
@@ -43,7 +50,7 @@ assert that the host issue has been resolved.
 
 The release notes also list
 [CVE-2026-82049](https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/82xxx/CVE-2026-82049.json),
-but its more specific PSF record does **not** classify installed 3.14.6 as
+but its more specific PSF record does **not** classify the originally installed 3.14.6 as
 affected: the 3.14 affected range is 3.14.0a1 through versions before 3.14.0b1.
 Affected older branches are patched in 3.10.22, 3.11.17, 3.12.15 and 3.13.16.
 The issue requires crafted tar hard links to symlinks and can change metadata
@@ -54,7 +61,8 @@ HTTPPasswordMgr or StringPrep/IDNA APIs. No reachable use of these vulnerable
 APIs was observed in this migration's code. This narrows the observed exposure;
 it does not establish safety for other programs using the host interpreter or
 all transitive runtime behavior. Advisory findings were routed to the
-orchestrator; the existing host runtime remains an environmental limitation.
+orchestrator; the user's subsequent runtime upgrade resolves the recorded host
+version finding within the verification scope above.
 
 ## Workflow boundaries
 
