@@ -221,6 +221,24 @@ an implementation defect. Changes to expected behavior require a test-writer
 revision and renewed reviewer acceptance. New regression tests are permitted.
 Record hashes of accepted tests before implementation and compare afterward.
 
+## Dead-code review
+
+Every PR must include a dead-code review. Check references and dynamic,
+configuration, framework, and public entry points before deciding code is unused.
+Account for external public API consumers. Test-only references do not prove code
+is live or dead. Grep absence alone does not prove code is unused; verify the
+usage paths and retain code when its use is uncertain.
+
+Delete confirmed dead code and tests that exclusively exercise the removed
+behavior. Preserve or adapt tests for live behavior, including mixed coverage.
+Never delete failing tests merely to make the suite pass. Follow role ownership:
+the implementer removes source, the spec writer removes or adapts tests, and the
+reviewer approves the changed test contract before implementation. Do not bypass
+the accepted-test contract or weaken assertions to justify removal.
+
+Run the affected test suite after cleanup. The PR description must record the
+removed code and tests, or state that no dead code was found.
+
 ## Elixir doctests
 
 For Elixir projects, doctests must demonstrate meaningful use of the function with
@@ -521,6 +539,7 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
                         'The orchestrator coordinates delegation for this workflow.')
         if role == 'reviewer':
             instructions += ' Always check and report security advisories, including pre-existing findings, affected and patched versions, and exposure uncertainty; follow the security advisory review in .docs/agent-workflow.md.'
+            instructions += ' Every PR must include a dead-code review; verify confirmed-unused evidence, source and test removal ownership, retained live-behavior coverage, and the PR report under .docs/agent-workflow.md#dead-code-review.'
         elif role == 'implementer':
             instructions += ' Apply compatible security upgrades and verify them. Obtain explicit user permission before upgrades requiring significant application changes, API rewrites, migrations, or substantial compatibility work; report unresolved advisories.'
         files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(instructions) + '\n'

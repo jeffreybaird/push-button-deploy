@@ -18,6 +18,11 @@ for every module containing doctests in the normal `mix test` suite and CI.
 Fallback-only examples do not satisfy these requirements. New installations and
 shared updates receive this guidance for both Codex and Claude.
 
+Across all frameworks, every PR must review dead code, remove confirmed unused
+code and tests solely for that behavior, retain coverage for live behavior, and
+report removals or that none were found. Generated reviewer instructions reinforce
+this requirement and the source/test ownership rules.
+
 ## Maintain an app
 
 Run the command from any working directory with an explicit app path:

@@ -146,6 +146,40 @@ class Lifecycle(unittest.TestCase):
                 workflow = ' '.join((app / '.docs/agent-workflow.md').read_text().split())
                 self.assertRegex(workflow, r'For Elixir projects, doctests must')
 
+    def test_every_framework_requires_dead_code_review_for_each_pr(self):
+        requirements = {
+            'every PR': 'Every PR must include a dead-code review',
+            'usage evidence': 'Check references and dynamic, configuration, framework, and public entry points',
+            'test-only references': 'Test-only references do not prove code is live or dead',
+            'grep absence': 'Grep absence alone does not prove code is unused',
+            'external callers': 'Account for external public API consumers',
+            'remove dead code and exclusive tests':
+                'Delete confirmed dead code and tests that exclusively exercise the removed behavior',
+            'retain live behavior coverage': 'Preserve or adapt tests for live behavior, including mixed coverage',
+            'do not hide failures': 'Never delete failing tests merely to make the suite pass',
+            'source ownership': 'implementer removes source',
+            'test ownership': 'spec writer removes or adapts tests',
+            'contract approval': 'reviewer approves the changed test contract',
+            'validation': 'Run the affected test suite',
+            'PR evidence':
+                'PR description must record the removed code and tests, or state that no dead code was found',
+        }
+        for framework in ('phoenix', 'mix', 'escript', 'sinatra', 'zola', 'ruby-cli', 'bash-cli', 'ts-cli'):
+            app = self.work / framework
+            app.mkdir()
+            self.install(framework, app=app)
+            workflow = ' '.join((app / '.docs/agent-workflow.md').read_text().split())
+            for requirement, clause in requirements.items():
+                with self.subTest(framework=framework, requirement=requirement):
+                    self.assertIn(clause, workflow)
+            for path in ('.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
+                with self.subTest(framework=framework, reviewer=path):
+                    instructions = (app / path).read_text()
+                    if path.endswith('.toml'):
+                        instructions = tomllib.loads(instructions)['developer_instructions']
+                    self.assertIn(requirements['every PR'], instructions)
+                    self.assertIn('.docs/agent-workflow.md#dead-code-review', instructions)
+
     def test_preserves_custom_guidance_settings_and_user_added_hooks(self):
         (self.app / '.docs').mkdir()
         (self.app / '.docs/project-guidance.md').write_text('App-specific constraints.\n')
