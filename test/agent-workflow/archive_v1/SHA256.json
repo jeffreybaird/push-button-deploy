@@ -1,0 +1,15 @@
+{
+  "test_delivery_refs.py": "886f52d66f4a6ec53951a7aae5d74831a664cfbfc79c5e704a40b70cb643bd39",
+  "test_installer.py": "76f3c40921ff24e65d17abdc0c3e397008b6f889b97baeccc7ca669ef27e535e",
+  "test_workflow_guard.py": "483819e87d103bd9a7fb1a84e8738a0f82fe3281eef2e3411b58b74307a49bfb",
+  "DELIVERY_CONTRACT.md": "d1342f2c493626159de8f8e8fce3fe83caa3209a8730d6bd266f103a8fec5b09",
+  "test_coordination.py": "76690a5d7afb935bbd073e88302788c2641740e98b59f836f3000b6e78f85b0a",
+  "test_delivery.py": "810ac3e7f8b9c9ceaf60764c31a197e9c00a547ed09ea3ca81909d4728000dd5",
+  "test_repo_protections.py": "094a597773a44dfab8c45dd46eef05ee1d60af75742ad04f44ec8b2b4c7c4e92",
+  "CONTRACT.md": "5137275348504dc8083a08285c9699b12e20976c1bd654560c3f6cefbd75ab5f",
+  "test_native_claude_resume.py": "b449fe6fdeb8e3bdc0632cfc62fe7d806625de2d07912363804014f8d3bfb0fb",
+  "test_native_coordination.py": "d5df1f964e361603859a1ff733c3e927e859f121110b06e4bd2fa00ae726d8a7",
+  "test_install_regressions.py": "b64859e2dcd3375deed75ff6d045b670a17c03026d131cdd18c04087e38c00fe",
+  "REPO_PROTECTIONS_CONTRACT.md": "5390f6cbae955b45d8982f33406952b9d7eb4a717f98e7255ea099b82e32bf99",
+  "test_hash_inspection.py": "354c801bbe99c5f08545bdf76db941b2039c1d51ec3f4169aaab849ebce6668f"
+}
