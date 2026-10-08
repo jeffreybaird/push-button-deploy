@@ -98,9 +98,13 @@ def template_files(framework, selection, names):
     values = dict(zip(tokens, (names['module'], names['app'])))
     pattern = re.compile('|'.join(re.escape(token) for token in sorted(values, key=len, reverse=True)))
     sources = {'AGENTS.md': root / 'CLAUDE.md', 'CLAUDE.md': root / 'CLAUDE.md'}
-    modules = sorted((root / '.claude').glob('*.md'))
+    modules = sorted((root / '.docs').glob('*.md')) + sorted((root / '.claude').glob('*.md'))
+    module_names = set()
     for source in modules:
         destination = '.docs/' + source.name
+        if source.name in module_names:
+            raise ValueError('Ambiguous shared guidance source: ' + source.name)
+        module_names.add(source.name)
         if destination in (GUIDANCE, '.docs/agent-workflow.md'):
             raise ValueError('Reserved shared guidance path: ' + destination)
         if source.name not in selection['skip_modules']:

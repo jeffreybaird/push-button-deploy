@@ -30,4 +30,4 @@ does not run SSR, API handlers, or a Node production process. Never put secrets
 in browser code or `VITE_*` variables: all bundled values are public. Use an API
 that handles its own authorization and CORS for server-side capabilities.
 
-- `.claude/react.md` — component, testing, and build conventions.
+- `.docs/react.md` — component, testing, and build conventions.

@@ -9,7 +9,7 @@ cd_render_file() { # source, destination, module token, app token, module value,
   # Shared Markdown links change; native configuration and executable paths do not.
   case "$dest" in
     *.md)
-      for module in "$tdir"/.claude/*.md; do
+      for module in "$tdir"/.docs/*.md "$tdir"/.claude/*.md; do
         [ -f "$module" ] || continue
         modules="${modules}${module##*/}
 "

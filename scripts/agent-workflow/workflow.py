@@ -51,7 +51,7 @@ def release_metadata():
         template = bundle / name
         inputs.extend(p for p in template.rglob('*') if p.is_file() and
                       (p.name in ('CLAUDE.md', 'claude-docs.manifest') or
-                       '.claude' in p.relative_to(template).parts) and
+                       any(part in ('.claude', '.docs') for part in p.relative_to(template).parts)) and
                       '__pycache__' not in p.parts and p.suffix != '.pyc')
     for path in sorted(inputs):
         label = str(path.relative_to(bundle)) if path.is_relative_to(bundle) else path.name
