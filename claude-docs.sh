@@ -2,11 +2,11 @@
 #
 # claude-docs.sh — guided creation of an app's agent docs.
 #
-# Walks you through which pieces of CLAUDE.md + .claude/ and AGENTS.md + doc/ (guidance modules,
+# Walks you through CLAUDE.md + AGENTS.md and shared .docs/ (guidance modules,
 # starter agents, the SessionStart cloud-setup hook) your app needs, assembles
 # them from this repo's static templates with the app's name filled in, and
 # offers to open the result in your editor. Runs on a freshly generated app or
-# to retrofit an existing repo — writes both guides and their docs directories.
+# to retrofit an existing repo — writes both entry points and shared guidance.
 #
 #   ./claude-docs.sh                     guided, framework inferred from the cwd
 #   ./claude-docs.sh ~/src/myapp         guided, into that directory
@@ -37,7 +37,7 @@ SCRIPT_DIR="${PBD_ROOT:-$(cd -P "$(dirname "$_cd_self")" && pwd)}"
 
 usage() {
   cat <<EOF
-claude-docs.sh — guided creation of an app's agent docs (CLAUDE.md + .claude/ and AGENTS.md + doc/).
+claude-docs.sh — guided creation of an app's agent docs (CLAUDE.md + AGENTS.md + .docs/).
 
   ./claude-docs.sh [options] [app_dir]      app_dir defaults to .
 
@@ -50,11 +50,10 @@ Options:
 
 What it writes, tailored by your answers:
   CLAUDE.md               Claude Code project guide
-  .claude/*.md            Claude guidance modules
   .claude/agents/*.md     Claude agent profiles
   .claude/cloud-setup.sh  retained cloud-session setup script
   AGENTS.md               project guide for coding agents
-  doc/*.md                guidance modules (core always; optional ones you pick)
+  .docs/*.md              shared guidance modules (core always; optional ones you pick)
   doc/agents/*.md          agent profiles (test-writer, code-reviewer)
   doc/hooks/cloud-setup.sh cloud-session setup script
   .claude/settings.json    a SessionStart hook that prepares cloud sessions
@@ -151,4 +150,4 @@ if have_tty && [ "$INCLUDE_ALL" -eq 0 ]; then
   fi
 fi
 
-log "done. Review $APP_DIR/AGENTS.md and $APP_DIR/doc/ and adapt them to your app."
+log "done. Review $APP_DIR/AGENTS.md and $APP_DIR/.docs/ and adapt them to your app."

@@ -16,7 +16,7 @@ cd_selected_files() { # template root -> relative destination paths, one per lin
     [ -f "$src" ] || continue
     base="${src##*/}"
     cd_in_list "$base" "${CD_SKIP_MODULES:-}" && continue
-    printf '.claude/%s\ndoc/%s\n' "$base" "$base"
+    printf '.docs/%s\n' "$base"
   done
   for src in "$tdir"/.claude/agents/*.md; do
     [ -f "$src" ] || continue
@@ -43,6 +43,7 @@ cd_source_file() { # template root, relative destination -> selected source
       else
         printf '%s/.claude/settings.json\n' "$1"
       fi ;;
+    .docs/*) printf '%s/.claude/%s\n' "$1" "${2#.docs/}" ;;
     .claude/*) printf '%s/%s\n' "$1" "$2" ;;
     doc/*) printf '%s/.claude/%s\n' "$1" "${2#doc/}" ;;
     *) fail "unknown docs destination '$2'" ;;

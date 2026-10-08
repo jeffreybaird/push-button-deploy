@@ -108,12 +108,12 @@ class Lifecycle(unittest.TestCase):
                 self.assertIn('bin/check', guide)
                 self.assertNotIn('Sinatra', guide)
                 self.assertNotIn('Sequel', guide)
-        testing = (self.app / 'doc/testing.md').read_text()
+        testing = (self.app / '.docs/testing.md').read_text()
         for requirement in ('RSpec', 'Cucumber', 'SimpleCov', 'RuboCop', 'data-testid',
                             '100', 'major', 'failure', 'authorization', 'isolation'):
             self.assertIn(requirement, testing)
-        for path in ('doc/architecture-decisions.md', 'doc/separation-of-concerns.md',
-                     'doc/database.md'):
+        for path in ('.docs/architecture-decisions.md', '.docs/separation-of-concerns.md',
+                     '.docs/database.md'):
             self.assertTrue((self.app / path).is_file(), path)
         before = self.snapshot()
         self.assertEqual('current', self.command('check')['status'])
@@ -252,9 +252,9 @@ class Lifecycle(unittest.TestCase):
 
     def test_configure_removes_owned_selection_and_update_preserves_it(self):
         self.install()
-        self.assertTrue((self.app / 'doc/payment-integration.md').exists())
+        self.assertTrue((self.app / '.docs/payment-integration.md').exists())
         self.command('configure', '--skip-module', 'payment-integration.md', '--skip-agent', 'test-writer.md', '--no-setup')
-        for rel in ('doc/payment-integration.md', '.claude/payment-integration.md',
+        for rel in ('.docs/payment-integration.md', '.claude/payment-integration.md',
                     'doc/agents/test-writer.md', '.claude/agents/test-writer.md',
                     'doc/hooks/cloud-setup.sh', '.claude/cloud-setup.sh'):
             self.assertFalse((self.app / rel).exists(), rel)
@@ -265,12 +265,12 @@ class Lifecycle(unittest.TestCase):
         self.command('update')
         self.assertEqual(before, self.snapshot(mtimes=True))
         self.command('configure', '--all')
-        self.assertTrue((self.app / 'doc/payment-integration.md').exists())
+        self.assertTrue((self.app / '.docs/payment-integration.md').exists())
         self.assertTrue((self.app / 'doc/hooks/cloud-setup.sh').exists())
 
     def test_managed_drift_blocks_update_and_deselection_before_any_write(self):
         self.install()
-        path = self.app / 'doc/payment-integration.md'
+        path = self.app / '.docs/payment-integration.md'
         path.write_text(path.read_text() + '\nCustom edit to managed content\n')
         before = self.snapshot(mtimes=True)
         self.assertEqual('drift', self.command('check', expected=1)['status'])
@@ -338,7 +338,7 @@ class Lifecycle(unittest.TestCase):
         self.assertIn('New shared billing guidance.', preview)
         self.assertEqual(before, self.snapshot(mtimes=True))
         self.command('update', root=bundle)
-        self.assertIn('New shared billing guidance.', (self.app / 'doc/payment-integration.md').read_text())
+        self.assertIn('New shared billing guidance.', (self.app / '.docs/payment-integration.md').read_text())
         self.assertEqual('Preserve my app rules.\n', (self.app / '.docs/project-guidance.md').read_text())
         after = self.snapshot(mtimes=True)
         self.command('update', root=bundle)

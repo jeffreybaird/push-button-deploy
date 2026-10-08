@@ -10,7 +10,7 @@
 #   1. Injects deps the docs assume (default req + oban + cucumberex; override
 #      with APP_EXTRA_DEPS, '|'-separated mix.exs entries, empty string = none).
 #      Deps already declared in mix.exs are skipped.
-#   2. Renders CLAUDE.md + .claude/ and AGENTS.md + doc/ from app-template/,
+#   2. Renders CLAUDE.md + AGENTS.md and shared .docs/ guides from app-template/,
 #      rewriting the MyApp /
 #      my_app placeholders to the app's real module/app names (compounds like
 #      MyAppWeb and :my_app are covered by plain global replace).

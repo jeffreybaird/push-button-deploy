@@ -98,10 +98,13 @@ def template_files(framework, selection, names):
     values = dict(zip(tokens, (names['module'], names['app'])))
     pattern = re.compile('|'.join(re.escape(token) for token in sorted(values, key=len, reverse=True)))
     sources = {'AGENTS.md': root / 'CLAUDE.md', 'CLAUDE.md': root / 'CLAUDE.md'}
-    for source in sorted((root / '.claude').glob('*.md')):
+    modules = sorted((root / '.claude').glob('*.md'))
+    for source in modules:
+        destination = '.docs/' + source.name
+        if destination in (GUIDANCE, '.docs/agent-workflow.md'):
+            raise ValueError('Reserved shared guidance path: ' + destination)
         if source.name not in selection['skip_modules']:
-            sources['.claude/' + source.name] = source
-            sources['doc/' + source.name] = source
+            sources[destination] = source
     for source in sorted((root / '.claude/agents').glob('*.md')):
         if source.name not in selection['skip_agents']:
             sources['.claude/agents/' + source.name] = source
@@ -118,15 +121,21 @@ def template_files(framework, selection, names):
     rendered = {}
     for rel, source in sources.items():
         text = source.read_text()
-        if rel == 'AGENTS.md' or rel.startswith('doc/') and rel.endswith('.md'):
-            text = text.replace('CLAUDE.md', 'AGENTS.md').replace('.claude/', 'doc/').replace(
+        if rel.endswith('.md'):
+            for module in modules:
+                for prefix in ('.claude/', 'doc/'):
+                    text = text.replace(prefix + module.name, '.docs/' + module.name)
+            text = text.replace('Detail patterns live in `.claude/`.', 'Detail patterns live in `.docs/`.')
+            text = text.replace('`.claude/` detail docs', '`.docs/` detail docs')
+        if rel == 'AGENTS.md' or rel.startswith('doc/agents/'):
+            text = text.replace('CLAUDE.md', 'AGENTS.md').replace(
                 'Claude Code reads this every session.', 'Project guidance for coding agents.')
         if rel == '.claude/settings.json':
             text = text.replace('.claude/cloud-setup.sh', 'doc/hooks/cloud-setup.sh')
         else:
             text = pattern.sub(lambda match: values[match.group()], text)
         if rel in ('AGENTS.md', 'CLAUDE.md'):
-            prefix = 'doc' if rel == 'AGENTS.md' else '.claude'
+            prefix = '.docs'
             text = ''.join(line for line in text.splitlines(keepends=True)
                            if not any(re.match(r'^-\s+`' + re.escape(prefix + '/' + name) + '`', line)
                                       for name in selection['skip_modules']))
@@ -143,8 +152,9 @@ def all_template_paths():
 
 def historical_template_path(rel):
     """Retired assets must still be confined to the published Markdown layouts."""
-    return isinstance(rel, str) and bool(re.fullmatch(
-        r'(?:\.claude|doc)/(?:agents/)?[A-Za-z0-9_-][A-Za-z0-9_.-]*\.md', rel))
+    return (isinstance(rel, str) and rel not in (GUIDANCE, '.docs/agent-workflow.md')
+            and bool(re.fullmatch(
+                r'(?:(?:\.claude|doc)/(?:agents/)?|\.docs/)[A-Za-z0-9_-][A-Za-z0-9_.-]*\.md', rel)))
 
 
 def policy_for(framework):
@@ -278,7 +288,8 @@ def plan(root, args):
                 raise ValueError('Unknown or invalid manifest path/hash: ' + str(rel))
             installer.safe_destination(root, rel)
         if (not isinstance(old.get('template_files'), list)
-                or any(not isinstance(rel, str) or rel not in old['files'] for rel in old['template_files'])):
+                or any(not isinstance(rel, str) or rel not in old['files']
+                       or rel in (GUIDANCE, '.docs/agent-workflow.md') for rel in old['template_files'])):
             raise ValueError('Invalid template ownership manifest')
         if not isinstance(old.get('owned_hooks'), dict) or not isinstance(old.get('template_hooks'), dict):
             raise ValueError('Invalid hook ownership manifest')
@@ -346,6 +357,10 @@ def plan(root, args):
             drift.append(rel)
     template = template_files(framework, selection, names)
     template_paths = sorted(template)
+    # Never adopt an app-owned destination merely because its bytes match.
+    for rel in template_paths:
+        if rel.startswith('.docs/') and (root / rel).exists() and rel not in old.get('template_files', []):
+            drift.append(rel)
     desired_hooks = object_json(template.pop('.claude/settings.json', ''), 'template settings')
     overlays = dict(template)
     # Optional legacy guides are normally preserved. A guide that was generated

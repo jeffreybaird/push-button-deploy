@@ -11,7 +11,7 @@ cd_prompt_selection() { # $1 template_dir
 
   while IFS='|' read -r file summary; do
     [ -n "$file" ] || continue
-    ask_yesno "  include doc/$file — $summary?" y
+    ask_yesno "  include .docs/$file — $summary?" y
     [ "$REPLY_VALUE" = true ] || CD_SKIP_MODULES="$CD_SKIP_MODULES $file"
   done < <(cd_manifest_rows "$tdir" optional)
 
@@ -36,4 +36,3 @@ cd_prompt_selection() { # $1 template_dir
   fi
   return 0
 }
-

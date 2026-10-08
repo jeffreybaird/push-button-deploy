@@ -58,7 +58,7 @@ class SavedSelectionEvolution(unittest.TestCase):
             self.assertEqual(['code-reviewer.md'], selection['skip_agents'])
             self.assertEqual('format', selection['hook'])
             self.assertTrue(selection['no_setup'])
-            for rel in ('doc/rbac.md', '.claude/rbac.md', 'doc/agents/code-reviewer.md',
+            for rel in ('.docs/rbac.md', '.claude/rbac.md', 'doc/agents/code-reviewer.md',
                         '.claude/agents/code-reviewer.md', 'doc/hooks/cloud-setup.sh'):
                 self.assertFalse((app / rel).exists(), rel)
             self.assertEqual('App-specific rules.\n', (app / '.docs/project-guidance.md').read_text())

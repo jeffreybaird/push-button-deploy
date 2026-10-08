@@ -229,7 +229,7 @@ compatible with the previous release; image rollback does not undo migrations.
 
 No Solid Queue, Solid Cache or Solid Cable services/databases are configured.
 Add background jobs, extra databases or JavaScript build tooling deliberately,
-with corresponding deployment and backup changes. See `AGENTS.md` and `doc/`.
+with corresponding deployment and backup changes. See `AGENTS.md` and `.docs/`.
 
 `bin/check` prepares the test database, runs RuboCop, RSpec and strict Cucumber,
 then enforces 100% line and branch coverage across all application and library
