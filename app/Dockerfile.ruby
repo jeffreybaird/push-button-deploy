@@ -11,7 +11,7 @@
 #
 # RUBY_VERSION floats to a published slim-bookworm tag. Keep it >= the Ruby the
 # Gemfile pins (`ruby "~> 3.3"`). Override at bootstrap time with RUBY_VERSION.
-ARG RUBY_VERSION=3.3.6
+ARG RUBY_VERSION=3.3.12
 ARG BUILDER_IMAGE="ruby:${RUBY_VERSION}-slim-bookworm"
 ARG RUNNER_IMAGE="ruby:${RUBY_VERSION}-slim-bookworm"
 
