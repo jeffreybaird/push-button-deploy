@@ -16,7 +16,7 @@ name: root
 
 services:
   caddy:
-    image: caddy:2.11.4-alpine
+    image: caddy:2.11.7-alpine
     restart: unless-stopped
     ports:
       - "80:80"
