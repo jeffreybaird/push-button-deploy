@@ -49,7 +49,7 @@ case "$APP_NAME" in
     fail "app name '$APP_NAME' must be lower_snake_case (start with a letter): the dir basename names the gem and the executable" ;;
 esac
 APP_MODULE="$(printf '%s' "$APP_NAME" | awk -F_ '{o=""; for(i=1;i<=NF;i++){o=o toupper(substr($i,1,1)) substr($i,2)} print o}')"
-RUBY_PIN="${RUBY_VERSION:-3.3.6}"
+RUBY_PIN="${RUBY_VERSION:-3.3.12}"
 
 if [ -f "$APP_DIR/Gemfile" ]; then
   log "Gemfile already in $APP_DIR — leaving it alone"
@@ -110,7 +110,10 @@ Gem::Specification.new do |spec|
   spec.bindir      = "exe"
   spec.executables = ["$APP_NAME"]
 
-  # Argument parsing is OptionParser, which is stdlib — no runtime dependency.
+  # Override the vulnerable resolver bundled with Ruby, including gem installs.
+  spec.add_dependency "resolv", "~> 0.3.2"
+
+  # Argument parsing is OptionParser from the standard library.
 end
 EOF
 

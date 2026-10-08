@@ -31,7 +31,7 @@ log()  { printf '\033[32m==>\033[0m %s\n' "$*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/../app-template-ruby"
-RUBY_PIN="${RUBY_VERSION:-3.3.6}"
+RUBY_PIN="${RUBY_VERSION:-3.3.12}"
 
 APP_DIR="${1:-}"
 [ -n "$APP_DIR" ] || fail "usage: new-sinatra-app.sh <app_dir>"
@@ -64,8 +64,12 @@ source "https://rubygems.org"
 # RUBY_VERSION ARG and CI's ruby-version-file read the same file).
 ruby file: ".ruby-version"
 
+# Override vulnerable Ruby default gems with patched releases.
+gem "resolv", "~> 0.3.2"
+gem "erb", ">= 6.0.4"
+
 gem "sinatra", "~> 4.1", require: "sinatra/base" # modular app, no classic DSL
-gem "puma", "~> 6.6"                             # app server (config/puma.rb)
+gem "puma", "~> 7.2.1"                             # app server (config/puma.rb)
 gem "rackup", "~> 2.2"                           # `run App` entrypoint (config.ru)
 gem "sequel", "~> 5.90"                          # ORM + migrations
 gem "sqlite3", "~> 2.6"                          # the only DB backend
