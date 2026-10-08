@@ -21,3 +21,4 @@ terraform.tfvars.bak
 # creation time, so losing this file means creating a new one by hand).
 .gitea-admin-token
 .gitea-admin-password
+/.agent-diagnostics/

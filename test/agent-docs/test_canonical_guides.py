@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import shlex
 import tempfile
 import unittest
 
@@ -129,6 +130,13 @@ class CanonicalGuides(unittest.TestCase):
             with self.subTest(framework=framework):
                 app = self.legacy(framework)
                 (app / '.docs/project-guidance.md').write_text('Keep local project constraints.\n')
+                hooks_path = app / '.codex/hooks.json'
+                hooks = json.loads(hooks_path.read_text())
+                hooks['custom_setting'] = {'keep': True}
+                hooks['hooks']['SessionStart'] = [{'description': 'Keep local registration',
+                                                  'hooks': [{'type': 'command', 'command': 'echo local',
+                                                             'timeout': 19}]}]
+                hooks_path.write_text(json.dumps(hooks))
                 before = self.snapshot(app)
                 self.cli(app, 'check', expected=1)
                 self.cli(app, 'diff', expected=1)
@@ -143,12 +151,41 @@ class CanonicalGuides(unittest.TestCase):
                         self.assertEqual(set(old_manifest), set(current_manifest))
                         self.assertEqual(old_manifest['version'], current_manifest['version'])
                         self.assertEqual('0.4.0', old_manifest['installer']['version'])
-                        self.assertEqual('0.4.2', current_manifest['installer']['version'])
+                        self.assertEqual('0.5.0', current_manifest['installer']['version'])
                         self.assertRegex(current_manifest['installer']['source_commit'], r'^[0-9a-f]{40,64}$')
-                        self.assertEqual(set(old_manifest['sha256']) - {'.claude/testing.md'},
+                        self.assertEqual((set(old_manifest['sha256']) - {'.claude/testing.md'}) |
+                                         {'.codex/hooks/hook_diagnostics.py', '.docs/hook-diagnostics.md', '.gitignore'},
                                          set(current_manifest['sha256']))
                         for tracked, expected_hash in current_manifest['sha256'].items():
                             self.assertEqual(expected_hash, hashlib.sha256((app / tracked).read_bytes()).hexdigest(), tracked)
+                        continue
+                    if name == '.codex/hooks.json':
+                        old_config = json.loads(contents)
+                        current_config = json.loads((app / name).read_text())
+                        wrapped = []
+                        root = '$(git rev-parse --show-toplevel)'
+                        for event, registrations in current_config['hooks'].items():
+                            for registration in registrations:
+                                for hook in registration['hooks']:
+                                    argv = shlex.split(hook['command'])
+                                    if len(argv) < 3 or not argv[2].endswith('/hook_diagnostics.py'):
+                                        continue
+                                    identity = 'workflow_guard' if 'workflow_guard.py' in hook['command'] else 'workflow_audit'
+                                    self.assertEqual(['python3', '-B', root + '/.codex/hooks/hook_diagnostics.py',
+                                                      '--hook', identity, '--event', event, '--root', root, '--'], argv[:10])
+                                    self.assertFalse(hook.get('async', False))
+                                    originals = [item['command'] for old_registration in old_config['hooks'][event]
+                                                 for item in old_registration['hooks']
+                                                 if identity + '.py' in item['command']]
+                                    self.assertEqual(1, len(originals))
+                                    self.assertEqual(shlex.split(originals[0]), argv[10:])
+                                    hook['command'] = originals[0]
+                                    wrapped.append((event, identity))
+                        self.assertCountEqual([('PreToolUse', 'workflow_guard'), ('PreToolUse', 'workflow_audit'),
+                                               ('PostToolUse', 'workflow_audit')], wrapped)
+                        # Removing only the verified wrappers must restore every original
+                        # command, registration metadata and unrelated native config value.
+                        self.assertEqual(old_config, current_config)
                         continue
                     if name.startswith(('.claude/agents/', '.claude/hooks/', '.codex/')) or name == '.claude/settings.json':
                         expected = contents
