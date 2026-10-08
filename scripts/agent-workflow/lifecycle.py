@@ -247,6 +247,8 @@ def owned_projection(rel, text, own_hooks, template_paths):
                         (('features', 'hooks'), ('agents', 'enabled'))})
     if rel == '.gitattributes':
         return installer.AUDIT_ATTRIBUTE if installer.AUDIT_ATTRIBUTE in text.splitlines() else ''
+    if rel == '.gitignore':
+        return installer.DIAGNOSTICS_IGNORE if installer.DIAGNOSTICS_IGNORE in text.splitlines() else ''
     return text
 
 

@@ -45,7 +45,7 @@ def release_metadata():
     if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Invalid installer release version')
     digest = hashlib.sha256()
-    inputs = list(BASE.glob('*.py')) + [BASE / 'release.json']
+    inputs = list(BASE.glob('*.py')) + [BASE / 'release.json', BASE / 'hook-diagnostics.md']
     bundle = BASE.parent.parent
     for name in ('app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola', 'app-template-react'):
         template = bundle / name

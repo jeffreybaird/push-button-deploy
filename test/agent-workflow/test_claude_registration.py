@@ -100,6 +100,13 @@ class CodexRegistration(unittest.TestCase):
     def guard(self, settings):
         def owned_execution(hook):
             argv = shlex.split(hook['command'])
+            if (len(argv) > 2 and argv[:2] == ['python3', '-B'] and
+                    argv[2].endswith('/.codex/hooks/hook_diagnostics.py')):
+                self.assertIn('--', argv)
+                self.assertIn('--hook', argv)
+                if argv[argv.index('--hook') + 1] != 'workflow_guard':
+                    return False
+                argv = argv[argv.index('--') + 1:]
             return (len(argv) > 2 and argv[:2] == ['python3', '-B'] and
                     argv[2].endswith('/.codex/hooks/workflow_guard.py'))
         registrations = [r for r in settings['hooks']['PreToolUse']

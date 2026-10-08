@@ -31,6 +31,8 @@ CODEX_AUDIT_SCRIPT = CODEX_AUDIT_ROOT + '/.codex/hooks/workflow_audit.py'
 CODEX_AUDIT_COMMAND = ('python3 -B "' + CODEX_AUDIT_SCRIPT + '" --platform codex '
                        '--root "' + CODEX_AUDIT_ROOT + '" --policy "' + CODEX_AUDIT_ROOT +
                        '/.codex/hooks/policy.json"')
+CODEX_DIAGNOSTICS_SCRIPT = CODEX_AUDIT_ROOT + '/.codex/hooks/hook_diagnostics.py'
+DIAGNOSTICS_IGNORE = '/.agent-diagnostics/'
 AUDIT_ATTRIBUTE = '.agent-audit/*.jsonl merge=union'
 BEGIN = '<!-- BEGIN MANAGED AGENT WORKFLOW -->'
 END = '<!-- END MANAGED AGENT WORKFLOW -->'
@@ -45,6 +47,7 @@ OPTIONAL_GUIDES = ('.claude/testing.md', '.codex/README.md', '.codex/testing.md'
 MANAGED_PATHS = {'AGENTS.md', 'CLAUDE.md', '.docs/agent-workflow.md', '.gitattributes',
                  '.codex/config.toml', '.codex/hooks.json', '.claude/settings.json',
                  MANIFEST_PATH, *OPTIONAL_GUIDES}
+MANAGED_PATHS.update({'.codex/hooks/hook_diagnostics.py', '.docs/hook-diagnostics.md', '.gitignore'})
 for _platform in ('codex', 'claude'):
     MANAGED_PATHS.update('.' + _platform + '/hooks/' + name for name in
                          ('workflow_guard.py', 'workflow_audit.py', 'policy.json'))
@@ -246,7 +249,26 @@ def managed_audit_command(command, scripts):
     if Path(argv[0]).name not in ('python', 'python3'):
         return False
     index = 2 if argv[1:2] == ['-B'] else 1
+    if argv[index:index + 1] and argv[index] in {
+            CODEX_DIAGNOSTICS_SCRIPT,
+            *(str(Path(script).with_name('hook_diagnostics.py')) for script in scripts
+              if not script.startswith('$'))}:
+        options = argv[index + 1:]
+        if '--' not in options:
+            return False
+        separator = options.index('--')
+        prefix = options[:separator]
+        if (len(prefix) != 6 or prefix[::2] != ['--hook', '--event', '--root'] or
+                prefix[1] not in ('workflow_guard', 'workflow_audit') or
+                prefix[3] not in ('PreToolUse', 'PostToolUse')):
+            return False
+        return managed_audit_command(shlex.join(options[separator + 1:]), scripts)
     return bool(argv[index:index + 1] and argv[index] in scripts)
+
+
+def diagnostics_command(command, hook, event):
+    return ('python3 -B "' + CODEX_DIAGNOSTICS_SCRIPT + '" --hook ' + hook +
+            ' --event ' + event + ' --root "' + CODEX_AUDIT_ROOT + '" -- ' + command)
 
 
 def merge_audit_hooks(data, platform='claude', root=None):
@@ -270,8 +292,10 @@ def merge_audit_hooks(data, platform='claude', root=None):
                 kept.append({**registration, 'hooks': retained})
         hooks[event] = kept
     for event in events:
+        registered_command = (diagnostics_command(command, 'workflow_audit', event)
+                              if platform == 'codex' else command)
         hooks.setdefault(event, []).append({'matcher': matcher, 'hooks': [
-            {'type': 'command', 'command': command, 'timeout': 10}]})
+            {'type': 'command', 'command': registered_command, 'timeout': 10}]})
 
 
 def with_audit_attribute(text):
@@ -718,6 +742,12 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
         if old:
             files[name] = section(old, summary)
     files['.gitattributes'] = with_audit_attribute(existing('.gitattributes'))
+    ignore = existing('.gitignore')
+    files['.gitignore'] = (ignore if DIAGNOSTICS_IGNORE in ignore.splitlines() else
+                           ignore + ('' if not ignore or ignore.endswith('\n') else '\n') +
+                           DIAGNOSTICS_IGNORE + '\n')
+    files['.codex/hooks/hook_diagnostics.py'] = (BASE / 'hook_diagnostics.py').read_text()
+    files['.docs/hook-diagnostics.md'] = (BASE / 'hook-diagnostics.md').read_text()
     codex_config = existing('.codex/config.toml')
     files['.codex/config.toml'] = enable_codex_hooks(codex_config)
     if 'model' in profile.get('codex', {}):
@@ -730,7 +760,7 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
         if platform == 'claude':
             command, matcher = CLAUDE_COMMAND, CLAUDE_MATCHER
         else:
-            command, matcher = CODEX_GUARD_COMMAND, '.*'
+            command, matcher = diagnostics_command(CODEX_GUARD_COMMAND, 'workflow_guard', 'PreToolUse'), '.*'
         config_path = prefix + ('/hooks.json' if platform == 'codex' else '/settings.json')
         config = read_json(config_path)
         if platform == 'claude' and 'model' in profile.get(platform, {}):

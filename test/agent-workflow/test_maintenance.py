@@ -23,7 +23,8 @@ class MaintenanceFixture(unittest.TestCase):
         self.source = self.root / 'installer source with spaces'
         self.source.mkdir()
         for name in ('installer.py', 'repo_policies.py', 'workflow_guard.py',
-                     'workflow_audit.py', 'workflow.py', 'release.json'):
+                     'workflow_audit.py', 'hook_diagnostics.py', 'hook-diagnostics.md',
+                     'workflow.py', 'release.json'):
             if (BASE / name).exists():
                 shutil.copyfile(BASE / name, self.source / name)
         (self.source / '.gitignore').write_text('__pycache__/\n*.py[cod]\nevidence/\n')
@@ -322,7 +323,7 @@ class InstallerProvenance(MaintenanceFixture):
     # Reuse fixture helpers; only provenance cases are collected in this class.
     def test_release_and_manifest_identify_installer_component_content(self):
         release = json.loads((self.source / 'release.json').read_text())
-        self.assertEqual('0.4.2', release['installer_version'])
+        self.assertEqual('0.5.0', release['installer_version'])
         root = self.installed()
         manifest = json.loads((root / '.codex/hooks/workflow-manifest.json').read_text())
         self.assertEqual(release['installer_version'], manifest['installer']['version'])
