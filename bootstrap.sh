@@ -487,11 +487,20 @@ interactive() {
   [ -n "$lang_default" ] || lang_default="$(type_stacks "$type" | head -1 | cut -d'|' -f3)"
   local lang
   ask_menu "Which language?" "$lang_default" \
-    < <(type_stacks "$type" | awk -F'|' '{print $3"|"$8}')
+    < <(type_stacks "$type" | awk -F'|' '!seen[$3]++ {print $3"|"$3}')
   lang="$REPLY_VALUE"; LANGUAGE_FLAG="$lang"
 
   # The framework the pair resolves to — the follow-ups key on it, not on names.
   local fw; fw="$(resolve_framework "$type" "$lang")"
+
+  if [ "$(type_stacks "$type" | awk -F'|' -v l="$lang" '$3 == l {n++} END {print n+0}')" -gt 1 ]; then
+    local fw_default="$fw"
+    [ "$(framework_language "$type" "${FRAMEWORK:-}")" != "$lang" ] || fw_default="$FRAMEWORK"
+    ask_menu "Which framework?" "$fw_default" \
+      < <(type_stacks "$type" | awk -F'|' -v l="$lang" '$3 == l {print $2"|"$8}')
+    fw="$REPLY_VALUE"
+  fi
+  FRAMEWORK="$fw"
 
   # 3. Code host + CI engine (every type has one).
   ask_menu "Where do the repo and CI live?" "${GIT_PROVIDER:-github}" \
@@ -504,7 +513,7 @@ interactive() {
     # Database: only where the type may have one AND the framework does not force
     # it (sinatra is SQLite-only, zola has none). Matches resolve_app_config's
     # coercions, so nothing offered here gets silently overridden later.
-    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != zola ]; then
+    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != rails ] && [ "$fw" != zola ]; then
       ask_menu "Database backend?" "${DATABASE_BACKEND:-sqlite}" \
         < <(printf 'sqlite|a file on the droplet, streamed to Spaces by Litestream (~$0)\npostgres|DigitalOcean Managed Postgres, private-VPC (~$15/mo)\n')
       DATABASE_BACKEND="$REPLY_VALUE"; export DATABASE_BACKEND
@@ -546,7 +555,7 @@ interactive() {
   printf '    directory   %s\n' "$(abs_dir "$INTERACTIVE_APP_DIR")" >&2
   printf '    code host   %s\n' "$GIT_PROVIDER" >&2
   if [ "$(type_droplet "$type")" = yes ]; then
-    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != zola ]; then
+    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != rails ] && [ "$fw" != zola ]; then
       printf '    database    %s\n' "${DATABASE_BACKEND:-sqlite}" >&2
     fi
     [ "$GIT_PROVIDER" = github ] && [ "$fw" != zola ] \

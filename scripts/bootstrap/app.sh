@@ -282,6 +282,10 @@ install_docker_runtime() { # $1 app directory, $2 framework
       cp "$SCRIPT_DIR/app/Dockerfile.ruby" "$APP_DIR/Dockerfile"
       cp "$SCRIPT_DIR/app/.dockerignore.ruby" "$APP_DIR/.dockerignore"
       pin_ruby ;;
+    rails)
+      cp "$SCRIPT_DIR/app/Dockerfile.rails" "$APP_DIR/Dockerfile"
+      cp "$SCRIPT_DIR/app/.dockerignore.rails" "$APP_DIR/.dockerignore"
+      pin_ruby ;;
     phoenix)
       cp "$SCRIPT_DIR/app/Dockerfile" "$APP_DIR/Dockerfile"
       cp "$SCRIPT_DIR/app/.dockerignore" "$APP_DIR/.dockerignore"
@@ -291,7 +295,8 @@ install_docker_runtime() { # $1 app directory, $2 framework
 
 install_runtime_stack() { # $1 app directory, $2 framework, $3 database backend
   local APP_DIR="$1" framework="$2" backend="$3" template
-  if [ "$framework" = sinatra ]; then template=compose.sinatra.yaml
+  if [ "$framework" = rails ]; then template=compose.rails.yaml
+  elif [ "$framework" = sinatra ]; then template=compose.sinatra.yaml
   elif [ "$backend" = sqlite ]; then template=compose.sqlite.yaml
   else template=compose.yaml; fi
   cp "$SCRIPT_DIR/deploy/$template" "$APP_DIR/deploy/compose.yaml"
@@ -313,7 +318,8 @@ install_pipeline_files() { # $1 app directory, $2 provider
     mkdir -p "$APP_DIR/deploy"
     copy_deploy_files
     if ! is_static; then
-      if is_sinatra; then staging_template=staging.ruby.yml
+      if is_rails; then staging_template=staging.rails.yml
+      elif is_sinatra; then staging_template=staging.ruby.yml
       else staging_template=staging.yml; fi
       copy_staging_workflow "$staging_template" "$tpl_wf_dir" "$wf_dir"
     fi
@@ -325,6 +331,14 @@ install_pipeline_files() { # $1 app directory, $2 provider
 # supplied by wants_staging(); toolchain overrides remain optional environment.
 prepare_app() {
   local APP_DIR="$1" APP_TYPE="$2" FRAMEWORK="$3" DATABASE_BACKEND="$4" GIT_PROVIDER="$5"
+  if is_rails; then
+    # Validate essential deployment inputs before overwriting any pipeline files.
+    local required
+    for required in Gemfile config/application.rb config/database.yml config/environment.rb config/puma.rb config.ru .ruby-version; do
+      [ -s "$APP_DIR/$required" ] || fail "Rails deployment requires $required in $APP_DIR (see docs/frameworks.md)"
+    done
+    printf '%s\n' "$(basename "$APP_DIR")" > "$APP_DIR/.app-name"
+  fi
   # Adopt unmanaged apps once. Subsequent document changes are an explicit
   # lifecycle operation, independent of deploying application code.
   if [ ! -e "$APP_DIR/.agent-docs-manifest.json" ]; then

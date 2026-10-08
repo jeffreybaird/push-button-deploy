@@ -20,7 +20,7 @@ Terraform enforces its own minimum version during initialization.
 | `jq` | every service: Terraform backend metadata; also all Gitea runs for API JSON | `brew install jq` |
 | Elixir + `mix` | **Phoenix only** — app generation, deps, secret generation | `brew install elixir` |
 | `phx_new` archive | **Phoenix only** — generating the app (needed when the target dir is empty) | `mix archive.install hex phx_new` |
-| `openssl` | **Sinatra only** — session-secret generation (the Ruby build runs in Docker/CI, so no local Ruby is required) | preinstalled on macOS |
+| `openssl` | **Sinatra and Rails** — session-secret generation (the Ruby build runs in Docker/CI, so no local Ruby is required) | preinstalled on macOS |
 | `curl`, `ssh`, `scp`, `dig` | plumbing + diagnostics | preinstalled on macOS |
 
 Docker is **not** required locally — images build in CI.
@@ -108,10 +108,10 @@ export SPACES_SECRET_ACCESS_KEY="..."
 
 | Variable | Required? | Purpose |
 |---|---|---|
-| `FRAMEWORK` | no | `phoenix` (default), `sinatra` or `zola`. Names the stack — and, being unique across app types, also picks the type. `sinatra` is SQLite-only; `zola` is a static site with no database. Chosen once per project. See [Frameworks](frameworks.md). |
+| `FRAMEWORK` | no | `phoenix` (default), `sinatra`, `rails` or `zola`. Names the stack — and, being unique across app types, also picks the type. `sinatra` and `rails` are SQLite-only; `zola` is a static site with no database. Chosen once per project. See [Frameworks](frameworks.md). |
 | `LANGUAGE` | no | The language within the app type: service `elixir` (default) / `ruby` / `static`; cli `elixir` (default) / `ruby` / `bash` / `typescript`; library `elixir`. Same choice as `--lang`. |
 | `APP_TYPE` | no | `service` (default), `cli`, or `library`. `cli`/`library` provision nothing; better passed per-run as `--cli` / `--no-droplet`. See [App types](app-types.md). |
-| `DATABASE_BACKEND` | no | `sqlite` (default) or `postgres`. Chosen once at first apply; don't flip it. `sinatra` forces `sqlite`. See [Databases](databases.md). |
+| `DATABASE_BACKEND` | no | `sqlite` (default) or `postgres`. Chosen once at first apply; don't flip it. `sinatra` and `rails` force `sqlite`. See [Databases](databases.md). |
 | `PROJECT_NAME` | no | Infra naming (DB, VPC, tag). **Immutable after first apply** — the script guards it. |
 | `REGION` | no | DO region slug (`nyc3`). |
 | `DNS_RECORD` | no | Subdomain inside `DNS_ZONE` (app name); `@` for the apex. |
@@ -136,7 +136,7 @@ instance itself — see [Gitea](gitea.md).
 an empty value disables them). The default adds Req, Oban, and Cucumberex;
 copying agent docs alone does not install dependencies or implement examples.
 `ELIXIR_VERSION` and `OTP_VERSION` override Phoenix Dockerfile toolchain pins;
-`RUBY_VERSION` overrides the Sinatra Dockerfile pin. `TF_PLUGIN_CACHE_DIR`
+`RUBY_VERSION` overrides the Ruby Dockerfile pin. `TF_PLUGIN_CACHE_DIR`
 overrides the Terraform plugin cache and `TF_DATA_DIR` is honored by the
 [backend helper](../scripts/terraform-backend.md). `PBD_ROOT` selects the bundle
 for agent-doc commands; it is not a general bootstrap installation setting yet.

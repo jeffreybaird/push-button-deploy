@@ -1,6 +1,6 @@
 # push-button-deploy
 
-One command takes you from an **empty directory** to a **freshly generated Phoenix app, Sinatra app or Zola site serving HTTPS on a production DigitalOcean droplet**, with a CI/CD pipeline that deploys every push to `main` from that moment on. Pick the stack with `FRAMEWORK` (default `phoenix`; see [Frameworks](docs/frameworks.md)).
+One command takes you from an **empty directory** to a **freshly generated Phoenix app, Sinatra app, Rails app or Zola site serving HTTPS on a production DigitalOcean droplet**, with a CI/CD pipeline that deploys every push to `main` from that moment on. Pick the stack with `FRAMEWORK` (default `phoenix`; see [Frameworks](docs/frameworks.md)).
 
 ```bash
 ./bootstrap.sh ~/src/myapp
@@ -8,7 +8,7 @@ One command takes you from an **empty directory** to a **freshly generated Phoen
 # ==> LIVE: https://myapp.example.com
 ```
 
-If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. An existing app with the selected framework's marker (`mix.exs`, `Gemfile`, or `config.toml`) skips generation. Bootstrap still prepares release files, installs deployment templates, and adopts agent docs if no lifecycle manifest exists. Review and commit local work first: bootstrap stages all app changes when committing the pipeline.
+If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. An existing app with the selected framework's marker (`mix.exs`, `Gemfile`, `config/application.rb`, or `config.toml`) skips generation. Bootstrap still prepares release files, installs deployment templates, and adopts agent docs if no lifecycle manifest exists. Review and commit local work first: bootstrap stages all app changes when committing the pipeline.
 
 **Not everything worth building is a website.** `--cli` and `--no-droplet` build a command-line
 program or a reusable package instead: same repo creation, same pipeline wiring, same one
@@ -38,7 +38,7 @@ mytool --format json hello there    # not FORMAT=json ./mytool.sh hello there
 | Images | Built on amd64 CI runners (GitHub-hosted, or your own for Gitea — see [Gitea](docs/gitea.md)), pushed to DO Container Registry, SHA-pinned |
 | Deploys | Dynamic services: tests → image build → migrations → health-checked blue/green swap. Zola builds and publishes files by symlink. CLI/library apps run build/test CI. |
 | Staging | GitHub dynamic services share one PR slot per app at `<app>-stg.<zone>`; closing the owning PR removes it. See [Staging](docs/staging.md). |
-| Tests | Phoenix: `mix test` using the app's configured adapter (CI also starts Postgres 17); Sinatra: RSpec; Zola: build gate. CLI/library gates vary by stack. |
+| Tests | Phoenix: `mix test` using the app's configured adapter (CI also starts Postgres 17); Sinatra: RSpec; Rails: Minitest; Zola: build gate. CLI/library gates vary by stack. |
 | Rollback | Dynamic services repin an existing image; Zola selects a retained release. `gh workflow run rollback.yml -f tag=<previous-sha>` or the Gitea Actions tab. No database rollback. |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
 | Agent docs | Every generated app ships managed Codex and Claude guidance, workflow roles, and hooks; `agent-docs.sh` handles future updates — see [Agent docs](docs/claude-docs.md) |
@@ -83,7 +83,7 @@ The full guide lives in [`docs/`](docs/index.md).
 | [Prerequisites](docs/prerequisites.md) | Required tools, accounts and credentials, the full `.env` reference, `--check` |
 | [Quickstart](docs/quickstart.md) | A single service from empty directory to live HTTPS — plus a droplet-free quickstart |
 | [App types](docs/app-types.md) | `service` / `cli` / `library`, the language↔framework table, and interactive selection |
-| [Frameworks](docs/frameworks.md) | Phoenix, Sinatra and Zola specifics — generation, CI gate, migrations, image/release |
+| [Frameworks](docs/frameworks.md) | Phoenix, Sinatra, Rails and Zola specifics — generation, CI gate, migrations, image/release |
 | [Databases](docs/databases.md) | SQLite (Litestream) vs managed Postgres — tradeoffs and conversion caveats |
 | [Staging](docs/staging.md) | Per-PR staging environments — how they work and how to turn them off |
 | [Tenancy](docs/tenancy.md) | Several apps on one droplet — host apps and tenants |

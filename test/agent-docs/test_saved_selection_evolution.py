@@ -16,7 +16,7 @@ class SavedSelectionEvolution(unittest.TestCase):
             work = Path(temporary).resolve()
             bundle = work / 'bundle'
             bundle.mkdir()
-            for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-zola'):
+            for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola'):
                 shutil.copytree(ROOT / item, bundle / item, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             for item in ROOT.glob('*.sh'):
                 shutil.copy2(item, bundle / item.name)

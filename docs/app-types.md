@@ -9,14 +9,14 @@ select one.
 
 The **app type** is the *shape* of the thing being built, and therefore what
 infrastructure it needs. The **language** is what it is written in, within that
-shape. Each `(type, language)` pair also has a **framework** name — `sinatra`,
+shape. Each stack also has a **framework** name — `sinatra`,
 `ruby-cli`, `zola` — which is what `FRAMEWORK` takes.
 
 | | `--service` (default) | `--cli` | `--no-droplet` (alias `--library`) |
 |---|---|---|---|
 | What it is | a web app served over HTTPS | a command-line program | a reusable package |
 | Languages | `elixir`, `ruby`, `static` | `elixir`, `ruby`, `bash`, `typescript` | `elixir` |
-| Frameworks | `phoenix`, `sinatra`, `zola` | `escript`, `ruby-cli`, `bash-cli`, `ts-cli` | `mix` |
+| Frameworks | `phoenix`, `sinatra`, `rails`, `zola` | `escript`, `ruby-cli`, `bash-cli`, `ts-cli` | `mix` |
 | Droplet, DNS, TLS | yes | **none** | **none** |
 | Database | `postgres` / `sqlite` / none | **none** | **none** |
 | Container registry | yes (except `zola`) | **none** | **none** |
@@ -60,8 +60,11 @@ FRAMEWORK=zola ./bootstrap.sh ~/src/myblog  # 'zola' belongs to service, so this
 ```
 
 A bare **language** does not pick a type: `FRAMEWORK=ruby` is ambiguous (Ruby
-builds a Sinatra service *and* a gem-layout CLI) and the tool fails with a
+builds Sinatra and Rails services *and* a gem-layout CLI) and the tool fails with a
 message naming both, rather than guessing.
+
+For Ruby services, `--service ruby` keeps Sinatra as the default. Select Rails
+explicitly with `FRAMEWORK=rails`; `LANGUAGE=ruby` may accompany that choice.
 
 ### 3. `--no-droplet` as a constraint
 

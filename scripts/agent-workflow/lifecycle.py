@@ -17,8 +17,8 @@ MANIFEST = '.agent-docs-manifest.json'
 GUIDANCE = '.docs/project-guidance.md'
 BEGIN = '<!-- BEGIN MANAGED AGENT DOCS -->'
 END = '<!-- END MANAGED AGENT DOCS -->'
-TEMPLATES = {'phoenix': 'app-template', 'sinatra': 'app-template-ruby', 'zola': 'app-template-zola'}
-STACKS = {'phoenix': 'service', 'sinatra': 'service', 'zola': 'service',
+TEMPLATES = {'phoenix': 'app-template', 'sinatra': 'app-template-ruby', 'rails': 'app-template-rails', 'zola': 'app-template-zola'}
+STACKS = {'phoenix': 'service', 'sinatra': 'service', 'rails': 'service', 'zola': 'service',
           'escript': 'cli', 'ruby-cli': 'cli', 'bash-cli': 'cli', 'ts-cli': 'cli', 'mix': 'library'}
 DEFAULT_SELECTION = {'skip_modules': [], 'skip_agents': [], 'hook': '', 'no_setup': False}
 JSON_CONFIGS = {'.claude/settings.json', '.codex/hooks.json'}
@@ -151,15 +151,17 @@ def policy_for(framework):
     common = ['*.sh', '**/*.sh', '*.py', '**/*.py', '.github/workflows/*.yml', '.gitea/workflows/*.yml']
     extensions = {
         'phoenix': ['ex', 'exs', 'heex', 'eex', 'js', 'ts', 'css'],
-        'sinatra': ['rb', 'erb', 'js', 'css'], 'zola': ['html', 'css', 'scss', 'js'],
+        'sinatra': ['rb', 'erb', 'js', 'css'], 'rails': ['rb', 'erb', 'js', 'css'], 'zola': ['html', 'css', 'scss', 'js'],
         'escript': ['ex', 'exs'], 'mix': ['ex', 'exs'], 'ruby-cli': ['rb'],
         'bash-cli': [], 'ts-cli': ['ts', 'js', 'mjs'],
     }[framework]
     source = common + [pattern for ext in extensions for pattern in ('*.' + ext, '**/*.' + ext)]
-    if framework in ('sinatra', 'ruby-cli'):
+    if framework in ('sinatra', 'rails', 'ruby-cli'):
         source += ['Gemfile', 'Rakefile', '*.gemspec']
     if framework in ('bash-cli', 'ruby-cli'):
         source += ['bin/*', 'exe/*']
+    if framework == 'rails':
+        source += ['bin/*', 'config.ru', 'Dockerfile', 'config/*.yml', 'config/**/*.yml']
     if framework == 'ts-cli':
         source += ['package.json', 'tsconfig.json']
     return {'schema_version': 2, 'source_globs': source,
@@ -283,7 +285,7 @@ def plan(root, args):
         list(hook_entries({'hooks': old['template_hooks']}))
     framework = args.framework or old.get('framework')
     if framework is None:
-        framework = next((fw for marker, fw in (('mix.exs', 'phoenix'), ('Gemfile', 'sinatra'),
+        framework = next((fw for marker, fw in (('mix.exs', 'phoenix'), ('config/application.rb', 'rails'), ('Gemfile', 'sinatra'),
                                                 ('config.toml', 'zola'), ('package.json', 'ts-cli'))
                           if (root / marker).is_file()), None)
     if framework not in STACKS:

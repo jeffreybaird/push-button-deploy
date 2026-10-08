@@ -7,12 +7,13 @@ cd_camelize() {
 
 # ---- framework <-> template (only the roots that exist today) -------------------
 
-cd_frameworks() { printf 'phoenix sinatra zola\n'; }
+cd_frameworks() { printf 'phoenix sinatra rails zola\n'; }
 
 cd_template_dir() { # $1 framework -> template root path (empty if unknown)
   case "$1" in
     phoenix) printf '%s\n' "$CD_ROOT/app-template" ;;
     sinatra) printf '%s\n' "$CD_ROOT/app-template-ruby" ;;
+    rails)   printf '%s\n' "$CD_ROOT/app-template-rails" ;;
     zola)    printf '%s\n' "$CD_ROOT/app-template-zola" ;;
   esac
 }
@@ -20,6 +21,7 @@ cd_template_dir() { # $1 framework -> template root path (empty if unknown)
 # Guess the framework of an existing app from its marker file.
 cd_infer_framework() { # $1 dir -> framework or empty
   [ -f "$1/mix.exs" ]     && { printf 'phoenix\n'; return; }
+  [ -f "$1/config/application.rb" ] && { printf 'rails\n'; return; }
   [ -f "$1/Gemfile" ]     && { printf 'sinatra\n'; return; }
   [ -f "$1/config.toml" ] && { printf 'zola\n';    return; }
   return 0
@@ -40,7 +42,7 @@ cd_values_for() { # $1 framework, $2 app_dir
         name="$(printf '%s' "$base" | tr '-' '_')"
         printf '%s|%s\n' "$(cd_camelize "$name")" "$name"
       fi ;;
-    sinatra)
+    sinatra|rails)
       name="$(printf '%s' "$base" | tr '-' '_')"
       printf '%s|%s\n' "$(cd_camelize "$name")" "$name" ;;
     zola)

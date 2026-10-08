@@ -98,6 +98,7 @@ library|--library|no|no|ci.yml|a reusable package — built and tested by CI'
 #
 APP_STACK_TABLE='service|phoenix|elixir|-|mix.exs|-|deploy.yml:deploy.yml rollback.yml:rollback.yml|Phoenix web app
 service|sinatra|ruby|-|Gemfile|new-sinatra-app.sh|deploy.ruby.yml:deploy.yml rollback.ruby.yml:rollback.yml|Sinatra web app (SQLite only)
+service|rails|ruby|-|config/application.rb|new-rails-app.sh|deploy.rails.yml:deploy.yml rollback.rails.yml:rollback.yml|Rails web app (SQLite only)
 service|zola|static|-|config.toml|new-zola-site.sh|deploy.zola.yml:deploy.yml rollback.zola.yml:rollback.yml|Zola static site (no database, no image)
 cli|escript|elixir|beam|mix.exs|new-mix-app.sh --escript|ci.escript.yml:ci.yml|one self-contained executable, via mix escript.build
 cli|ruby-cli|ruby|rb|Gemfile|new-ruby-cli.sh|ci.ruby-cli.yml:ci.yml|a gem-layout CLI on OptionParser, installable with gem install
@@ -121,7 +122,7 @@ type_summary()  { app_type_row "$1" | cut -d'|' -f6; }
 # Every stack row of one type, in table order — the first is the type's default.
 type_stacks()     { printf '%s\n' "$APP_STACK_TABLE" | awk -F'|' -v t="$1" '$1 == t'; }
 type_frameworks() { type_stacks "$1" | cut -d'|' -f2 | tr '\n' ' ' | sed 's/ $//'; }
-type_languages()  { type_stacks "$1" | cut -d'|' -f3 | tr '\n' ' ' | sed 's/ $//'; }
+type_languages()  { type_stacks "$1" | cut -d'|' -f3 | awk '!seen[$0]++' | tr '\n' ' ' | sed 's/ $//'; }
 
 stack_row() { # $1 type, $2 framework
   printf '%s\n' "$APP_STACK_TABLE" | awk -F'|' -v t="$1" -v f="$2" '$1 == t && $2 == f { print; exit }'
@@ -298,6 +299,10 @@ $(app_stack_help)"
     # Naming both, in disagreement, is a contradiction rather than a preference.
     if [ -n "${FRAMEWORK:-}" ]; then
       local from_fw; from_fw="$(resolve_framework "$APP_TYPE" "$FRAMEWORK")"
+      # An explicit framework disambiguates stacks sharing the same language.
+      if [ -n "$from_fw" ] && [ "$(framework_language "$APP_TYPE" "$from_fw")" = "$want" ]; then
+        resolved="$from_fw"
+      fi
       [ -z "$from_fw" ] || [ "$from_fw" = "$resolved" ] \
         || fail "language '$want' and FRAMEWORK '$FRAMEWORK' disagree: the first means '$resolved', the second '$from_fw'. Drop one."
     fi

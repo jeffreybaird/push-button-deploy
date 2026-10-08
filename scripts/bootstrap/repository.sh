@@ -71,7 +71,7 @@ seed_ci() {
     # no session, no cookie and no server-side code — it gets no secret at all.
     if is_static; then
       :
-    elif is_sinatra; then
+    elif is_sinatra || is_rails; then
       openssl rand -hex 64                     | secret_set SECRET_KEY_BASE
     else
       mix phx.gen.secret                       | secret_set SECRET_KEY_BASE

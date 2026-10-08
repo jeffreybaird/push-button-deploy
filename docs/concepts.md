@@ -42,13 +42,13 @@ them is that type's default. The current registry:
 
 | Type | Frameworks |
 |---|---|
-| `service` | `phoenix` (Elixir), `sinatra` (Ruby), `zola` (static) |
+| `service` | `phoenix` (Elixir), `sinatra` / `rails` (Ruby), `zola` (static) |
 | `cli` | `escript` (Elixir), `ruby-cli` (Ruby), `bash-cli` (bash), `ts-cli` (TypeScript) |
 | `library` | `mix` (Elixir) |
 
 Framework names are unique across the whole table, which is what lets naming one
 alone also pick the type: `FRAMEWORK=zola` still means "a service". A bare
-language does not — `ruby` builds a Sinatra service *and* a gem-layout CLI, so it
+language does not — `ruby` builds Sinatra and Rails services *and* a gem-layout CLI, so it
 cannot identify a type on its own, and the tool says so rather than guessing.
 
 ## The Terraform roots

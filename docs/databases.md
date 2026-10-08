@@ -32,7 +32,7 @@ pushes. For the apps this tool builds that is usually fine, and it is the reason
 `sqlite` is the default — reach for `postgres` when you actually need concurrent
 writers or SQL that SQLite lacks, not by habit.
 
-Framework choice can decide this for you: `sinatra` forces `sqlite`, and `zola`
+Framework choice can decide this for you: `sinatra` and `rails` force `sqlite`, and `zola`
 (a static site) has no database at all. See [Frameworks](frameworks.md).
 
 ## Backend selection does not convert an existing app
@@ -57,6 +57,6 @@ flip:
 
 ## See also
 
-- [Frameworks](frameworks.md) — `sinatra` forces `sqlite`; `zola` has no
+- [Frameworks](frameworks.md) — `sinatra` and `rails` force `sqlite`; `zola` has no
   database.
 - [Reference](reference.md) — every flag, variable, and cost in one place.
