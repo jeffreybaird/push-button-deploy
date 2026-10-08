@@ -143,7 +143,7 @@ class CanonicalGuides(unittest.TestCase):
                         self.assertEqual(set(old_manifest), set(current_manifest))
                         self.assertEqual(old_manifest['version'], current_manifest['version'])
                         self.assertEqual('0.4.0', old_manifest['installer']['version'])
-                        self.assertEqual('0.4.1', current_manifest['installer']['version'])
+                        self.assertEqual('0.4.2', current_manifest['installer']['version'])
                         self.assertRegex(current_manifest['installer']['source_commit'], r'^[0-9a-f]{40,64}$')
                         self.assertEqual(set(old_manifest['sha256']) - {'.claude/testing.md'},
                                          set(current_manifest['sha256']))
