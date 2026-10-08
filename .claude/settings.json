@@ -46,5 +46,6 @@
         "matcher": "Bash|Write|Edit|NotebookEdit"
       }
     ]
-  }
+  },
+  "model": "claude-opus-5-5"
 }

@@ -35,6 +35,11 @@ AUDIT_ATTRIBUTE = '.agent-audit/*.jsonl merge=union'
 BEGIN = '<!-- BEGIN MANAGED AGENT WORKFLOW -->'
 END = '<!-- END MANAGED AGENT WORKFLOW -->'
 MANIFEST_PATH = '.codex/hooks/workflow-manifest.json'
+MODEL_PROFILE_PATH = '.docs/agent-models.json'
+MODEL_EFFORTS = {
+    'codex': ('model_reasoning_effort', {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}),
+    'claude': ('effort', {'low', 'medium', 'high', 'xhigh', 'max'}),
+}
 OPTIONAL_GUIDES = ('.claude/testing.md', '.codex/README.md', '.codex/testing.md',
                    'docs/codex-agents.md', 'docs/agent-guardrails.md')
 MANAGED_PATHS = {'AGENTS.md', 'CLAUDE.md', '.docs/agent-workflow.md', '.gitattributes',
@@ -76,6 +81,108 @@ def safe_destination(root, rel):
         if candidate != path and not stat.S_ISDIR(info.st_mode):
             raise ValueError('Destination parent is not a directory')
     return path
+
+
+def model_profile(root):
+    """Read the optional project-owned profile; reject invalid input before writes."""
+    path = safe_destination(root, MODEL_PROFILE_PATH)
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    if (not isinstance(data, dict) or type(data.get('schema_version')) is not int
+            or data['schema_version'] != 1 or set(data) - {'schema_version', 'codex', 'claude'}):
+        raise ValueError('Invalid model profile schema')
+    for platform in ('codex', 'claude'):
+        if platform not in data:
+            continue
+        settings = data[platform]
+        if not isinstance(settings, dict) or set(settings) - {'model', 'roles'}:
+            raise ValueError('Invalid model profile platform: ' + platform)
+        roles = settings.get('roles', {})
+        if not isinstance(roles, dict) or set(roles) - set(guard.ROLES):
+            raise ValueError('Invalid model profile roles: ' + platform)
+        effort, allowed_efforts = MODEL_EFFORTS[platform]
+        for fields in [settings, *roles.values()]:
+            keys = {'model', 'roles'} if fields is settings else {'model', effort}
+            if not isinstance(fields, dict) or set(fields) - keys:
+                raise ValueError('Invalid model profile fields: ' + platform)
+            if 'model' in fields and (not isinstance(fields['model'], str) or not fields['model'].strip()):
+                raise ValueError('Model must be a nonblank string: ' + platform)
+            if effort in fields and (not isinstance(fields[effort], str) or fields[effort] not in allowed_efforts):
+                raise ValueError('Invalid model effort: ' + platform)
+    return data
+
+
+def toml_statements(text):
+    """Yield statement spans and comment positions without rewriting native TOML."""
+    start = index = depth = 0
+    quote = None
+    triple = False
+    comment = None
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if quote == '"' and char == '\\':
+                index += 2
+                continue
+            delimiter = quote * (3 if triple else 1)
+            if text.startswith(delimiter, index):
+                index += len(delimiter)
+                if triple:
+                    # TOML permits one or two literal quotes immediately before
+                    # a multiline string's closing delimiter.
+                    while index < len(text) and text[index] == quote:
+                        index += 1
+                quote = None
+                continue
+        elif char in ('"', "'"):
+            quote = char
+            triple = text.startswith(char * 3, index)
+            index += 3 if triple else 1
+            continue
+        elif char == '#':
+            comment = index
+            newline = text.find('\n', index)
+            index = len(text) if newline == -1 else newline
+            continue
+        elif char in '[{':
+            depth += 1
+        elif char in ']}':
+            depth -= 1
+        elif char == '\n' and depth == 0:
+            yield start, index + 1, comment
+            start, comment = index + 1, None
+        index += 1
+    if start < len(text):
+        yield start, len(text), comment
+
+
+def overlay_toml_model(text, model):
+    """Set only the root model scalar, retaining comments and all other bytes."""
+    data = tomllib.loads(text)
+    if data.get('model') == model:
+        return text
+    value = json.dumps(model, ensure_ascii=False)
+    insertion = len(text)
+    for start, end, comment in toml_statements(text):
+        statement = text[start:end]
+        if statement.lstrip().startswith('['):
+            insertion = start
+            break
+        match = re.match(r'''(\s*(?:model|"model"|'model')\s*=\s*)''', statement)
+        if match:
+            suffix = text[comment:end] if comment is not None else ('\n' if statement.endswith('\n') else '')
+            if comment is not None:
+                suffix = ' ' + suffix
+            result = text[:start] + match[1] + value + suffix + text[end:]
+            tomllib.loads(result)
+            return result
+    if 'model' in data:
+        raise ValueError('Nonstandard root model needs manual migration')
+    prefix = text[:insertion]
+    result = prefix + ('' if not prefix or prefix.endswith('\n') else '\n') + 'model = ' + value + '\n' + text[insertion:]
+    tomllib.loads(result)
+    return result
 
 
 def merge_hooks(data, command, matcher, root, platform, legacy_commands):
@@ -220,6 +327,71 @@ Accepted tests are the contract. Never weaken an accepted test to accommodate
 an implementation defect. Changes to expected behavior require a test-writer
 revision and renewed reviewer acceptance. New regression tests are permitted.
 Record hashes of accepted tests before implementation and compare afterward.
+
+## Coordination and evidence
+
+By default, use one main orchestrator for a single change and reuse existing
+role agents for revisions and follow-up work. Assign bounded work through the
+pipeline above; add coordination layers only when the task needs them.
+
+Use compact handoffs containing expected behavior, owned paths, relevant
+repository guidance, accepted-test hashes when available, validation commands,
+and evidence paths. Include explicit task context sufficient to do the assigned
+work without reconstructing the conversation. In Codex, use bounded context;
+avoid full-history forks by default. Use a full-history fork only when needed
+for context that cannot be conveyed reliably in the handoff. Follow native
+tool and user rules when selecting context or delegating.
+
+For example, an implementation handoff can be:
+
+> Behavior: reject an expired token, accept a valid token. Own `src/tokens.py`;
+> do not edit tests. Guidance: `.docs/project-guidance.md` and this workflow.
+> Accepted tests: `test/test_tokens.py`, SHA-256 recorded in
+> `/tmp/token-change/accepted.sha256`. Validate: `python3 -m unittest
+> discover -s test`. Red evidence: `/tmp/token-change/red.log`; save green
+> evidence to `/tmp/token-change/green.log`. Report completion, blockers, or
+> material findings with evidence paths.
+
+Return only completion, blockers, and material findings to the coordinator;
+omit routine progress narration and repeated status messages. Preserve full
+evidence in files or artifacts, including commands, output, failures, skips,
+and pending cases. Compact reports are pointers, not substitutes: the
+independent reviewer must read the full evidence and inspect the final diff.
+Retain the existing PR evidence and full quality gates below.
+
+Use event-driven waits for delegated work where supported. After dispatch,
+wait for completion or a material event instead of repeatedly polling unchanged
+status or messaging agents for updates. Respect native tool wait limits and
+user communication rules; answer user status requests and report real blockers
+or material findings promptly. These exceptions do not require routine agent
+status chatter or reduce the saved evidence.
+
+## Pull request test evidence
+
+Every PR description must include relevant Ruby Cucumber or Elixir Cucumberex
+feature/scenario specifications for its changes. Identify feature paths and
+scenario names, and include readable Gherkin, scenario/spec content, or actual
+executed scenario output. Names or links alone are insufficient; a generic
+test-passed summary does not show the behavior covered.
+
+For Ruby, run `bundle exec rspec <relevant spec paths> --format documentation`
+and include the actual command, documentation output and results. Cucumber
+scenario output comes from `bundle exec cucumber --format pretty --strict`.
+For Elixir, run `mix test <relevant test paths> --trace` for focused ExUnit output
+and `MIX_ENV=test mix cucumber --format pretty --strict` for Cucumberex output.
+Use paths relevant to the included changes. Report failures, skipped and pending
+examples honestly. Never fabricate output or claim an unrun check passed. Long
+output may use expandable details blocks while keeping the result visible.
+
+Use `N/A` with an explicit reason for unrelated ecosystems or changes, and
+include the actual relevant checks instead. Mandatory tooling missing from a
+fresh generated project is a defect, not N/A. Fresh Rails and Sinatra projects
+require RSpec and Cucumber; fresh Phoenix, escript and Mix library projects
+require ExUnit and Cucumberex. Do not install an unrelated framework solely to
+produce PR evidence. Existing applications retain their explicit legacy gates
+until their acceptance tooling is adopted; report that limitation honestly.
+Focused evidence does not replace required full quality gates: retain normal
+full RSpec or `mix test` execution and record all required commands and results.
 
 ## Dead-code review
 
@@ -415,12 +587,38 @@ that hooks are trusted or running.
 
 ## Platform setup and activation
 
+### Optional project model profile
+
+An optional project-owned profile at `.docs/agent-models.json` selects native
+main and workflow role models. Its `schema_version` is `1`. The optional
+`codex` and `claude` objects each accept `model` and `roles`; role keys are
+`spec_writer`, `implementer`, `runner`, `reviewer`, and `orchestrator`.
+Each role accepts `model`, plus `model_reasoning_effort` for Codex or `effort`
+for Claude. Model identifiers must be nonblank strings; the host validates
+availability and model-specific effort support. Codex effort values are
+`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; Claude
+effort values are `low`, `medium`, `high`, `xhigh`, `max`. Main effort settings
+remain native settings rather than profile fields.
+
+For example: `{{"schema_version": 1, "codex": {{"model": "gpt-6.1-sol",
+"roles": {{"runner": {{"model": "gpt-6-luna", "model_reasoning_effort": "low"}}}}}}}}`.
+
+Preview and apply through the maintained updater. The profile is never
+generated, rewritten, or included in generated manifests. Invalid profiles
+and unsafe filesystem paths block writes. Without a profile, native main
+settings are preserved and generated roles inherit. Removing a main model
+from the profile preserves the current native main model; change that native
+setting explicitly to change the selection. Removing a role override restores
+inheritance for that field at the next update. Hooks, policy, and role
+instruction bodies are unchanged by model selection.
+
 Codex definitions are in .codex/agents and its hook registration is in
 .codex/hooks.json. Review exact new definitions through /hooks when required.
 Claude definitions are in .claude/agents and its registration is in
 .claude/settings.json. This setup adds no Claude tool allowlists, broad Edit
 denials or sandbox overrides. Existing unrelated native settings and hooks are
-preserved. No model is selected. Codex roles are workflow_spec_writer,
+preserved. No model is selected by default; the optional profile above makes
+explicit project selections. Codex roles are workflow_spec_writer,
 workflow_implementer, workflow_runner, workflow_reviewer and
 workflow_orchestrator; Claude role names use hyphens.
 
@@ -478,6 +676,7 @@ def render(root: Path, policy: dict, *, previous_claude_settings=None,
     elif not root.is_absolute():
         raise ValueError('Repository root must be absolute')
     guard.validate_policy(policy)
+    profile = model_profile(root)
     files = {}
     def existing(rel):
         path = safe_destination(root, rel)
@@ -521,6 +720,8 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
     files['.gitattributes'] = with_audit_attribute(existing('.gitattributes'))
     codex_config = existing('.codex/config.toml')
     files['.codex/config.toml'] = enable_codex_hooks(codex_config)
+    if 'model' in profile.get('codex', {}):
+        files['.codex/config.toml'] = overlay_toml_model(files['.codex/config.toml'], profile['codex']['model'])
     for platform in ('codex', 'claude'):
         prefix = '.' + platform
         files[prefix + '/hooks/workflow_guard.py'] = (BASE / 'workflow_guard.py').read_text()
@@ -532,6 +733,8 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
             command, matcher = CODEX_GUARD_COMMAND, '.*'
         config_path = prefix + ('/hooks.json' if platform == 'codex' else '/settings.json')
         config = read_json(config_path)
+        if platform == 'claude' and 'model' in profile.get(platform, {}):
+            config['model'] = profile[platform]['model']
         merge_hooks(config, command, matcher, root, platform, policy.get('legacy_commands', []))
         if (platform == 'claude' and previous_claude_settings is not None
                 and old_manifest.get('version') == '1.0.0'):
@@ -548,20 +751,35 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
         description = responsibilities[role]
         instructions = (description + ' Read .docs/agent-workflow.md and repository guidance. '
                         'Noncode edits and commands retain ordinary native permissions. '
-                        'The orchestrator coordinates delegation for this workflow.')
+                        'The orchestrator coordinates delegation for this workflow. '
+                        'Use compact handoffs with expected behavior, owned paths, relevant repository guidance, '
+                        'accepted-test hashes when available, validation commands, and evidence paths. '
+                        'Return only completion, blockers, and material findings; follow the coordination and evidence guidance in .docs/agent-workflow.md.')
+        if role in ('runner', 'reviewer'):
+            instructions += ' Preserve full evidence in files or artifacts. The independent reviewer must read the full evidence and inspect the final diff.'
+        if role == 'orchestrator':
+            instructions += ' By default, use one main orchestrator for a single change and reuse existing role agents.'
         if role == 'reviewer':
             instructions += ' Always check and report security advisories, including pre-existing findings, affected and patched versions, and exposure uncertainty; follow the security advisory review in .docs/agent-workflow.md.'
             instructions += ' Every PR must include a dead-code review; verify confirmed-unused evidence, source and test removal ownership, retained live-behavior coverage, and the PR report under .docs/agent-workflow.md#dead-code-review. Obtain explicit user approval before deleting tests; reviewer acceptance is not user approval. Review the concrete unapplied test-removal patch, preserve tests while approval is pending, and verify that only the approved patch is applied by the spec writer when permitted. Report the exact patch and blocker if hooks prevent deletion; never bypass them.'
+            instructions += ' Every PR must include relevant Ruby Cucumber or Elixir Cucumberex scenario content or executed scenario output, plus actual Ruby RSpec --format documentation or Elixir ExUnit --trace output with commands and results; verify honest failures, skipped and pending examples, reasoned N/A only for unrelated ecosystems or changes, and completion of required full quality gates under .docs/agent-workflow.md#pull-request-test-evidence. Mandatory tooling missing from a fresh generated project is a defect, not N/A. Names or links alone are insufficient acceptance evidence. Never accept fabricated output.'
         elif role == 'implementer':
             instructions += ' Apply compatible security upgrades and verify them. Obtain explicit user permission before upgrades requiring significant application changes, API rewrites, migrations, or substantial compatibility work; report unresolved advisories.'
-        files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(instructions) + '\n'
+        codex_instructions = instructions
+        if role == 'orchestrator':
+            codex_instructions += ' Use bounded context with explicit task context; avoid full-history forks by default. Use a full-history fork only when needed to convey context reliably, respecting native tool and user rules.'
+        files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(codex_instructions) + '\n'
+        for key, value in profile.get('codex', {}).get('roles', {}).get(role, {}).items():
+            files[f'.codex/agents/workflow_{role}.toml'] += key + ' = ' + json.dumps(value, ensure_ascii=False) + '\n'
         claude_role_path = f'.claude/agents/workflow-{role.replace("_", "-")}.md'
         old_role = existing(claude_role_path)
         description_yaml = json.dumps(description)
         frontmatter = old_role.split('\n---', 1)[0] if old_role.startswith('---\n') else ''
         if re.search(r"^description: '[^\n]*'\s*$", frontmatter, re.MULTILINE):
             description_yaml = "'" + description.replace("'", "''") + "'"
-        files[claude_role_path] = '---\nname: workflow-' + role.replace('_', '-') + '\ndescription: ' + description_yaml + '\n---\n\n' + instructions + '\n'
+        model_fields = ''.join(key + ': ' + json.dumps(value, ensure_ascii=False) + '\n'
+                               for key, value in profile.get('claude', {}).get('roles', {}).get(role, {}).items())
+        files[claude_role_path] = '---\nname: workflow-' + role.replace('_', '-') + '\ndescription: ' + description_yaml + '\n' + model_fields + '---\n\n' + instructions + '\n'
     hashes = {rel: hashlib.sha256(content.encode()).hexdigest() for rel, content in files.items()}
     manifest = {'version': guard.VERSION, 'sha256': hashes}
     metadata = installer_metadata if installer_metadata is not None else old_manifest.get('installer')

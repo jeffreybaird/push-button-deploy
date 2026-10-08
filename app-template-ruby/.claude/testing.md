@@ -581,6 +581,27 @@ end
 
 ## 9. CI Gates
 
+Every PR follows `.docs/agent-workflow.md#pull-request-test-evidence`. Run
+`bundle exec rspec <relevant spec paths> --format documentation` and include the
+actual command, documentation output and results for the included changes.
+Report failures, skipped and pending examples honestly; never invent output.
+Focused evidence does not replace the full required suite and other adopted
+quality gates. Record their commands and results too.
+
+Fresh Sinatra projects include RSpec and Cucumber. Run `bin/check-features`
+for the actual Cucumber scenarios using `--format pretty --strict`. Include
+feature paths and scenario names with readable Gherkin, scenario content or
+actual executed scenario output; names or links alone are insufficient. Capybara
+specs in `spec/features` remain RSpec examples, separate from Cucumber features.
+Missing mandatory tooling in a fresh scaffold is a defect, not `N/A`. Unrelated
+ecosystems or changes may use `N/A` with a reason; never invent output. Long
+output may use expandable details blocks.
+
+The deployment workflows run the full RSpec suite followed by the acceptance
+gate. Older adopted apps without `bin/check-features` retain their RSpec gate
+with an explicit legacy warning. A present but failing or nonexecutable gate
+fails CI. Existing apps require deliberate adoption; docs alone add no tooling.
+
 The generated workflow runs `bundle exec rspec`. Browser drivers, WebMock/VCR,
 RuboCop, bundler-audit, ERB lint, and separate browser CI jobs below are additions
 to configure; the starter Gemfile does not include all of them. Once adopted,

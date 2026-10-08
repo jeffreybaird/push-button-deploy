@@ -179,11 +179,15 @@ def policy_for(framework):
         source += ['bin/*', 'config.ru', 'Dockerfile', 'config/*.yml', 'config/**/*.yml']
     if framework in ('ts-cli', 'react'):
         source += ['package.json', 'package-lock.json', 'tsconfig*.json']
+    if framework in ('sinatra', 'phoenix', 'escript', 'mix'):
+        source += ['bin/check-features']
     tests = ['test/**', 'tests/**', 'spec/**', '**/*_test.py', '**/*_test.exs',
              '**/*_spec.rb', '**/*.test.ts', '**/*.spec.ts', '**/*.test.js', '**/*.spec.js',
              '**/*.test.tsx', '**/*.spec.tsx', '**/*.test.jsx', '**/*.spec.jsx']
     if framework == 'rails':
         tests += ['features/**', 'support/coverage.rb', 'script/coverage.rb']
+    if framework in ('sinatra', 'phoenix', 'escript', 'mix'):
+        tests += ['features/**']
     return {'schema_version': 2, 'source_globs': source, 'test_globs': tests}
 
 
@@ -381,6 +385,7 @@ def plan(root, args):
     metadata = workflow.release_metadata()
     provenance = {key: metadata[key] for key in ('version', 'source_commit')}
     workflow_plan = installer.render(root, policy_for(framework), existing_files=overlays, installer_metadata=provenance)
+    profile = installer.model_profile(root)
     if not old and workflow_plan['report']['previous_drift']:
         drift.extend(workflow_plan['report']['previous_drift'])
     files = {**template, **workflow_plan['files']}
@@ -403,7 +408,15 @@ def plan(root, args):
         current = read(root, rel)
         prior_hooks = old.get('owned_hooks', {})
         prior_templates = old.get('template_files', [])
+        # Root native models remain app-owned, but an explicit profile is an
+        # instruction to overlay that field even when owned projections match.
+        model_matches = True
+        platform = {'.codex/config.toml': 'codex', '.claude/settings.json': 'claude'}.get(rel)
+        if platform and 'model' in profile.get(platform, {}):
+            settings = tomllib.loads(current) if platform == 'codex' else object_json(current, rel)
+            model_matches = settings.get('model') == profile[platform]['model']
         if ((root / rel).exists() and owned_projection(rel, current, owned_hooks, template_paths) == projection
+                and model_matches
                 and owned_projection(rel, current, prior_hooks, prior_templates)
                 == owned_projection(rel, text, prior_hooks, prior_templates)):
             files[rel] = current

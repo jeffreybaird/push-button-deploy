@@ -13,6 +13,36 @@ ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORKS = ('phoenix', 'sinatra', 'rails', 'react', 'zola')
 TEMPLATES = dict(zip(FRAMEWORKS, ('app-template', 'app-template-ruby', 'app-template-rails', 'app-template-react', 'app-template-zola')))
 
+REVIEWER_PR_EVIDENCE = (
+    ' Every PR must include relevant Ruby Cucumber or Elixir Cucumberex scenario content or executed '
+    'scenario output, plus actual Ruby RSpec --format documentation or Elixir ExUnit --trace output '
+    'with commands and results; verify honest failures, skipped and pending examples, reasoned N/A '
+    'only for unrelated ecosystems or changes, and completion of required full quality gates under '
+    '.docs/agent-workflow.md#pull-request-test-evidence. Mandatory tooling missing from a fresh '
+    'generated project is a defect, not N/A. Names or links alone are insufficient acceptance '
+    'evidence. Never accept fabricated output.'
+)
+
+# Intentional migration additions, independent of the production renderer.
+COMPACT_COORDINATION = (
+    ' Use compact handoffs with expected behavior, owned paths, relevant repository guidance, '
+    'accepted-test hashes when available, validation commands, and evidence paths. '
+    'Return only completion, blockers, and material findings; follow the coordination and '
+    'evidence guidance in .docs/agent-workflow.md.'
+)
+FULL_EVIDENCE = (
+    ' Preserve full evidence in files or artifacts. The independent reviewer must read '
+    'the full evidence and inspect the final diff.'
+)
+ORCHESTRATOR_COORDINATION = (
+    ' By default, use one main orchestrator for a single change and reuse existing role agents.'
+)
+CODEX_BOUNDED_CONTEXT = (
+    ' Use bounded context with explicit task context; avoid full-history forks by default. '
+    'Use a full-history fork only when needed to convey context reliably, respecting native '
+    'tool and user rules.'
+)
+
 
 class CanonicalGuides(unittest.TestCase):
     def setUp(self):
@@ -112,7 +142,8 @@ class CanonicalGuides(unittest.TestCase):
                         current_manifest = json.loads((app / name).read_text())
                         self.assertEqual(set(old_manifest), set(current_manifest))
                         self.assertEqual(old_manifest['version'], current_manifest['version'])
-                        self.assertEqual(json.loads((ROOT / 'scripts/agent-workflow/release.json').read_text())['installer_version'], current_manifest['installer']['version'])
+                        self.assertEqual('0.4.0', old_manifest['installer']['version'])
+                        self.assertEqual('0.4.2', current_manifest['installer']['version'])
                         self.assertRegex(current_manifest['installer']['source_commit'], r'^[0-9a-f]{40,64}$')
                         self.assertEqual(set(old_manifest['sha256']) - {'.claude/testing.md'},
                                          set(current_manifest['sha256']))
@@ -121,6 +152,28 @@ class CanonicalGuides(unittest.TestCase):
                         continue
                     if name.startswith(('.claude/agents/', '.claude/hooks/', '.codex/')) or name == '.claude/settings.json':
                         expected = contents
+                        if framework in ('sinatra', 'phoenix') and name in ('.codex/hooks/policy.json', '.claude/hooks/policy.json'):
+                            expected_policy = json.loads(contents)
+                            expected_policy['test_globs'].append('features/**')
+                            expected_policy['source_globs'].append('bin/check-features')
+                            self.assertEqual(expected_policy, json.loads((app / name).read_text()), name)
+                            continue
+                        if name in ('.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
+                            expected = expected.replace(b'never bypass them.',
+                                                        b'never bypass them.' + REVIEWER_PR_EVIDENCE.encode())
+                        if name.startswith(('.codex/agents/workflow_', '.claude/agents/workflow-')):
+                            anchor = b'The orchestrator coordinates delegation for this workflow.'
+                            self.assertEqual(1, expected.count(anchor), name)
+                            addition = COMPACT_COORDINATION
+                            if name in ('.codex/agents/workflow_runner.toml', '.claude/agents/workflow-runner.md',
+                                        '.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
+                                addition += FULL_EVIDENCE
+                            if name in ('.codex/agents/workflow_orchestrator.toml', '.claude/agents/workflow-orchestrator.md'):
+                                addition += ORCHESTRATOR_COORDINATION
+                            expected = expected.replace(anchor, anchor + addition.encode())
+                            if name == '.codex/agents/workflow_orchestrator.toml':
+                                self.assertTrue(expected.endswith(b'"\n'), name)
+                                expected = expected[:-2] + CODEX_BOUNDED_CONTEXT.encode() + b'"\n'
                         if name.endswith(".md"):
                             expected = expected.replace(b"`.claude/` detail docs", b"`.docs/` detail docs")
                             for module in [p for directory in ('.claude', '.docs') for p in (ROOT / TEMPLATES[framework] / directory).glob('*.md')]:

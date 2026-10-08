@@ -86,6 +86,7 @@ end
 
 group :test do
   gem "capybara", "~> 3.40"
+  gem "cucumber", "~> 11.1", require: false
 end
 RUBY
 
@@ -378,7 +379,9 @@ CSS
 
 ENV["RACK_ENV"] = "test"
 # Isolated, disposable test DB — recreated from migrations before every run.
-ENV["DATABASE_PATH"] ||= File.expand_path("../db/test.sqlite3", __dir__)
+ENV.delete("DATABASE_URL")
+ENV.delete("PRIMARY_DATABASE_URL")
+ENV["DATABASE_PATH"] = File.expand_path("../db/test.sqlite3", __dir__)
 File.delete(ENV["DATABASE_PATH"]) if File.exist?(ENV["DATABASE_PATH"])
 
 # Migrate BEFORE the app loads: a Sequel::Model introspects its table at
@@ -468,6 +471,84 @@ RSpec.describe "Notes", type: :request do
 end
 RUBY
 
+  mkdir -p "$APP_DIR/features"
+  cat > "$APP_DIR/features/notes.feature" <<'ACCEPTANCE'
+Feature: Notes
+  Scenario: Create and display a note
+    When I submit a note containing "A useful reminder"
+    Then the note is saved and displayed
+
+  Scenario: Reject an empty note
+    When I submit an empty note
+    Then the request is rejected without saving a note
+ACCEPTANCE
+  mkdir -p "$APP_DIR/features/step_definitions"
+  cat > "$APP_DIR/features/step_definitions/notes_steps.rb" <<'ACCEPTANCE'
+# frozen_string_literal: true
+
+When("I submit a note containing {string}") do |body|
+  @submitted_body = body
+  post "/notes", "body" => body
+end
+
+Then("the note is saved and displayed") do
+  expect(last_response.status).to eq(302)
+  follow_redirect!
+  expect(last_response.status).to eq(200)
+  expect(last_response.body).to include(@submitted_body)
+  expect(Note.select_map(:body)).to eq([@submitted_body])
+end
+
+When("I submit an empty note") do
+  post "/notes", "body" => "   "
+end
+
+Then("the request is rejected without saving a note") do
+  expect(last_response.status).to eq(422)
+  expect(Note.count).to eq(0)
+end
+ACCEPTANCE
+  mkdir -p "$APP_DIR/features/support"
+  cat > "$APP_DIR/features/support/env.rb" <<'ACCEPTANCE'
+# frozen_string_literal: true
+
+ENV["RACK_ENV"] = "test"
+ENV.delete("DATABASE_URL")
+ENV.delete("PRIMARY_DATABASE_URL")
+ENV["DATABASE_PATH"] = File.expand_path("../../db/cucumber.sqlite3", __dir__)
+
+require_relative "../../config/database"
+Sequel.extension :migration
+Sequel::Migrator.run(DB, File.expand_path("../../db/migrate", __dir__))
+require_relative "../../config/environment"
+require "rack/test"
+require "rspec/expectations"
+
+module AcceptanceRequests
+  include Rack::Test::Methods
+  include RSpec::Matchers
+
+  def app
+    App
+  end
+end
+
+World(AcceptanceRequests)
+Around do |_scenario, block|
+  DB.transaction(rollback: :always, savepoint: true) { block.call }
+end
+ACCEPTANCE
+  mkdir -p "$APP_DIR/bin"
+  cat > "$APP_DIR/bin/check-features" <<'ACCEPTANCE'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export RACK_ENV=test
+unset DATABASE_PATH DATABASE_URL PRIMARY_DATABASE_URL
+exec bundle exec cucumber --format pretty --strict
+ACCEPTANCE
+  chmod +x "$APP_DIR/bin/check-features"
+
   cat > "$APP_DIR/.env.example" <<'ENVX'
 # Copy to .env for local dev (dotenv loads it). NEVER commit real secrets.
 RACK_ENV=development
@@ -499,6 +580,7 @@ bundle install
 bundle exec rake db:migrate        # create db/development.sqlite3
 bundle exec puma -C config/puma.rb  # http://localhost:4000
 bundle exec rspec                   # run the suite
+bin/check-features                  # strict Cucumber acceptance scenarios
 ```
 
 Layout:

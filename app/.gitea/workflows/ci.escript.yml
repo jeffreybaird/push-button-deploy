@@ -72,6 +72,14 @@ jobs:
       - name: Run tests
         run: mix test
 
+      - name: Run acceptance scenarios
+        run: |
+          if [ -f bin/check-features ]; then
+            ./bin/check-features
+          else
+            echo "Legacy project: acceptance tooling not installed; existing unit gate retained."
+          fi
+
   build:
     needs: test
     runs-on: ubuntu-latest

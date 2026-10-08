@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "codex": {
+    "model": "gpt-6.1-sol",
+    "roles": {
+      "reviewer": {
+        "model": "gpt-6-astra"
+      },
+      "runner": {
+        "model": "gpt-6-luna",
+        "model_reasoning_effort": "low"
+      }
+    }
+  },
+  "claude": {
+    "model": "claude-opus-5-5",
+    "roles": {
+      "reviewer": {
+        "model": "claude-fable-5-1"
+      },
+      "runner": {
+        "model": "claude-sonnet-5-5",
+        "effort": "low"
+      }
+    }
+  }
+}
