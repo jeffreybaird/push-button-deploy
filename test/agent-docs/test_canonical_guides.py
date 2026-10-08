@@ -23,6 +23,26 @@ REVIEWER_PR_EVIDENCE = (
     'evidence. Never accept fabricated output.'
 )
 
+# Intentional migration additions, independent of the production renderer.
+COMPACT_COORDINATION = (
+    ' Use compact handoffs with expected behavior, owned paths, relevant repository guidance, '
+    'accepted-test hashes when available, validation commands, and evidence paths. '
+    'Return only completion, blockers, and material findings; follow the coordination and '
+    'evidence guidance in .docs/agent-workflow.md.'
+)
+FULL_EVIDENCE = (
+    ' Preserve full evidence in files or artifacts. The independent reviewer must read '
+    'the full evidence and inspect the final diff.'
+)
+ORCHESTRATOR_COORDINATION = (
+    ' By default, use one main orchestrator for a single change and reuse existing role agents.'
+)
+CODEX_BOUNDED_CONTEXT = (
+    ' Use bounded context with explicit task context; avoid full-history forks by default. '
+    'Use a full-history fork only when needed to convey context reliably, respecting native '
+    'tool and user rules.'
+)
+
 
 class CanonicalGuides(unittest.TestCase):
     def setUp(self):
@@ -122,7 +142,8 @@ class CanonicalGuides(unittest.TestCase):
                         current_manifest = json.loads((app / name).read_text())
                         self.assertEqual(set(old_manifest), set(current_manifest))
                         self.assertEqual(old_manifest['version'], current_manifest['version'])
-                        self.assertEqual(old_manifest['installer']['version'], current_manifest['installer']['version'])
+                        self.assertEqual('0.4.0', old_manifest['installer']['version'])
+                        self.assertEqual('0.4.1', current_manifest['installer']['version'])
                         self.assertRegex(current_manifest['installer']['source_commit'], r'^[0-9a-f]{40,64}$')
                         self.assertEqual(set(old_manifest['sha256']) - {'.claude/testing.md'},
                                          set(current_manifest['sha256']))
@@ -140,6 +161,19 @@ class CanonicalGuides(unittest.TestCase):
                         if name in ('.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
                             expected = expected.replace(b'never bypass them.',
                                                         b'never bypass them.' + REVIEWER_PR_EVIDENCE.encode())
+                        if name.startswith(('.codex/agents/workflow_', '.claude/agents/workflow-')):
+                            anchor = b'The orchestrator coordinates delegation for this workflow.'
+                            self.assertEqual(1, expected.count(anchor), name)
+                            addition = COMPACT_COORDINATION
+                            if name in ('.codex/agents/workflow_runner.toml', '.claude/agents/workflow-runner.md',
+                                        '.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
+                                addition += FULL_EVIDENCE
+                            if name in ('.codex/agents/workflow_orchestrator.toml', '.claude/agents/workflow-orchestrator.md'):
+                                addition += ORCHESTRATOR_COORDINATION
+                            expected = expected.replace(anchor, anchor + addition.encode())
+                            if name == '.codex/agents/workflow_orchestrator.toml':
+                                self.assertTrue(expected.endswith(b'"\n'), name)
+                                expected = expected[:-2] + CODEX_BOUNDED_CONTEXT.encode() + b'"\n'
                         if name.endswith(".md"):
                             expected = expected.replace(b"`.claude/` detail docs", b"`.docs/` detail docs")
                             for module in (ROOT / TEMPLATES[framework] / ".claude").glob("*.md"):

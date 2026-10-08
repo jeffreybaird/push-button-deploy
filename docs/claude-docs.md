@@ -11,6 +11,12 @@ Applications keep committed, self-contained copies. They do not need this tool
 to run their agents; use it when installing or updating shared guidance.
 Python 3.11 or newer is required for generation and maintenance.
 
+Generated coordination guidance defaults to one main orchestrator per change,
+reusing role agents with compact handoffs and completion, blocker, or material
+finding reports. Codex uses bounded context with explicit task context by
+default. Event-driven waits limit repeated status chatter; full saved evidence,
+independent review, ownership, and all quality gates remain required.
+
 The shared workflow includes Elixir doctest requirements for Phoenix, escript,
 and Mix library projects: representative happy paths, matching predicate inputs,
 stable time-dependent examples, and verified ExUnit registration and execution
