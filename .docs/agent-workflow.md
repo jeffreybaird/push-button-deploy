@@ -338,12 +338,38 @@ that hooks are trusted or running.
 
 ## Platform setup and activation
 
+### Optional project model profile
+
+An optional project-owned profile at `.docs/agent-models.json` selects native
+main and workflow role models. Its `schema_version` is `1`. The optional
+`codex` and `claude` objects each accept `model` and `roles`; role keys are
+`spec_writer`, `implementer`, `runner`, `reviewer`, and `orchestrator`.
+Each role accepts `model`, plus `model_reasoning_effort` for Codex or `effort`
+for Claude. Model identifiers must be nonblank strings; the host validates
+availability and model-specific effort support. Codex effort values are
+`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; Claude
+effort values are `low`, `medium`, `high`, `xhigh`, `max`. Main effort settings
+remain native settings rather than profile fields.
+
+For example: `{"schema_version": 1, "codex": {"model": "gpt-6.1-sol",
+"roles": {"runner": {"model": "gpt-6-luna", "model_reasoning_effort": "low"}}}}`.
+
+Preview and apply through the maintained updater. The profile is never
+generated, rewritten, or included in generated manifests. Invalid profiles
+and unsafe filesystem paths block writes. Without a profile, native main
+settings are preserved and generated roles inherit. Removing a main model
+from the profile preserves the current native main model; change that native
+setting explicitly to change the selection. Removing a role override restores
+inheritance for that field at the next update. Hooks, policy, and role
+instruction bodies are unchanged by model selection.
+
 Codex definitions are in .codex/agents and its hook registration is in
 .codex/hooks.json. Review exact new definitions through /hooks when required.
 Claude definitions are in .claude/agents and its registration is in
 .claude/settings.json. This setup adds no Claude tool allowlists, broad Edit
 denials or sandbox overrides. Existing unrelated native settings and hooks are
-preserved. No model is selected. Codex roles are workflow_spec_writer,
+preserved. No model is selected by default; the optional profile above makes
+explicit project selections. Codex roles are workflow_spec_writer,
 workflow_implementer, workflow_runner, workflow_reviewer and
 workflow_orchestrator; Claude role names use hyphens.
 

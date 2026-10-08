@@ -35,6 +35,11 @@ AUDIT_ATTRIBUTE = '.agent-audit/*.jsonl merge=union'
 BEGIN = '<!-- BEGIN MANAGED AGENT WORKFLOW -->'
 END = '<!-- END MANAGED AGENT WORKFLOW -->'
 MANIFEST_PATH = '.codex/hooks/workflow-manifest.json'
+MODEL_PROFILE_PATH = '.docs/agent-models.json'
+MODEL_EFFORTS = {
+    'codex': ('model_reasoning_effort', {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}),
+    'claude': ('effort', {'low', 'medium', 'high', 'xhigh', 'max'}),
+}
 OPTIONAL_GUIDES = ('.claude/testing.md', '.codex/README.md', '.codex/testing.md',
                    'docs/codex-agents.md', 'docs/agent-guardrails.md')
 MANAGED_PATHS = {'AGENTS.md', 'CLAUDE.md', '.docs/agent-workflow.md', '.gitattributes',
@@ -76,6 +81,108 @@ def safe_destination(root, rel):
         if candidate != path and not stat.S_ISDIR(info.st_mode):
             raise ValueError('Destination parent is not a directory')
     return path
+
+
+def model_profile(root):
+    """Read the optional project-owned profile; reject invalid input before writes."""
+    path = safe_destination(root, MODEL_PROFILE_PATH)
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    if (not isinstance(data, dict) or type(data.get('schema_version')) is not int
+            or data['schema_version'] != 1 or set(data) - {'schema_version', 'codex', 'claude'}):
+        raise ValueError('Invalid model profile schema')
+    for platform in ('codex', 'claude'):
+        if platform not in data:
+            continue
+        settings = data[platform]
+        if not isinstance(settings, dict) or set(settings) - {'model', 'roles'}:
+            raise ValueError('Invalid model profile platform: ' + platform)
+        roles = settings.get('roles', {})
+        if not isinstance(roles, dict) or set(roles) - set(guard.ROLES):
+            raise ValueError('Invalid model profile roles: ' + platform)
+        effort, allowed_efforts = MODEL_EFFORTS[platform]
+        for fields in [settings, *roles.values()]:
+            keys = {'model', 'roles'} if fields is settings else {'model', effort}
+            if not isinstance(fields, dict) or set(fields) - keys:
+                raise ValueError('Invalid model profile fields: ' + platform)
+            if 'model' in fields and (not isinstance(fields['model'], str) or not fields['model'].strip()):
+                raise ValueError('Model must be a nonblank string: ' + platform)
+            if effort in fields and (not isinstance(fields[effort], str) or fields[effort] not in allowed_efforts):
+                raise ValueError('Invalid model effort: ' + platform)
+    return data
+
+
+def toml_statements(text):
+    """Yield statement spans and comment positions without rewriting native TOML."""
+    start = index = depth = 0
+    quote = None
+    triple = False
+    comment = None
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if quote == '"' and char == '\\':
+                index += 2
+                continue
+            delimiter = quote * (3 if triple else 1)
+            if text.startswith(delimiter, index):
+                index += len(delimiter)
+                if triple:
+                    # TOML permits one or two literal quotes immediately before
+                    # a multiline string's closing delimiter.
+                    while index < len(text) and text[index] == quote:
+                        index += 1
+                quote = None
+                continue
+        elif char in ('"', "'"):
+            quote = char
+            triple = text.startswith(char * 3, index)
+            index += 3 if triple else 1
+            continue
+        elif char == '#':
+            comment = index
+            newline = text.find('\n', index)
+            index = len(text) if newline == -1 else newline
+            continue
+        elif char in '[{':
+            depth += 1
+        elif char in ']}':
+            depth -= 1
+        elif char == '\n' and depth == 0:
+            yield start, index + 1, comment
+            start, comment = index + 1, None
+        index += 1
+    if start < len(text):
+        yield start, len(text), comment
+
+
+def overlay_toml_model(text, model):
+    """Set only the root model scalar, retaining comments and all other bytes."""
+    data = tomllib.loads(text)
+    if data.get('model') == model:
+        return text
+    value = json.dumps(model, ensure_ascii=False)
+    insertion = len(text)
+    for start, end, comment in toml_statements(text):
+        statement = text[start:end]
+        if statement.lstrip().startswith('['):
+            insertion = start
+            break
+        match = re.match(r'''(\s*(?:model|"model"|'model')\s*=\s*)''', statement)
+        if match:
+            suffix = text[comment:end] if comment is not None else ('\n' if statement.endswith('\n') else '')
+            if comment is not None:
+                suffix = ' ' + suffix
+            result = text[:start] + match[1] + value + suffix + text[end:]
+            tomllib.loads(result)
+            return result
+    if 'model' in data:
+        raise ValueError('Nonstandard root model needs manual migration')
+    prefix = text[:insertion]
+    result = prefix + ('' if not prefix or prefix.endswith('\n') else '\n') + 'model = ' + value + '\n' + text[insertion:]
+    tomllib.loads(result)
+    return result
 
 
 def merge_hooks(data, command, matcher, root, platform, legacy_commands):
@@ -480,12 +587,38 @@ that hooks are trusted or running.
 
 ## Platform setup and activation
 
+### Optional project model profile
+
+An optional project-owned profile at `.docs/agent-models.json` selects native
+main and workflow role models. Its `schema_version` is `1`. The optional
+`codex` and `claude` objects each accept `model` and `roles`; role keys are
+`spec_writer`, `implementer`, `runner`, `reviewer`, and `orchestrator`.
+Each role accepts `model`, plus `model_reasoning_effort` for Codex or `effort`
+for Claude. Model identifiers must be nonblank strings; the host validates
+availability and model-specific effort support. Codex effort values are
+`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`; Claude
+effort values are `low`, `medium`, `high`, `xhigh`, `max`. Main effort settings
+remain native settings rather than profile fields.
+
+For example: `{{"schema_version": 1, "codex": {{"model": "gpt-6.1-sol",
+"roles": {{"runner": {{"model": "gpt-6-luna", "model_reasoning_effort": "low"}}}}}}}}`.
+
+Preview and apply through the maintained updater. The profile is never
+generated, rewritten, or included in generated manifests. Invalid profiles
+and unsafe filesystem paths block writes. Without a profile, native main
+settings are preserved and generated roles inherit. Removing a main model
+from the profile preserves the current native main model; change that native
+setting explicitly to change the selection. Removing a role override restores
+inheritance for that field at the next update. Hooks, policy, and role
+instruction bodies are unchanged by model selection.
+
 Codex definitions are in .codex/agents and its hook registration is in
 .codex/hooks.json. Review exact new definitions through /hooks when required.
 Claude definitions are in .claude/agents and its registration is in
 .claude/settings.json. This setup adds no Claude tool allowlists, broad Edit
 denials or sandbox overrides. Existing unrelated native settings and hooks are
-preserved. No model is selected. Codex roles are workflow_spec_writer,
+preserved. No model is selected by default; the optional profile above makes
+explicit project selections. Codex roles are workflow_spec_writer,
 workflow_implementer, workflow_runner, workflow_reviewer and
 workflow_orchestrator; Claude role names use hyphens.
 
@@ -543,6 +676,7 @@ def render(root: Path, policy: dict, *, previous_claude_settings=None,
     elif not root.is_absolute():
         raise ValueError('Repository root must be absolute')
     guard.validate_policy(policy)
+    profile = model_profile(root)
     files = {}
     def existing(rel):
         path = safe_destination(root, rel)
@@ -586,6 +720,8 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
     files['.gitattributes'] = with_audit_attribute(existing('.gitattributes'))
     codex_config = existing('.codex/config.toml')
     files['.codex/config.toml'] = enable_codex_hooks(codex_config)
+    if 'model' in profile.get('codex', {}):
+        files['.codex/config.toml'] = overlay_toml_model(files['.codex/config.toml'], profile['codex']['model'])
     for platform in ('codex', 'claude'):
         prefix = '.' + platform
         files[prefix + '/hooks/workflow_guard.py'] = (BASE / 'workflow_guard.py').read_text()
@@ -597,6 +733,8 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
             command, matcher = CODEX_GUARD_COMMAND, '.*'
         config_path = prefix + ('/hooks.json' if platform == 'codex' else '/settings.json')
         config = read_json(config_path)
+        if platform == 'claude' and 'model' in profile.get(platform, {}):
+            config['model'] = profile[platform]['model']
         merge_hooks(config, command, matcher, root, platform, policy.get('legacy_commands', []))
         if (platform == 'claude' and previous_claude_settings is not None
                 and old_manifest.get('version') == '1.0.0'):
@@ -631,13 +769,17 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
         if role == 'orchestrator':
             codex_instructions += ' Use bounded context with explicit task context; avoid full-history forks by default. Use a full-history fork only when needed to convey context reliably, respecting native tool and user rules.'
         files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(codex_instructions) + '\n'
+        for key, value in profile.get('codex', {}).get('roles', {}).get(role, {}).items():
+            files[f'.codex/agents/workflow_{role}.toml'] += key + ' = ' + json.dumps(value, ensure_ascii=False) + '\n'
         claude_role_path = f'.claude/agents/workflow-{role.replace("_", "-")}.md'
         old_role = existing(claude_role_path)
         description_yaml = json.dumps(description)
         frontmatter = old_role.split('\n---', 1)[0] if old_role.startswith('---\n') else ''
         if re.search(r"^description: '[^\n]*'\s*$", frontmatter, re.MULTILINE):
             description_yaml = "'" + description.replace("'", "''") + "'"
-        files[claude_role_path] = '---\nname: workflow-' + role.replace('_', '-') + '\ndescription: ' + description_yaml + '\n---\n\n' + instructions + '\n'
+        model_fields = ''.join(key + ': ' + json.dumps(value, ensure_ascii=False) + '\n'
+                               for key, value in profile.get('claude', {}).get('roles', {}).get(role, {}).items())
+        files[claude_role_path] = '---\nname: workflow-' + role.replace('_', '-') + '\ndescription: ' + description_yaml + '\n' + model_fields + '---\n\n' + instructions + '\n'
     hashes = {rel: hashlib.sha256(content.encode()).hexdigest() for rel, content in files.items()}
     manifest = {'version': guard.VERSION, 'sha256': hashes}
     metadata = installer_metadata if installer_metadata is not None else old_manifest.get('installer')

@@ -17,6 +17,36 @@ finding reports. Codex uses bounded context with explicit task context by
 default. Event-driven waits limit repeated status chatter; full saved evidence,
 independent review, ownership, and all quality gates remain required.
 
+Projects may keep an optional `.docs/agent-models.json` with `schema_version: 1`
+and `codex`/`claude` objects. Each accepts a main `model` and a `roles` object
+keyed by `spec_writer`, `implementer`, `runner`, `reviewer`, or `orchestrator`.
+Role settings accept `model` and native `model_reasoning_effort` (Codex) or
+`effort` (Claude). No model is selected by default. The project owns this file;
+the updater reads and validates it without changing its bytes or recording it
+in generated manifests. Native hosts determine model availability.
+
+For example:
+
+```json
+{
+  "schema_version": 1,
+  "codex": {
+    "model": "gpt-6.1-sol",
+    "roles": {
+      "reviewer": {"model": "gpt-6-astra"},
+      "runner": {"model": "gpt-6-luna", "model_reasoning_effort": "low"}
+    }
+  }
+}
+```
+
+Preview with `diff`, then apply with `update` (or registered workflow `apply`).
+Omitted platforms and main models preserve current native settings. Removing a
+main model keeps the current native main selection; change that native setting
+explicitly if needed. Removing a role override restores inheritance on update.
+See `.docs/agent-workflow.md` in the app for supported effort values and safety
+checks. Model selection leaves hook trust, policy, and role instructions intact.
+
 The shared workflow includes Elixir doctest requirements for Phoenix, escript,
 and Mix library projects: representative happy paths, matching predicate inputs,
 stable time-dependent examples, and verified ExUnit registration and execution

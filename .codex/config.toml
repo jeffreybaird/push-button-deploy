@@ -1,5 +1,6 @@
 
 
+model = "gpt-6.1-sol"
 [features]
 hooks = true
 
