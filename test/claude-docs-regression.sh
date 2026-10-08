@@ -38,7 +38,7 @@ printf 'my_app legacy module\n' > "$APP/.claude/legacy.md"
 cp "$APP/.claude/legacy.md" "$WORK/legacy-module"
 cd_inject "$TEMPLATE" "$APP" CoolApp cool_app
 grep -q CoolApp "$APP/CLAUDE.md"
-grep -q '`.claude/core.md`' "$APP/CLAUDE.md"
+grep -q '`.docs/core.md`' "$APP/CLAUDE.md"
 cmp "$WORK/legacy-module" "$APP/.claude/legacy.md"
 cmp "$WORK/custom.before" "$APP/doc/custom.md"
 cmp "$WORK/agent.before" "$APP/doc/agents/custom.md"
@@ -48,15 +48,17 @@ cd_inject "$TEMPLATE" "$APP" CoolApp cool_app
 diff -r "$WORK/first" "$APP"
 
 # Skipping on a rerun preserves existing content, even former generated files.
-printf 'MyApp edited optional\n' > "$APP/doc/optional.md"
+printf 'MyApp edited optional\n' > "$APP/.docs/optional.md"
 printf 'MyApp edited agent\n' > "$APP/doc/agents/reviewer.md"
 printf '{"custom":true}\n' > "$APP/.claude/settings.json"
 printf '# my_app custom setup\n' > "$APP/doc/hooks/cloud-setup.sh"
 cp -R "$APP/doc" "$WORK/skipped"
+cp -R "$APP/.docs" "$WORK/skipped-shared"
 cp "$APP/.claude/settings.json" "$WORK/skipped-settings"
 CD_SKIP_MODULES=optional.md CD_SKIP_AGENTS=reviewer.md CD_NO_SETUP=1 \
   cd_inject "$TEMPLATE" "$APP" CoolApp cool_app
 diff -r "$WORK/skipped" "$APP/doc"
+diff -r "$WORK/skipped-shared" "$APP/.docs"
 cmp "$WORK/skipped-settings" "$APP/.claude/settings.json"
 assert_not grep -q '^-.*optional.md' "$APP/AGENTS.md"
 assert_not grep -q '^-.*optional.md' "$APP/CLAUDE.md"
@@ -78,7 +80,7 @@ assert_not bash -c '. "$1/scripts/claude-docs.sh"; CD_HOOK=missing; cd_inject "$
 diff -r "$WORK/before-error" "$APP"
 
 # Links at a selected file or a docs directory must never redirect writes.
-for target in CLAUDE.md AGENTS.md doc/core.md doc/agents doc/hooks doc .claude .claude/agents; do
+for target in CLAUDE.md AGENTS.md .docs/core.md doc/agents doc/hooks doc .docs .claude .claude/agents; do
   dest="$WORK/link-case"
   rm -rf "$dest"
   cp -R "$APP" "$dest"
@@ -94,7 +96,7 @@ cd_prompt_selection "$TEMPLATE"
 [ -z "$CD_HOOK" ]
 # The public command still resolves and injects a framework without a terminal.
 bash "$ROOT/claude-docs.sh" --all --framework zola "$WORK/travel_notes" >/dev/null
-[ -f "$WORK/travel_notes/doc/content.md" ]
+[ -f "$WORK/travel_notes/.docs/content.md" ]
 grep -q 'Travel Notes' "$WORK/travel_notes/AGENTS.md"
 # Real framework settings must invoke the relocated executable, including
 # paths with spaces. Substitute a harmless script rather than running setup.

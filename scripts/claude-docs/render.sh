@@ -2,14 +2,28 @@
 
 cd_render_file() { # source, destination, module token, app token, module value, app value
   local src="$1" dest="$2"
-  local layout="${7:-claude}"
+  local layout="${7:-claude}" tdir="$8" module modules=""
   mkdir -p "$(dirname "$dest")" || return
   cp "$src" "$dest" || return
   # Translate template references before inserting application-specific names.
-  # Settings stay in the tool's discovery location; the executable lives in doc/.
+  # Shared Markdown links change; native configuration and executable paths do not.
+  case "$dest" in
+    *.md)
+      for module in "$tdir"/.claude/*.md; do
+        [ -f "$module" ] || continue
+        modules="${modules}${module##*/}
+"
+      done
+      GUIDE_NAMES="$modules" perl -pi -e '
+        BEGIN { $names = join "|", map { quotemeta($_) } grep { length } split /\n/, $ENV{GUIDE_NAMES}; }
+        s{(?:\.claude|doc)/($names)}{.docs/$1}g if length $names;
+        s{Detail patterns live in `\.claude/`\.}{Detail patterns live in `.docs/`.}g;
+        s{`\.claude/` detail docs}{`.docs/` detail docs}g;
+      ' "$dest" || return ;;
+  esac
   case "$layout:$dest" in
     agents:*.md)
-      perl -pi -e 's/CLAUDE\.md/AGENTS.md/g; s/\.claude\//doc\//g; s/Claude Code reads this every session\./Project guidance for coding agents./g;' "$dest" || return ;;
+      perl -pi -e 's/CLAUDE\.md/AGENTS.md/g; s/Claude Code reads this every session\./Project guidance for coding agents./g;' "$dest" || return ;;
     *:*/settings.json)
       perl -pi -e 's{\.claude/cloud-setup\.sh}{doc/hooks/cloud-setup.sh}g;' "$dest" || return ;;
   esac

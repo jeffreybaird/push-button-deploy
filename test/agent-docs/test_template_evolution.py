@@ -64,7 +64,7 @@ class TemplateEvolution(unittest.TestCase):
         self.cli('diff', expected=1)
         self.assertEqual(before, self.snapshot())
         self.cli('update')
-        for path in ('doc/payment-integration.md', '.claude/payment-integration.md'):
+        for path in ('.docs/payment-integration.md', '.claude/payment-integration.md'):
             self.assertFalse((self.app / path).exists(), path)
         self.assert_local_guidance()
         after = self.snapshot()
@@ -73,7 +73,7 @@ class TemplateEvolution(unittest.TestCase):
 
     def test_removed_bundle_module_with_local_edits_blocks_all_writes(self):
         self.remove_shared_module()
-        path = self.app / 'doc/payment-integration.md'
+        path = self.app / '.docs/payment-integration.md'
         path.write_text(path.read_text() + '\nPreserve local edit until explicit reconciliation.\n')
         before = self.snapshot()
         self.assertEqual('drift', self.cli('check', expected=1)['status'])
@@ -88,17 +88,17 @@ class TemplateEvolution(unittest.TestCase):
         custom = {'matcher': 'Read', 'hooks': [{'type': 'command', 'command': 'echo app-specific'}]}
         settings['hooks']['PreToolUse'].append(custom)
         settings_path.write_text(json.dumps(settings))
-        self.assertTrue((self.app / '.claude/testing.md').is_file())
+        self.assertTrue((self.app / '.docs/testing.md').is_file())
         self.cli('configure', '--framework', 'zola')
-        for path in ('.claude/testing.md', 'doc/testing.md', '.claude/payment-integration.md',
-                     'doc/payment-integration.md', '.claude/cloud-setup.sh', 'doc/hooks/cloud-setup.sh'):
+        for path in ('.claude/testing.md', '.docs/testing.md', '.claude/payment-integration.md',
+                     '.docs/payment-integration.md', '.claude/cloud-setup.sh', 'doc/hooks/cloud-setup.sh'):
             self.assertFalse((self.app / path).exists(), path)
         settings = json.loads(settings_path.read_text())
         self.assertEqual({'CUSTOM': 'keep'}, settings['env'])
         self.assertIn(custom, settings['hooks']['PreToolUse'])
         self.assertTrue(settings['hooks']['PreToolUse'])
         self.assertFalse(settings['hooks'].get('SessionStart'))
-        self.assertTrue((self.app / 'doc/content.md').is_file())
+        self.assertTrue((self.app / '.docs/content.md').is_file())
         self.assert_local_guidance()
         self.assertEqual('current', self.cli('check')['status'])
         after = self.snapshot()
@@ -112,13 +112,13 @@ class TemplateEvolution(unittest.TestCase):
         self.assertEqual('update', self.cli('check', expected=1)['status'])
         self.assertEqual(before, self.snapshot())
         self.cli('update')
-        for path in ('.claude/testing.md', 'doc/testing.md'):
+        for path in ('.docs/testing.md',):
             self.assertIn('Shared testing guidance update.', (self.app / path).read_text())
         self.assert_local_guidance()
         self.assertEqual('current', self.cli('check')['status'])
 
     def test_local_testing_guidance_edit_outside_workflow_block_is_managed_drift(self):
-        path = self.app / '.claude/testing.md'
+        path = self.app / '.docs/testing.md'
         path.write_text('Local change to template guidance outside workflow block.\n' + path.read_text())
         before = self.snapshot()
         self.assertEqual('drift', self.cli('check', expected=1)['status'])

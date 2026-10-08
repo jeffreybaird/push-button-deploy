@@ -103,8 +103,8 @@ templates here if the change should propagate to generated applications.
 
 The installation includes:
 
-- `AGENTS.md` and `CLAUDE.md` entry points, plus framework guidance under `doc/`
-  and `.claude/` where templates provide it.
+- `AGENTS.md` and `CLAUDE.md` entry points, both referencing one shared copy of
+  framework supporting guides under `.docs/` where templates provide them.
 - `.docs/agent-workflow.md`, five role definitions per platform, ownership
   policies, direct-edit guards, and shell-audit hooks.
 - Native registration in `.codex/hooks.json` and `.claude/settings.json`.
@@ -115,6 +115,21 @@ Changing selections removes only unchanged content owned by the lifecycle.
 Locally edited managed content blocks the update; it is not silently deleted.
 Template customization and lifecycle changes are preflighted together before
 writes. Symlink destinations and unsafe managed paths are rejected.
+
+Updates migrate unchanged managed supporting guides from the older `.claude/`
+and `doc/` layouts into `.docs/` and update both entry points. Native agent
+definitions, settings and hooks retain their tool-specific locations. App-owned
+`.docs/project-guidance.md` remains separate from the generated supporting guides.
+Locally edited legacy guides or conflicting files already at the destination
+block migration rather than being overwritten. If you have moved guides manually,
+review `diff` and resolve the reported drift before updating; do not change
+manifest hashes to bypass these checks.
+
+The internal custom-template renderer also writes supporting guides under
+`.docs/`, but retains its existing selected-file rendering behavior. It has no
+lifecycle ownership record and does not remove older guide copies. The migration
+and drift checks above apply to bundled framework installations managed through
+`agent-docs.sh` and its compatible frontends.
 
 ## Resolve drift
 

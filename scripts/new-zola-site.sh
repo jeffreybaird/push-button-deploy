@@ -12,7 +12,7 @@
 #   2. Scaffolds a themeless Zola site: config.toml, a section-and-page content
 #      tree with one post, Tera templates (base/index/section/page/404), a small
 #      stylesheet, and .zola-version.
-#   3. Copies the skill docs from app-template-zola/ (CLAUDE.md + .claude/*.md),
+#   3. Copies the skill docs from app-template-zola/ (CLAUDE.md + AGENTS.md + .docs/*.md),
 #      rewriting the my_site / My Site placeholders to the site's real names.
 #
 # NO LOCAL ZOLA REQUIRED. The scaffold is written by hand rather than by `zola
