@@ -82,6 +82,14 @@ a stale `STAGING_DOMAIN` cannot be silently left enabled. A query failure before
 push prevents push/dispatch. Polling errors stop confirmation with a diagnostic;
 a successful HTTPS response cannot override them.
 
+GitHub queries repository-wide Actions runs, then matches the exact commit and
+`.github/workflows/<workflow>` path. This works before a new workflow has been
+pushed: a valid empty run list permits the first push. Workflow-specific lookup
+would instead fail because GitHub has not registered that file yet. Authentication,
+transport and malformed-response errors still stop the push. Paginated results
+must be complete before selecting the newest matching run; responses beyond
+GitHub's 1,000-result query limit fail explicitly.
+
 Gitea requires **1.25 or newer** and uses `/actions/runs?head_sha=...`, traversing
 pages before choosing the newest run matching both commit and workflow path.
 `deploy.yml@refs/heads/main` and the `.gitea/workflows/` or `.github/workflows/`

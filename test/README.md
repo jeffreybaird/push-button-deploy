@@ -37,6 +37,8 @@ retained for history and are not discovered.
 | `ci-trigger.sh` | Real local Git commits/pushes, no-change dispatch, already-running CI reuse, immediate run registration and failed pushes. |
 | `provider-contract.sh` | Provider dispatch, authentication, repo lifecycle, secret stdin, variable update/create, workflow dispatch, transport and Git argument forwarding. |
 | `provider-failures.sh` | Error classification, origin preservation, variable deletion failures, paginated full-workflow matching and polling errors. |
+| `github-first-push.sh` | A first commit reaches an empty repository before any workflow is registered; authentication, transport and malformed-response failures prevent the push. |
+| `github-run-pages.sh` | Exact GitHub workflow path and commit matching across pages, newest matching run selection, and fail-closed handling of incomplete or inaccessible pages. |
 | `provider-runs.sh` | GitHub query identity and empty results; Gitea response envelopes, commit filtering, ordering, status normalization and malformed responses. |
 | `teardown.sh` | Host/tenant/repository-only plans, static registry exclusion, confirmation, failure ordering and override restoration. |
 | `swap.sh` | Both colors, first deployment, no supporting services, SQLite support services, failed candidates/configuration/support startup and missing containers. |

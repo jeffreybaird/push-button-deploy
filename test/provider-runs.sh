@@ -12,19 +12,18 @@ APP_DIR="$WORK"; APP_NAME=example; HEAD_SHA=wanted; CI_WORKFLOW=deploy.yml
 GITEA_OWNER_RESOLVED=owner
 
 gh() {
-  # Enforce identity at the gh boundary; evaluate its actual output query.
+  # Repository runs exist even before the workflow is registered on first push.
   [ "$PWD" = "$APP_DIR" ] || return 1
-  [ "$1 $2" = 'run list' ] || return 1
-  shift 2
-  [ "$1 $2 $3 $4 $5 $6" = '--workflow deploy.yml --commit wanted --limit 1' ] || return 1
-  shift 6
-  [ "$1 $2 $3" = '--json databaseId,status,conclusion --jq' ] || return 1
-  jq -r "$4" "$WORK/github.json"
+  [ "$1" = api ] || return 1
+  case "$*" in
+    *'repos/{owner}/{repo}/actions/runs?head_sha=wanted&per_page=100&page=1'*) cat "$WORK/github.json" ;;
+    *) return 99 ;;
+  esac
 }
 GIT_PROVIDER=github
-printf '[]\n' > "$WORK/github.json"
+printf '{"total_count":0,"workflow_runs":[]}\n' > "$WORK/github.json"
 [ -z "$(ci_run_row "$APP_DIR" deploy.yml wanted)" ]
-printf '[{"databaseId":7,"status":"completed","conclusion":"success"}]\n' > "$WORK/github.json"
+printf '{"total_count":1,"workflow_runs":[{"id":7,"head_sha":"wanted","path":".github/workflows/deploy.yml","status":"completed","conclusion":"success"}]}\n' > "$WORK/github.json"
 [ "$(ci_run_row "$APP_DIR" deploy.yml wanted)" = '7 completed success' ]
 # Explicit arguments must override incidental caller globals.
 HEAD_SHA=unrelated; CI_WORKFLOW=other.yml
