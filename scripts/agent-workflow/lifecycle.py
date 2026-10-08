@@ -175,11 +175,15 @@ def policy_for(framework):
         source += ['bin/*', 'config.ru', 'Dockerfile', 'config/*.yml', 'config/**/*.yml']
     if framework in ('ts-cli', 'react'):
         source += ['package.json', 'package-lock.json', 'tsconfig*.json']
+    if framework in ('sinatra', 'phoenix', 'escript', 'mix'):
+        source += ['bin/check-features']
     tests = ['test/**', 'tests/**', 'spec/**', '**/*_test.py', '**/*_test.exs',
              '**/*_spec.rb', '**/*.test.ts', '**/*.spec.ts', '**/*.test.js', '**/*.spec.js',
              '**/*.test.tsx', '**/*.spec.tsx', '**/*.test.jsx', '**/*.spec.jsx']
     if framework == 'rails':
         tests += ['features/**', 'support/coverage.rb', 'script/coverage.rb']
+    if framework in ('sinatra', 'phoenix', 'escript', 'mix'):
+        tests += ['features/**']
     return {'schema_version': 2, 'source_globs': source, 'test_globs': tests}
 
 

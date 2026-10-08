@@ -28,7 +28,7 @@
 # If <app_dir> already contains a mix.exs it is left completely alone: this
 # script only ever creates a project, it never retrofits one.
 #
-# Portable: BSD/macOS bash, awk, sed.
+# Portable: BSD/macOS bash, awk, sed, Python 3 (acceptance setup).
 set -euo pipefail
 
 fail() { printf 'new-mix-app: %s\n' "$*" >&2; exit 1; }
@@ -151,7 +151,9 @@ EOF
 
   defp deps do
     [
-      # {:dep_from_hexpm, "~> 0.3.0"}
+      {:cucumberex, "~> 0.2.1", only: [:dev, :test]},
+      # cucumber_messages ships code generated for the Protox 2.0 runtime.
+      {:protox, "~> 2.0.8", only: [:dev, :test]}
     ]
   end
 
@@ -393,6 +395,7 @@ TODO: one sentence describing $APP_NAME.
 
     mix deps.get
     mix test
+    bin/check-features
 
 EOF
   if [ "$KIND" = escript ]; then
@@ -430,4 +433,6 @@ EOF
 
 if [ "$KIND" = escript ]; then _docs_framework=escript; else _docs_framework=mix; fi
 bash "${PBD_ROOT:-$SCRIPT_DIR/..}/agent-docs.sh" update "$APP_DIR" --framework "$_docs_framework"
+"$SCRIPT_DIR/setup-cucumberex.sh" "$APP_DIR" "$([ "$KIND" = lib ] && echo mix || echo escript)"
+
 log "scaffolded $APP_DIR ($KIND): mix.exs, lib/, test/, .tool-versions, README.md"

@@ -18,6 +18,15 @@ for every module containing doctests in the normal `mix test` suite and CI.
 Fallback-only examples do not satisfy these requirements. New installations and
 shared updates receive this guidance for both Codex and Claude.
 
+PR descriptions include relevant acceptance scenarios and actual readable test
+output: RSpec `--format documentation` for Ruby, and Cucumberex `--format pretty`
+with focused ExUnit `--trace` output for Elixir. Normal full quality gates still
+apply. Fresh Rails/Sinatra apps include RSpec and Cucumber; fresh Phoenix, Elixir
+CLI and Mix-library apps include ExUnit and Cucumberex independently of optional
+docs selection. Missing required tools in those starters is a defect, not an
+`N/A` exception. A docs update changes guidance only; it does not install missing
+application test dependencies or retrofit existing CI.
+
 Across all frameworks, every PR must review dead code, remove confirmed unused
 code, and propose a concrete unapplied patch for tests solely covering that
 behavior. Test deletion requires explicit user approval; tests remain unchanged

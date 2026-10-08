@@ -1,5 +1,6 @@
 """Public agent-document lifecycle: real filesystem contracts, offline only."""
 import fnmatch
+import gzip
 import json
 import os
 from pathlib import Path
@@ -161,6 +162,70 @@ class Lifecycle(unittest.TestCase):
             with self.subTest(framework=framework, requirement='language scope'):
                 workflow = ' '.join((app / '.docs/agent-workflow.md').read_text().split())
                 self.assertRegex(workflow, r'For Elixir projects, doctests must')
+
+    def test_rails_workflow_requires_honest_pull_request_test_evidence(self):
+        self.install('rails')
+        workflow = (self.app / '.docs/agent-workflow.md').read_text()
+        self.assertIn('## Pull request test evidence', workflow)
+        section = workflow.split('## Pull request test evidence', 1)[1].split('\n## ', 1)[0]
+        section = ' '.join(section.split())
+        requirements = {
+            'every PR': r'(?i)every (?:PR|pull request)',
+            'relevant Cucumber specs': r'(?i)relevant.*Cucumber',
+            'feature and scenario names': r'(?i)feature.*scenario.*names',
+            'Gherkin evidence': r'Gherkin',
+            'readable Cucumber evidence': r'(?i)(?:scenario|Gherkin).*content|executed scenario output',
+            'names and links are insufficient': r'(?i)names or links alone are insufficient',
+            'actual RSpec command': r'bundle exec rspec <relevant spec paths> --format documentation',
+            'actual output': r'(?i)actual.*output',
+            'commands and results': r'(?i)commands?.*results?',
+            'failures reported': r'(?i)failures',
+            'skipped reported': r'(?i)skipp(?:ed|ing)',
+            'pending reported': r'(?i)pending',
+            'explicit applicability explanation': r'(?i)N/A.*reason',
+            'missing mandatory tooling is a defect': r'(?i)mandatory tooling missing.*fresh generated project.*defect.*not N/A',
+            'Ruby acceptance command': r'bundle exec cucumber --format pretty --strict',
+            'focused ExUnit output': r'mix test <relevant test paths> --trace',
+            'Elixir acceptance output': r'MIX_ENV=test mix cucumber --format pretty --strict',
+            'full gates retained': r'(?i)full.*(?:checks|gates|suite)',
+            'no fabricated passing evidence': r'(?i)(?:never|do not).*fabricat',
+        }
+        for requirement, pattern in requirements.items():
+            with self.subTest(requirement=requirement):
+                self.assertRegex(section, pattern)
+        for path in ('.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
+            with self.subTest(reviewer=path):
+                instructions = (self.app / path).read_text()
+                if path.endswith('.toml'):
+                    instructions = tomllib.loads(instructions)['developer_instructions']
+                self.assertIn('.docs/agent-workflow.md#pull-request-test-evidence', instructions)
+                self.assertIn('Cucumber', instructions)
+                self.assertIn('RSpec', instructions)
+                self.assertIn('--format documentation', instructions)
+                self.assertIn('Cucumberex', instructions)
+                self.assertIn('ExUnit --trace', instructions)
+                self.assertIn('Mandatory tooling missing from a fresh generated project is a defect, not N/A.', instructions)
+        before = self.snapshot(mtimes=True)
+        self.command('update')
+        self.assertEqual(before, self.snapshot(mtimes=True))
+        self.assertEqual('current', self.command('check')['status'])
+
+    def test_existing_rails_installation_gains_pull_request_evidence_without_losing_local_rules(self):
+        fixture = ROOT / 'test/fixtures/agent-docs-legacy/rails.json.gz'
+        with gzip.open(fixture, 'rt') as source:
+            for name, contents in json.load(source).items():
+                path = self.app / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(contents)
+        (self.app / '.docs/project-guidance.md').write_text('Keep application-specific constraints.\n')
+        self.command('update')
+        self.assertIn('## Pull request test evidence', (self.app / '.docs/agent-workflow.md').read_text())
+        for path in ('.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
+            self.assertIn('.docs/agent-workflow.md#pull-request-test-evidence', (self.app / path).read_text())
+        self.assertEqual('Keep application-specific constraints.\n', (self.app / '.docs/project-guidance.md').read_text())
+        before = self.snapshot(mtimes=True)
+        self.command('update')
+        self.assertEqual(before, self.snapshot(mtimes=True))
 
     def test_every_framework_requires_dead_code_review_for_each_pr(self):
         requirements = {
@@ -467,15 +532,41 @@ ensure_app
                                          for pattern in policy['test_globs']), path)
                     self.assertTrue(any(fnmatch.fnmatchcase(path, pattern)
                                         for pattern in policy['source_globs']), path)
-        # Rails tooling ownership must not silently change other Ruby frameworks.
+        # Rails coverage helpers remain specific to Rails.
         sinatra = self.work / 'sinatra_policy'
         sinatra.mkdir()
         self.install('sinatra', app=sinatra)
         policy = json.loads((sinatra / '.codex/hooks/policy.json').read_text())
-        for path in harness[:5]:
+        for path in harness[3:5]:
             with self.subTest(framework='sinatra', path=path):
                 self.assertFalse(any(fnmatch.fnmatchcase(path, pattern)
                                      for pattern in policy['test_globs']), path)
+
+    def test_mandatory_acceptance_features_are_tests_on_both_platforms(self):
+        for framework in ('sinatra', 'phoenix', 'escript', 'mix'):
+            app = self.work / framework
+            app.mkdir()
+            self.install(framework, app=app)
+            extension = 'rb' if framework == 'sinatra' else 'ex'
+            for platform in ('codex', 'claude'):
+                policy = json.loads((app / f'.{platform}/hooks/policy.json').read_text())
+                for path in ('features/behavior.feature', f'features/step_definitions/steps.{extension}',
+                             f'features/support/env.{extension}'):
+                    with self.subTest(framework=framework, platform=platform, test=path):
+                        self.assertTrue(any(fnmatch.fnmatchcase(path, pattern)
+                                            for pattern in policy['test_globs']), path)
+                for path in (f'lib/runtime.{extension}', f'lib/support/events.{extension}'):
+                    with self.subTest(framework=framework, platform=platform, source=path):
+                        self.assertFalse(any(fnmatch.fnmatchcase(path, pattern)
+                                             for pattern in policy['test_globs']), path)
+                        self.assertTrue(any(fnmatch.fnmatchcase(path, pattern)
+                                            for pattern in policy['source_globs']), path)
+                self.assertFalse(any(fnmatch.fnmatchcase('bin/check-features', pattern)
+                                     for pattern in policy['test_globs']))
+                self.assertTrue(any(fnmatch.fnmatchcase('bin/check-features', pattern)
+                                    for pattern in policy['source_globs']))
+                self.assertFalse(any(fnmatch.fnmatchcase('bin/unrelated-command', pattern)
+                                     for pattern in policy['source_globs']))
 
     def test_malformed_manifest_or_claimed_unowned_file_rejects_before_writes(self):
         self.install()

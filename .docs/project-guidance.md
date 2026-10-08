@@ -22,6 +22,23 @@ documented procedure with your platform's tools, not another platform's commands
 Before committing, follow the correction and security-review requirements in
 [the shared agent workflow](agent-workflow.md#precommit-corrections).
 
+Every PR description must include readable acceptance scenario content (Gherkin)
+or executed scenario output relevant to its changes, not only links or a generic
+"tests passed" statement. For Ruby changes, include actual RSpec output from
+`bundle exec rspec <relevant spec paths> --format documentation` and relevant
+Cucumber evidence. For Elixir changes, include actual focused ExUnit output from
+`mix test <relevant test paths> --trace` and Cucumberex output from
+`MIX_ENV=test mix cucumber --format pretty --strict`. Record commands and results, including
+failures, skips and pending cases honestly. Focused evidence does not replace
+required normal full quality gates.
+
+Fresh Rails and Sinatra projects require RSpec and Cucumber; fresh Phoenix,
+escript and Mix library projects require ExUnit and Cucumberex. Missing required
+tooling is a defect, not a reason to report `N/A`. Use `N/A` with an explicit reason
+only when an ecosystem or check is unrelated to the changes, and provide the
+actual relevant checks. This utility uses Python and Bash tests, but changes to
+generated testing tools also require actual evidence from generated applications.
+
 # Project rules
 
 Read `README.md` and the relevant `docs/` before changing bootstrap or deployment
