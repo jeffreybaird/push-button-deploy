@@ -56,6 +56,7 @@ ensure_app() {
   # Freshly generated apps get the Claude skill docs (app-template/) and the
   # deps the docs assume. Existing apps are left alone — run the script by
   # hand to retrofit: ./scripts/inject-skill-docs.sh <app_dir>
+  "$SCRIPT_DIR/scripts/setup-cucumberex.sh" "$APP_DIR" phoenix
   "$SCRIPT_DIR/scripts/inject-skill-docs.sh" "$APP_DIR"
 }
 

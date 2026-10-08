@@ -221,6 +221,33 @@ an implementation defect. Changes to expected behavior require a test-writer
 revision and renewed reviewer acceptance. New regression tests are permitted.
 Record hashes of accepted tests before implementation and compare afterward.
 
+## Pull request test evidence
+
+Every PR description must include relevant Ruby Cucumber or Elixir Cucumberex
+feature/scenario specifications for its changes. Identify feature paths and
+scenario names, and include readable Gherkin, scenario/spec content, or actual
+executed scenario output. Names or links alone are insufficient; a generic
+test-passed summary does not show the behavior covered.
+
+For Ruby, run `bundle exec rspec <relevant spec paths> --format documentation`
+and include the actual command, documentation output and results. Cucumber
+scenario output comes from `bundle exec cucumber --format pretty --strict`.
+For Elixir, run `mix test <relevant test paths> --trace` for focused ExUnit output
+and `MIX_ENV=test mix cucumber --format pretty --strict` for Cucumberex output.
+Use paths relevant to the included changes. Report failures, skipped and pending
+examples honestly. Never fabricate output or claim an unrun check passed. Long
+output may use expandable details blocks while keeping the result visible.
+
+Use `N/A` with an explicit reason for unrelated ecosystems or changes, and
+include the actual relevant checks instead. Mandatory tooling missing from a
+fresh generated project is a defect, not N/A. Fresh Rails and Sinatra projects
+require RSpec and Cucumber; fresh Phoenix, escript and Mix library projects
+require ExUnit and Cucumberex. Do not install an unrelated framework solely to
+produce PR evidence. Existing applications retain their explicit legacy gates
+until their acceptance tooling is adopted; report that limitation honestly.
+Focused evidence does not replace required full quality gates: retain normal
+full RSpec or `mix test` execution and record all required commands and results.
+
 ## Dead-code review
 
 Every PR must include a dead-code review. Check references and dynamic,
@@ -552,6 +579,7 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
         if role == 'reviewer':
             instructions += ' Always check and report security advisories, including pre-existing findings, affected and patched versions, and exposure uncertainty; follow the security advisory review in .docs/agent-workflow.md.'
             instructions += ' Every PR must include a dead-code review; verify confirmed-unused evidence, source and test removal ownership, retained live-behavior coverage, and the PR report under .docs/agent-workflow.md#dead-code-review. Obtain explicit user approval before deleting tests; reviewer acceptance is not user approval. Review the concrete unapplied test-removal patch, preserve tests while approval is pending, and verify that only the approved patch is applied by the spec writer when permitted. Report the exact patch and blocker if hooks prevent deletion; never bypass them.'
+            instructions += ' Every PR must include relevant Ruby Cucumber or Elixir Cucumberex scenario content or executed scenario output, plus actual Ruby RSpec --format documentation or Elixir ExUnit --trace output with commands and results; verify honest failures, skipped and pending examples, reasoned N/A only for unrelated ecosystems or changes, and completion of required full quality gates under .docs/agent-workflow.md#pull-request-test-evidence. Mandatory tooling missing from a fresh generated project is a defect, not N/A. Names or links alone are insufficient acceptance evidence. Never accept fabricated output.'
         elif role == 'implementer':
             instructions += ' Apply compatible security upgrades and verify them. Obtain explicit user permission before upgrades requiring significant application changes, API rewrites, migrations, or substantial compatibility work; report unresolved advisories.'
         files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(instructions) + '\n'

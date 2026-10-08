@@ -13,6 +13,16 @@ ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORKS = ('phoenix', 'sinatra', 'rails', 'react', 'zola')
 TEMPLATES = dict(zip(FRAMEWORKS, ('app-template', 'app-template-ruby', 'app-template-rails', 'app-template-react', 'app-template-zola')))
 
+REVIEWER_PR_EVIDENCE = (
+    ' Every PR must include relevant Ruby Cucumber or Elixir Cucumberex scenario content or executed '
+    'scenario output, plus actual Ruby RSpec --format documentation or Elixir ExUnit --trace output '
+    'with commands and results; verify honest failures, skipped and pending examples, reasoned N/A '
+    'only for unrelated ecosystems or changes, and completion of required full quality gates under '
+    '.docs/agent-workflow.md#pull-request-test-evidence. Mandatory tooling missing from a fresh '
+    'generated project is a defect, not N/A. Names or links alone are insufficient acceptance '
+    'evidence. Never accept fabricated output.'
+)
+
 
 class CanonicalGuides(unittest.TestCase):
     def setUp(self):
@@ -121,6 +131,15 @@ class CanonicalGuides(unittest.TestCase):
                         continue
                     if name.startswith(('.claude/agents/', '.claude/hooks/', '.codex/')) or name == '.claude/settings.json':
                         expected = contents
+                        if framework in ('sinatra', 'phoenix') and name in ('.codex/hooks/policy.json', '.claude/hooks/policy.json'):
+                            expected_policy = json.loads(contents)
+                            expected_policy['test_globs'].append('features/**')
+                            expected_policy['source_globs'].append('bin/check-features')
+                            self.assertEqual(expected_policy, json.loads((app / name).read_text()), name)
+                            continue
+                        if name in ('.codex/agents/workflow_reviewer.toml', '.claude/agents/workflow-reviewer.md'):
+                            expected = expected.replace(b'never bypass them.',
+                                                        b'never bypass them.' + REVIEWER_PR_EVIDENCE.encode())
                         if name.endswith(".md"):
                             expected = expected.replace(b"`.claude/` detail docs", b"`.docs/` detail docs")
                             for module in (ROOT / TEMPLATES[framework] / ".claude").glob("*.md"):

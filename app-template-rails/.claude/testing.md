@@ -54,3 +54,19 @@ scenarios. When authentication and authorization are introduced, test denied
 actions at request and service boundaries. When multi-tenancy is introduced,
 each read and mutation needs isolation tests proving that another tenant's
 records cannot be viewed or changed, including forged identifiers.
+
+## Pull request evidence
+
+Follow `.docs/agent-workflow.md#pull-request-test-evidence` for every PR. Include
+the relevant Cucumber feature paths and scenario names with readable Gherkin,
+scenario content or actual executed scenario output; names or links alone are
+insufficient. Run `bundle exec rspec <relevant spec paths> --format documentation`
+and include its actual command, output and results. Report failures, skipped and
+pending examples honestly; never invent output. Use expandable details for long
+output. Still run the full required `bin/check` gate and report its result.
+
+Fresh Rails projects require both suites; missing mandatory tooling is a defect,
+not `N/A`. Use `N/A` with a reason for unrelated ecosystems or changes. Adopted
+applications keep their explicit legacy gate until they deliberately adopt this
+profile; report that limitation and actual checks honestly. Do not bypass gates
+or install an unrelated framework solely for reporting.

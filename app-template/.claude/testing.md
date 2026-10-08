@@ -163,8 +163,8 @@ mix test --only e2e         # Requires Chrome + ChromeDriver
 
 ## Acceptance Tests: Cucumberex for Major User-Facing Features
 
-[Cucumberex](https://hexdocs.pm/cucumberex) (`{:cucumberex, "~> 0.2"}`, injected
-as a default dep) runs Gherkin `.feature` files via `mix cucumber`. It sits
+[Cucumberex](https://hexdocs.pm/cucumberex) (`{:cucumberex, "~> 0.2.1"}`, required
+in fresh generated Elixir projects) runs Gherkin `.feature` files via `mix cucumber`. It sits
 **above** the ExUnit progression ladder: LiveViewTest/PhoenixTest still carry
 exhaustive pathway coverage; Cucumberex documents and verifies the
 **business-level behavior** of major features in language a non-developer can
@@ -188,7 +188,10 @@ like a test script ("click the third button") rather than a behavior
 
 ### Setup
 
-The dep is injected at bootstrap. One-time project setup:
+Fresh Phoenix, escript and Mix library scaffolds include the dependency, real
+features, support files and `bin/check-features` independently of optional docs.
+The helper forces `MIX_ENV=test` and runs `mix cucumber --format pretty --strict`.
+For an older application adopting these conventions, one-time project setup:
 
 ```bash
 mix cucumber.init        # scaffolds features/ with step_definitions/ and support/
@@ -913,10 +916,11 @@ mix cucumber
 
 ### CI requirements to configure in the application
 
-The shipped deployment workflow runs `mix test`; it does not install or wire
-the extra jobs below. Add their dependencies, support files, and CI steps when
-adopting these test conventions. Docs-only installation adds no dependencies;
-the Phoenix bootstrap injector adds Cucumberex, but not its feature/support files.
+The shipped workflows retain full `mix test`, then run `bin/check-features`.
+Fresh projects always have this strict Cucumberex gate. Older adopted projects
+without it receive an explicit legacy warning; a present failing or nonexecutable
+gate fails CI. Docs-only installation adds no dependencies or features. Other
+optional jobs below require their own dependencies, support files and CI steps.
 Once configured, require the applicable checks before deploy:
 - `mix test --exclude e2e` — all unit and integration tests green
 - `mix test --only e2e` — all Wallaby E2E tests green (separate CI job)
@@ -926,3 +930,19 @@ Once configured, require the applicable checks before deploy:
 - `mix credo --strict` — no credo violations
 - `mix dialyzer` — no dialyzer warnings
 - `npx tsc --noEmit` — TypeScript type checks pass (if using TypeScript hooks)
+
+
+## Pull request evidence
+
+Follow `.docs/agent-workflow.md#pull-request-test-evidence`. Include actual focused
+ExUnit output from `mix test <relevant test paths> --trace` and relevant Cucumberex
+scenario content or output from `MIX_ENV=test mix cucumber --format pretty --strict`.
+Identify feature paths and scenario names with readable Gherkin or executed
+scenario output; names or links alone are insufficient. Record commands, results,
+failures, skipped and pending cases honestly. Never fabricate output. Expandable
+details blocks can hold long output. Retain normal full `mix test` and every
+required quality gate; focused evidence does not replace them.
+
+Ruby RSpec/Cucumber output is `N/A` for an Elixir-only change; explain that reason.
+Missing mandatory Cucumberex in a fresh Elixir scaffold is a defect, not `N/A`.
+Do not install an unrelated ecosystem just to produce a report.

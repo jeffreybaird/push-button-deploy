@@ -7,7 +7,8 @@
 #   ./scripts/inject-skill-docs.sh <app_dir>
 #
 # What it does:
-#   1. Injects deps the docs assume (default req + oban + cucumberex; override
+#   1. Injects deps the docs assume (req, oban, cucumberex and compatible protox;
+#      override
 #      with APP_EXTRA_DEPS, '|'-separated mix.exs entries, empty string = none).
 #      Deps already declared in mix.exs are skipped.
 #   2. Renders CLAUDE.md + AGENTS.md and shared .docs/ guides from app-template/,
@@ -43,7 +44,7 @@ APP_MODULE="$(app_module "$APP_DIR")"
 
 # ---- 1. deps the docs assume ---------------------------------------------------
 # '|'-separated mix.exs entries; APP_EXTRA_DEPS="" opts out entirely.
-default_deps='{:req, "~> 0.5"}|{:oban, "~> 2.19"}|{:cucumberex, "~> 0.2", only: [:dev, :test], runtime: false}'
+default_deps='{:req, "~> 0.5"}|{:oban, "~> 2.19"}|{:cucumberex, "~> 0.2.1", only: [:dev, :test]}|{:protox, "~> 2.0.8", only: [:dev, :test]}'
 APP_EXTRA_DEPS="${APP_EXTRA_DEPS-$default_deps}"
 
 inject_deps() {
