@@ -17,6 +17,125 @@ an implementation defect. Changes to expected behavior require a test-writer
 revision and renewed reviewer acceptance. New regression tests are permitted.
 Record hashes of accepted tests before implementation and compare afterward.
 
+## Coordination and evidence
+
+By default, use one main orchestrator for a single change and reuse existing
+role agents for revisions and follow-up work. Assign bounded work through the
+pipeline above; add coordination layers only when the task needs them.
+
+Use compact handoffs containing expected behavior, owned paths, relevant
+repository guidance, accepted-test hashes when available, validation commands,
+and evidence paths. Include explicit task context sufficient to do the assigned
+work without reconstructing the conversation. In Codex, use bounded context;
+avoid full-history forks by default. Use a full-history fork only when needed
+for context that cannot be conveyed reliably in the handoff. Follow native
+tool and user rules when selecting context or delegating.
+
+For example, an implementation handoff can be:
+
+> Behavior: reject an expired token, accept a valid token. Own `src/tokens.py`;
+> do not edit tests. Guidance: `.docs/project-guidance.md` and this workflow.
+> Accepted tests: `test/test_tokens.py`, SHA-256 recorded in
+> `/tmp/token-change/accepted.sha256`. Validate: `python3 -m unittest
+> discover -s test`. Red evidence: `/tmp/token-change/red.log`; save green
+> evidence to `/tmp/token-change/green.log`. Report completion, blockers, or
+> material findings with evidence paths.
+
+Return only completion, blockers, and material findings to the coordinator;
+omit routine progress narration and repeated status messages. Preserve full
+evidence in files or artifacts, including commands, output, failures, skips,
+and pending cases. Compact reports are pointers, not substitutes: the
+independent reviewer must read the full evidence and inspect the final diff.
+Retain the existing PR evidence and full quality gates below.
+
+Use event-driven waits for delegated work where supported. After dispatch,
+wait for completion or a material event instead of repeatedly polling unchanged
+status or messaging agents for updates. Respect native tool wait limits and
+user communication rules; answer user status requests and report real blockers
+or material findings promptly. These exceptions do not require routine agent
+status chatter or reduce the saved evidence.
+
+## Pull request test evidence
+
+Every PR description must include relevant Ruby Cucumber or Elixir Cucumberex
+feature/scenario specifications for its changes. Identify feature paths and
+scenario names, and include readable Gherkin, scenario/spec content, or actual
+executed scenario output. Names or links alone are insufficient; a generic
+test-passed summary does not show the behavior covered.
+
+For Ruby, run `bundle exec rspec <relevant spec paths> --format documentation`
+and include the actual command, documentation output and results. Cucumber
+scenario output comes from `bundle exec cucumber --format pretty --strict`.
+For Elixir, run `mix test <relevant test paths> --trace` for focused ExUnit output
+and `MIX_ENV=test mix cucumber --format pretty --strict` for Cucumberex output.
+Use paths relevant to the included changes. Report failures, skipped and pending
+examples honestly. Never fabricate output or claim an unrun check passed. Long
+output may use expandable details blocks while keeping the result visible.
+
+Use `N/A` with an explicit reason for unrelated ecosystems or changes, and
+include the actual relevant checks instead. Mandatory tooling missing from a
+fresh generated project is a defect, not N/A. Fresh Rails and Sinatra projects
+require RSpec and Cucumber; fresh Phoenix, escript and Mix library projects
+require ExUnit and Cucumberex. Do not install an unrelated framework solely to
+produce PR evidence. Existing applications retain their explicit legacy gates
+until their acceptance tooling is adopted; report that limitation honestly.
+Focused evidence does not replace required full quality gates: retain normal
+full RSpec or `mix test` execution and record all required commands and results.
+
+## Dead-code review
+
+Every PR must include a dead-code review. Check references and dynamic,
+configuration, framework, and public entry points before deciding code is unused.
+Account for external public API consumers. Test-only references do not prove code
+is live or dead. Grep absence alone does not prove code is unused; verify the
+usage paths and retain code when its use is uncertain.
+
+Delete confirmed dead code. Propose removing tests that exclusively exercise the
+removed behavior. Present a concrete unapplied diff with test file paths and
+deletion hunks, and explain why each proposed test removal is obsolete. Obtain
+explicit user approval before deleting tests. Reviewer approval does not
+substitute for user approval. Keep tests unchanged while approval is pending.
+Preserve or adapt tests for live behavior, including mixed coverage. Never delete
+failing tests merely to make the suite pass.
+
+Approval preserves source/test role ownership and hook restrictions. The
+implementer removes source, the spec writer removes or adapts tests, and the
+reviewer approves the changed test contract before implementation. After user
+approval, the spec writer applies only the approved test-removal patch when
+permitted. If deletion remains blocked, present the exact patch and blocker for
+the user to resolve. Never use an alternate editing route or bypass hooks. Do not
+bypass the accepted-test contract or weaken assertions to justify removal.
+
+Source cleanup may proceed while test-removal approval is pending. Run the
+affected test suite after cleanup. Do not claim green tests or commit cleanup
+that leaves tests failing; do not commit incomplete cleanup. The PR description
+must record the removed code and tests, or state that no dead code was found.
+Record any test-removal patch still awaiting user approval or blocked by hooks.
+
+## Elixir doctests
+
+For Elixir projects, doctests must demonstrate meaningful use of the function with
+representative valid inputs and assert its intended result. Include at least one
+happy-path example; nil, empty-input, fallback, or error examples alone are
+insufficient. For predicates, include an input that satisfies the predicate. For
+time-dependent predicates, show valid inputs on both sides of the time condition,
+using a stable clock or generous relative offsets to avoid brittle date-dependent
+examples. Keep useful edge cases as additional examples, not substitutes for the
+happy path.
+
+Inventory `@doc` and `@moduledoc` `iex>` examples across the project. Ensure every
+module containing doctests is registered with `doctest` in ExUnit. Run all doctests
+through the normal `mix test` suite, including CI; do not leave registrations
+skipped, excluded, filtered out, or confined to a separate command. Verify actual
+execution of all doctests in the normal suite; registration alone is insufficient.
+
+Verify the module is registered with `doctest` in an ExUnit test and run those
+tests. An `iex>` block alone does not make an example execute. Review examples
+by asking whether an implementation that always returns the fallback value would
+still pass; if so, add an example exercising the intended behavior. Follow project
+rules for functions requiring database or external-service setup; cover their
+successful behavior with appropriate tests rather than token fallback doctests.
+
 ## Security advisory review
 
 Every agent review must check and explicitly report security advisories, including

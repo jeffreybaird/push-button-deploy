@@ -221,6 +221,44 @@ an implementation defect. Changes to expected behavior require a test-writer
 revision and renewed reviewer acceptance. New regression tests are permitted.
 Record hashes of accepted tests before implementation and compare afterward.
 
+## Coordination and evidence
+
+By default, use one main orchestrator for a single change and reuse existing
+role agents for revisions and follow-up work. Assign bounded work through the
+pipeline above; add coordination layers only when the task needs them.
+
+Use compact handoffs containing expected behavior, owned paths, relevant
+repository guidance, accepted-test hashes when available, validation commands,
+and evidence paths. Include explicit task context sufficient to do the assigned
+work without reconstructing the conversation. In Codex, use bounded context;
+avoid full-history forks by default. Use a full-history fork only when needed
+for context that cannot be conveyed reliably in the handoff. Follow native
+tool and user rules when selecting context or delegating.
+
+For example, an implementation handoff can be:
+
+> Behavior: reject an expired token, accept a valid token. Own `src/tokens.py`;
+> do not edit tests. Guidance: `.docs/project-guidance.md` and this workflow.
+> Accepted tests: `test/test_tokens.py`, SHA-256 recorded in
+> `/tmp/token-change/accepted.sha256`. Validate: `python3 -m unittest
+> discover -s test`. Red evidence: `/tmp/token-change/red.log`; save green
+> evidence to `/tmp/token-change/green.log`. Report completion, blockers, or
+> material findings with evidence paths.
+
+Return only completion, blockers, and material findings to the coordinator;
+omit routine progress narration and repeated status messages. Preserve full
+evidence in files or artifacts, including commands, output, failures, skips,
+and pending cases. Compact reports are pointers, not substitutes: the
+independent reviewer must read the full evidence and inspect the final diff.
+Retain the existing PR evidence and full quality gates below.
+
+Use event-driven waits for delegated work where supported. After dispatch,
+wait for completion or a material event instead of repeatedly polling unchanged
+status or messaging agents for updates. Respect native tool wait limits and
+user communication rules; answer user status requests and report real blockers
+or material findings promptly. These exceptions do not require routine agent
+status chatter or reduce the saved evidence.
+
 ## Pull request test evidence
 
 Every PR description must include relevant Ruby Cucumber or Elixir Cucumberex
@@ -575,14 +613,24 @@ Do not use alternate editing routes to evade the source/test ownership workflow.
         description = responsibilities[role]
         instructions = (description + ' Read .docs/agent-workflow.md and repository guidance. '
                         'Noncode edits and commands retain ordinary native permissions. '
-                        'The orchestrator coordinates delegation for this workflow.')
+                        'The orchestrator coordinates delegation for this workflow. '
+                        'Use compact handoffs with expected behavior, owned paths, relevant repository guidance, '
+                        'accepted-test hashes when available, validation commands, and evidence paths. '
+                        'Return only completion, blockers, and material findings; follow the coordination and evidence guidance in .docs/agent-workflow.md.')
+        if role in ('runner', 'reviewer'):
+            instructions += ' Preserve full evidence in files or artifacts. The independent reviewer must read the full evidence and inspect the final diff.'
+        if role == 'orchestrator':
+            instructions += ' By default, use one main orchestrator for a single change and reuse existing role agents.'
         if role == 'reviewer':
             instructions += ' Always check and report security advisories, including pre-existing findings, affected and patched versions, and exposure uncertainty; follow the security advisory review in .docs/agent-workflow.md.'
             instructions += ' Every PR must include a dead-code review; verify confirmed-unused evidence, source and test removal ownership, retained live-behavior coverage, and the PR report under .docs/agent-workflow.md#dead-code-review. Obtain explicit user approval before deleting tests; reviewer acceptance is not user approval. Review the concrete unapplied test-removal patch, preserve tests while approval is pending, and verify that only the approved patch is applied by the spec writer when permitted. Report the exact patch and blocker if hooks prevent deletion; never bypass them.'
             instructions += ' Every PR must include relevant Ruby Cucumber or Elixir Cucumberex scenario content or executed scenario output, plus actual Ruby RSpec --format documentation or Elixir ExUnit --trace output with commands and results; verify honest failures, skipped and pending examples, reasoned N/A only for unrelated ecosystems or changes, and completion of required full quality gates under .docs/agent-workflow.md#pull-request-test-evidence. Mandatory tooling missing from a fresh generated project is a defect, not N/A. Names or links alone are insufficient acceptance evidence. Never accept fabricated output.'
         elif role == 'implementer':
             instructions += ' Apply compatible security upgrades and verify them. Obtain explicit user permission before upgrades requiring significant application changes, API rewrites, migrations, or substantial compatibility work; report unresolved advisories.'
-        files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(instructions) + '\n'
+        codex_instructions = instructions
+        if role == 'orchestrator':
+            codex_instructions += ' Use bounded context with explicit task context; avoid full-history forks by default. Use a full-history fork only when needed to convey context reliably, respecting native tool and user rules.'
+        files[f'.codex/agents/workflow_{role}.toml'] = 'name = ' + json.dumps('workflow_' + role) + '\ndescription = ' + json.dumps(description) + '\ndeveloper_instructions = ' + json.dumps(codex_instructions) + '\n'
         claude_role_path = f'.claude/agents/workflow-{role.replace("_", "-")}.md'
         old_role = existing(claude_role_path)
         description_yaml = json.dumps(description)
