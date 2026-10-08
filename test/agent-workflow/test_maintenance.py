@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 BASE = Path(__file__).resolve().parents[2] / 'scripts' / 'agent-workflow'
 ENV = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'GIT_OPTIONAL_LOCKS': '0'}
@@ -26,7 +27,7 @@ class MaintenanceFixture(unittest.TestCase):
             if (BASE / name).exists():
                 shutil.copyfile(BASE / name, self.source / name)
         (self.source / '.gitignore').write_text('__pycache__/\n*.py[cod]\nevidence/\n')
-        self.git(self.source, 'init', '-q')
+        self.initialize_git(self.source)
         self.commit(self.source)
         self.repos = self.root / 'repositories with spaces'
         self.repos.mkdir()
@@ -34,6 +35,13 @@ class MaintenanceFixture(unittest.TestCase):
     def git(self, root, *args):
         return subprocess.run(['git', '-C', str(root), *args], env=ENV, text=True,
                               capture_output=True, check=True).stdout.strip()
+
+    def initialize_git(self, root):
+        self.git(root, 'init', '-q')
+        # Snapshot assertions include .git: no asynchronous maintenance may
+        # create or remove lock/object files after a fixture commit returns.
+        self.git(root, 'config', '--local', 'maintenance.auto', 'false')
+        self.git(root, 'config', '--local', 'gc.auto', '0')
 
     def commit(self, root):
         self.git(root, 'add', '-A')
@@ -43,7 +51,7 @@ class MaintenanceFixture(unittest.TestCase):
     def repo(self, name='heybridge'):
         root = self.repos / name
         root.mkdir()
-        self.git(root, 'init', '-q')
+        self.initialize_git(root)
         (root / 'README.md').write_text('Unrelated application file.\n')
         self.commit(root)
         return root
@@ -76,6 +84,27 @@ class MaintenanceFixture(unittest.TestCase):
         self.result(self.cli('apply', (name,)), 0)
         self.commit(root)
         return root
+
+
+class MaintenanceGitIsolation(MaintenanceFixture):
+    def test_fixture_commits_cannot_spawn_background_maintenance(self):
+        trace = self.root / 'git-trace.jsonl'
+        with patch.dict(ENV, {'GIT_TRACE2_EVENT': str(trace)}):
+            root = self.repo()
+        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        background = [event['argv'] for event in events
+                      if event.get('event') == 'child_start'
+                      and any(command in event.get('argv', []) for command in ('maintenance', 'gc'))]
+        self.assertEqual([], background, 'fixture commits must not race full .git snapshots')
+        for repository in (self.source, root):
+            with self.subTest(repository=repository.name):
+                self.assertEqual('false', self.git(repository, 'config', '--local', '--bool',
+                                                  '--get', 'maintenance.auto'))
+                self.assertEqual('0', self.git(repository, 'config', '--local', '--get', 'gc.auto'))
+        before = self.snapshot(root)
+        self.result(self.cli('check'), 1)
+        self.result(self.cli('diff'), 1)
+        self.assertEqual(before, self.snapshot(root))
 
 
 class MaintenanceCLI(MaintenanceFixture):
