@@ -38,7 +38,7 @@ mytool --format json hello there    # not FORMAT=json ./mytool.sh hello there
 | Images | Built on amd64 CI runners (GitHub-hosted, or your own for Gitea — see [Gitea](docs/gitea.md)), pushed to DO Container Registry, SHA-pinned |
 | Deploys | Dynamic services: tests → image build → migrations → health-checked blue/green swap. Zola builds and publishes files by symlink. CLI/library apps run build/test CI. |
 | Staging | GitHub dynamic services share one PR slot per app at `<app>-stg.<zone>`; closing the owning PR removes it. See [Staging](docs/staging.md). |
-| Tests | Phoenix: `mix test` using the app's configured adapter (CI also starts Postgres 17); Sinatra: RSpec; Rails: Minitest; Zola: build gate. CLI/library gates vary by stack. |
+| Tests | Phoenix: `mix test` using the app's configured adapter (CI also starts Postgres 17); Sinatra: RSpec; Rails starters: RSpec, Cucumber, coverage and RuboCop; Zola: build gate. CLI/library gates vary by stack. |
 | Rollback | Dynamic services repin an existing image; Zola selects a retained release. `gh workflow run rollback.yml -f tag=<previous-sha>` or the Gitea Actions tab. No database rollback. |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
 | Agent docs | Every generated app ships managed Codex and Claude guidance, workflow roles, and hooks; `agent-docs.sh` handles future updates — see [Agent docs](docs/claude-docs.md) |

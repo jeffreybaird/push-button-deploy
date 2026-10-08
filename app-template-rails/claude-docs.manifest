@@ -1,1 +1,6 @@
 placeholders|MyApp|my_app
+optional|multi-tenancy.md|Optional multi-tenancy
+optional|rbac.md|Optional authentication and authorization
+optional|external-service-integration.md|Optional external services
+optional|payment-integration.md|Optional payments
+optional|object-storage-integration.md|Optional object storage

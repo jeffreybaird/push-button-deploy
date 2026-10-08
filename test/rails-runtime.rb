@@ -13,7 +13,7 @@ end
     scripts = workflow.fetch('jobs').values.flat_map { |job| job.fetch('steps').map { |s| s['run'].to_s } }.join("\n")
     check(scripts.include?('remote.sh swap'), "#{file}: no swap")
     if kind == 'deploy'
-      check(scripts.match?(/(?:bundle exec rails|bin\/rails) test/), "#{file}: no Rails test gate")
+      check(scripts.include?('bin/check'), "#{file}: no Rails quality gate")
       check(scripts.include?('runtime-env.sh sqlite production'), "#{file}: no SQLite runtime environment")
       check(scripts.include?('remote.sh migrate rails'), "#{file}: wrong migration framework")
     else
@@ -25,6 +25,7 @@ file = File.join(root, 'app/.github/workflows/staging.rails.yml')
 check(File.file?(file), 'missing Rails staging workflow')
 workflow = YAML.load_file(file)
 scripts = workflow.fetch('jobs').values.flat_map { |job| job.fetch('steps').map { |s| s['run'].to_s } }.join("\n")
+check(scripts.include?('bin/check'), 'Rails staging must run its quality gate')
 check(scripts.include?('runtime-env.sh sqlite staging'), 'Rails staging must isolate SQLite environment')
 check(scripts.include?('remote.sh migrate rails'), 'Rails staging must prepare its database')
 # Existing workflow-templates.rb checks shell syntax, migration ordering and edge isolation.

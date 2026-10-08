@@ -89,9 +89,16 @@ class Lifecycle(unittest.TestCase):
                 guide = (self.app / entrypoint).read_text()
                 self.assertIn('Rails', guide)
                 self.assertIn('Active Record', guide)
-                self.assertIn('bin/rails test', guide)
+                self.assertIn('bin/check', guide)
                 self.assertNotIn('Sinatra', guide)
                 self.assertNotIn('Sequel', guide)
+        testing = (self.app / 'doc/testing.md').read_text()
+        for requirement in ('RSpec', 'Cucumber', 'SimpleCov', 'RuboCop', 'data-testid',
+                            '100', 'major', 'failure', 'authorization', 'isolation'):
+            self.assertIn(requirement, testing)
+        for path in ('doc/architecture-decisions.md', 'doc/separation-of-concerns.md',
+                     'doc/database.md'):
+            self.assertTrue((self.app / path).is_file(), path)
         before = self.snapshot()
         self.assertEqual('current', self.command('check')['status'])
         self.command('update')
@@ -335,6 +342,35 @@ ensure_app
                 for guidance in ('.docs/project-guidance.md', 'README.md', 'lib/notes.md'):
                     self.assertFalse(any(fnmatch.fnmatchcase(guidance, glob)
                                          for glob in policy['source_globs'] + policy['test_globs']), guidance)
+
+    def test_rails_policies_own_acceptance_features_and_coverage_harness_as_tests(self):
+        self.install('rails')
+        harness = ('features/notes.feature', 'features/step_definitions/notes_steps.rb',
+                   'features/support/env.rb', 'support/coverage.rb', 'script/coverage.rb',
+                   'spec/requests/notes_spec.rb')
+        production = ('app/services/notes/create.rb', 'app/support/events.rb',
+                      'lib/services/export.rb', 'support/runtime.rb', 'script/deploy.rb')
+        for platform in ('codex', 'claude'):
+            policy = json.loads((self.app / f'.{platform}/hooks/policy.json').read_text())
+            for path in harness:
+                with self.subTest(platform=platform, test=path):
+                    self.assertTrue(any(fnmatch.fnmatchcase(path, pattern)
+                                        for pattern in policy['test_globs']), path)
+            for path in production:
+                with self.subTest(platform=platform, source=path):
+                    self.assertFalse(any(fnmatch.fnmatchcase(path, pattern)
+                                         for pattern in policy['test_globs']), path)
+                    self.assertTrue(any(fnmatch.fnmatchcase(path, pattern)
+                                        for pattern in policy['source_globs']), path)
+        # Rails tooling ownership must not silently change other Ruby frameworks.
+        sinatra = self.work / 'sinatra_policy'
+        sinatra.mkdir()
+        self.install('sinatra', app=sinatra)
+        policy = json.loads((sinatra / '.codex/hooks/policy.json').read_text())
+        for path in harness[:5]:
+            with self.subTest(framework='sinatra', path=path):
+                self.assertFalse(any(fnmatch.fnmatchcase(path, pattern)
+                                     for pattern in policy['test_globs']), path)
 
     def test_malformed_manifest_or_claimed_unowned_file_rejects_before_writes(self):
         self.install()
