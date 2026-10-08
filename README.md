@@ -1,6 +1,6 @@
 # push-button-deploy
 
-One command takes you from an **empty directory** to a **freshly generated Phoenix app, Sinatra app, Rails app or Zola site serving HTTPS on a production DigitalOcean droplet**, with a CI/CD pipeline that deploys every push to `main` from that moment on. Pick the stack with `FRAMEWORK` (default `phoenix`; see [Frameworks](docs/frameworks.md)).
+One command takes you from an **empty directory** to a **freshly generated Phoenix app, Sinatra app, Rails app, Zola site or frontend-only React app serving HTTPS on a production DigitalOcean droplet**, with a CI/CD pipeline that deploys every push to `main` from that moment on. Pick the stack with `FRAMEWORK` (default `phoenix`; see [Frameworks](docs/frameworks.md)).
 
 ```bash
 ./bootstrap.sh ~/src/myapp
@@ -8,7 +8,7 @@ One command takes you from an **empty directory** to a **freshly generated Phoen
 # ==> LIVE: https://myapp.example.com
 ```
 
-If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. An existing app with the selected framework's marker (`mix.exs`, `Gemfile`, `config/application.rb`, or `config.toml`) skips generation. Bootstrap still prepares release files, installs deployment templates, and adopts agent docs if no lifecycle manifest exists. Review and commit local work first: bootstrap stages all app changes when committing the pipeline.
+If `~/src/myapp` doesn't exist (or is empty), a new app is generated there for the chosen `FRAMEWORK`. An existing app with the selected framework's marker (`mix.exs`, `Gemfile`, `config/application.rb`, `config.toml`, or a validated React `package.json`) skips generation. Bootstrap still prepares release files, installs deployment templates, and adopts agent docs if no lifecycle manifest exists. Review and commit local work first: bootstrap stages all app changes when committing the pipeline.
 
 **Not everything worth building is a website.** `--cli` and `--no-droplet` build a command-line
 program or a reusable package instead: same repo creation, same pipeline wiring, same one
@@ -27,19 +27,30 @@ Every CLI it generates is a **command**, not a script you configure by exporting
 mytool --format json hello there    # not FORMAT=json ./mytool.sh hello there
 ```
 
+Generate a generic React + TypeScript frontend and deploy it with either code host:
+
+```bash
+FRAMEWORK=react ./bootstrap.sh ~/src/my-frontend
+# Local scaffold only (no cloud provisioning):
+./scripts/new-react-app.sh ~/src/my-frontend
+```
+
+The starter is intentionally small: extend its components into your application.
+See [React requirements and deployment](docs/frameworks.md#react).
+
 ## What you get
 
 | Concern | Implementation |
 |---|---|
 | Compute | One Ubuntu droplet running Docker Compose — which can host **several apps** (see [Tenancy](docs/tenancy.md)) |
 | TLS | Caddy with automatic Let's Encrypt issuance + renewal |
-| Database | SQLite by default, replicated to Spaces; Phoenix can instead use managed Postgres with private-VPC access and verified TLS. Zola has no database. See [Databases](docs/databases.md). |
+| Database | SQLite by default, replicated to Spaces; Phoenix can instead use managed Postgres with private-VPC access and verified TLS. Zola and React have no database. See [Databases](docs/databases.md). |
 | DNS | A record at DNSimple pointing at a reserved IP that survives droplet recreation |
 | Images | Built on amd64 CI runners (GitHub-hosted, or your own for Gitea — see [Gitea](docs/gitea.md)), pushed to DO Container Registry, SHA-pinned |
-| Deploys | Dynamic services: tests → image build → migrations → health-checked blue/green swap. Zola builds and publishes files by symlink. CLI/library apps run build/test CI. |
+| Deploys | Dynamic services: tests → image build → migrations → health-checked blue/green swap. Zola and React build and publish files by symlink. CLI/library apps run build/test CI. |
 | Staging | GitHub dynamic services share one PR slot per app at `<app>-stg.<zone>`; closing the owning PR removes it. See [Staging](docs/staging.md). |
-| Tests | Phoenix: `mix test` using the app's configured adapter (CI also starts Postgres 17); Sinatra: RSpec; Rails starters: RSpec, Cucumber, coverage and RuboCop; Zola: build gate. CLI/library gates vary by stack. |
-| Rollback | Dynamic services repin an existing image; Zola selects a retained release. `gh workflow run rollback.yml -f tag=<previous-sha>` or the Gitea Actions tab. No database rollback. |
+| Tests | Phoenix: `mix test` using the app's configured adapter (CI also starts Postgres 17); Sinatra: RSpec; Rails starters: RSpec, Cucumber, coverage and RuboCop; Zola: build gate; React: Vitest and typechecked Vite build. CLI/library gates vary by stack. |
+| Rollback | Dynamic services repin an existing image; Static apps select a retained release. `gh workflow run rollback.yml -f tag=<previous-sha>` or the Gitea Actions tab. No database rollback. |
 | Migrations | Run via a release task **before** traffic switches; a failed migration leaves the old release serving |
 | Agent docs | Every generated app ships managed Codex and Claude guidance, workflow roles, and hooks; `agent-docs.sh` handles future updates — see [Agent docs](docs/claude-docs.md) |
 | Terraform state | Versioned DO Spaces bucket (S3-compatible backend) |
@@ -83,7 +94,7 @@ The full guide lives in [`docs/`](docs/index.md).
 | [Prerequisites](docs/prerequisites.md) | Required tools, accounts and credentials, the full `.env` reference, `--check` |
 | [Quickstart](docs/quickstart.md) | A single service from empty directory to live HTTPS — plus a droplet-free quickstart |
 | [App types](docs/app-types.md) | `service` / `cli` / `library`, the language↔framework table, and interactive selection |
-| [Frameworks](docs/frameworks.md) | Phoenix, Sinatra, Rails and Zola specifics — generation, CI gate, migrations, image/release |
+| [Frameworks](docs/frameworks.md) | Phoenix, Sinatra, Rails, Zola and React specifics — generation, CI gate, migrations, image/release |
 | [Databases](docs/databases.md) | SQLite (Litestream) vs managed Postgres — tradeoffs and conversion caveats |
 | [Staging](docs/staging.md) | Per-PR staging environments — how they work and how to turn them off |
 | [Tenancy](docs/tenancy.md) | Several apps on one droplet — host apps and tenants |

@@ -17,8 +17,8 @@ MANIFEST = '.agent-docs-manifest.json'
 GUIDANCE = '.docs/project-guidance.md'
 BEGIN = '<!-- BEGIN MANAGED AGENT DOCS -->'
 END = '<!-- END MANAGED AGENT DOCS -->'
-TEMPLATES = {'phoenix': 'app-template', 'sinatra': 'app-template-ruby', 'rails': 'app-template-rails', 'zola': 'app-template-zola'}
-STACKS = {'phoenix': 'service', 'sinatra': 'service', 'rails': 'service', 'zola': 'service',
+TEMPLATES = {'phoenix': 'app-template', 'sinatra': 'app-template-ruby', 'rails': 'app-template-rails', 'zola': 'app-template-zola', 'react': 'app-template-react'}
+STACKS = {'phoenix': 'service', 'sinatra': 'service', 'rails': 'service', 'zola': 'service', 'react': 'service',
           'escript': 'cli', 'ruby-cli': 'cli', 'bash-cli': 'cli', 'ts-cli': 'cli', 'mix': 'library'}
 DEFAULT_SELECTION = {'skip_modules': [], 'skip_agents': [], 'hook': '', 'no_setup': False}
 JSON_CONFIGS = {'.claude/settings.json', '.codex/hooks.json'}
@@ -153,6 +153,7 @@ def policy_for(framework):
         'phoenix': ['ex', 'exs', 'heex', 'eex', 'js', 'ts', 'css'],
         'sinatra': ['rb', 'erb', 'js', 'css'], 'rails': ['rb', 'erb', 'js', 'css'], 'zola': ['html', 'css', 'scss', 'js'],
         'escript': ['ex', 'exs'], 'mix': ['ex', 'exs'], 'ruby-cli': ['rb'],
+        'react': ['ts', 'tsx', 'js', 'jsx', 'css', 'html'],
         'bash-cli': [], 'ts-cli': ['ts', 'js', 'mjs'],
     }[framework]
     source = common + [pattern for ext in extensions for pattern in ('*.' + ext, '**/*.' + ext)]
@@ -162,10 +163,11 @@ def policy_for(framework):
         source += ['bin/*', 'exe/*']
     if framework == 'rails':
         source += ['bin/*', 'config.ru', 'Dockerfile', 'config/*.yml', 'config/**/*.yml']
-    if framework == 'ts-cli':
-        source += ['package.json', 'tsconfig.json']
+    if framework in ('ts-cli', 'react'):
+        source += ['package.json', 'package-lock.json', 'tsconfig*.json']
     tests = ['test/**', 'tests/**', 'spec/**', '**/*_test.py', '**/*_test.exs',
-             '**/*_spec.rb', '**/*.test.ts', '**/*.spec.ts', '**/*.test.js']
+             '**/*_spec.rb', '**/*.test.ts', '**/*.spec.ts', '**/*.test.js', '**/*.spec.js',
+             '**/*.test.tsx', '**/*.spec.tsx', '**/*.test.jsx', '**/*.spec.jsx']
     if framework == 'rails':
         tests += ['features/**', 'support/coverage.rb', 'script/coverage.rb']
     return {'schema_version': 2, 'source_globs': source, 'test_globs': tests}
@@ -233,7 +235,7 @@ def owned_projection(rel, text, own_hooks, template_paths):
 def names_for(root, framework):
     name = root.name.replace('-', '_')
     module = ''.join(word[:1].upper() + word[1:] for word in name.split('_'))
-    if framework == 'zola':
+    if framework in ('zola', 'react'):
         module = root.name.replace('_', ' ').replace('-', ' ').title()
         name = root.name
     elif framework in ('phoenix', 'escript', 'mix') and (root / 'mix.exs').is_file():
@@ -290,6 +292,11 @@ def plan(root, args):
         framework = next((fw for marker, fw in (('mix.exs', 'phoenix'), ('config/application.rb', 'rails'), ('Gemfile', 'sinatra'),
                                                 ('config.toml', 'zola'), ('package.json', 'ts-cli'))
                           if (root / marker).is_file()), None)
+    if framework == 'ts-cli' and args.framework is None and not old:
+        package = json.loads((root / 'package.json').read_text())
+        dependencies = {**package.get('dependencies', {}), **package.get('devDependencies', {})}
+        if all(dependencies.get(name) for name in ('react', 'react-dom')):
+            framework = 'react'
     if framework not in STACKS:
         raise ValueError('Unknown framework; supply --framework ' + '|'.join(STACKS))
     app_type = args.app_type or STACKS[framework]

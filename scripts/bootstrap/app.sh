@@ -19,6 +19,7 @@ ensure_app() {
   # entry point is named after the app (bash: bin/<name>).
   case "$sig" in *'<name>'*) sig="${sig%%<name>*}$(basename "$APP_DIR")${sig#*<name>}" ;; esac
   if [ -f "$APP_DIR/$sig" ]; then
+    if is_react; then validate_react_app "$APP_DIR"; fi
     log "app: using existing $APP_DIR"
     return 0
   fi
@@ -213,7 +214,9 @@ copy_deploy_files() {
   # UNDER THAT NAME rather than teaching edge.sh about frameworks.
   if is_static; then
     # Caddy serves files off disk; publishing is a symlink flip, not a swap.
-    cp "$SCRIPT_DIR/deploy/site.static.caddy.tmpl" "$APP_DIR/deploy/site.caddy.tmpl"
+    local site_template=site.static.caddy.tmpl
+    if is_react; then site_template=site.react.caddy.tmpl; fi
+    cp "$SCRIPT_DIR/deploy/$site_template" "$APP_DIR/deploy/site.caddy.tmpl"
     cp "$SCRIPT_DIR/deploy/publish.sh"             "$APP_DIR/deploy/publish.sh"
     rm -f "$APP_DIR/deploy/swap.sh"
   else
@@ -331,6 +334,7 @@ install_pipeline_files() { # $1 app directory, $2 provider
 # supplied by wants_staging(); toolchain overrides remain optional environment.
 prepare_app() {
   local APP_DIR="$1" APP_TYPE="$2" FRAMEWORK="$3" DATABASE_BACKEND="$4" GIT_PROVIDER="$5"
+  if is_react; then validate_react_app "$APP_DIR"; fi
   if is_rails; then
     # Validate essential deployment inputs before overwriting any pipeline files.
     local required
@@ -355,4 +359,9 @@ prepare_app() {
   if needs_droplet && ! is_static; then
     install_runtime_stack "$APP_DIR" "$FRAMEWORK" "$DATABASE_BACKEND"
   fi
+}
+
+# Check adoption before installing any managed files. No npm scripts execute here.
+validate_react_app() {
+  python3 "$SCRIPT_DIR/scripts/validate-react-app.py" "$1" || fail "React deployment inputs are invalid (see docs/frameworks.md)"
 }

@@ -100,6 +100,7 @@ APP_STACK_TABLE='service|phoenix|elixir|-|mix.exs|-|deploy.yml:deploy.yml rollba
 service|sinatra|ruby|-|Gemfile|new-sinatra-app.sh|deploy.ruby.yml:deploy.yml rollback.ruby.yml:rollback.yml|Sinatra web app (SQLite only)
 service|rails|ruby|-|config/application.rb|new-rails-app.sh|deploy.rails.yml:deploy.yml rollback.rails.yml:rollback.yml|Rails web app (SQLite only)
 service|zola|static|-|config.toml|new-zola-site.sh|deploy.zola.yml:deploy.yml rollback.zola.yml:rollback.yml|Zola static site (no database, no image)
+service|react|typescript|ts|package.json|new-react-app.sh|deploy.react.yml:deploy.yml rollback.zola.yml:rollback.yml|React frontend (no database, no image)
 cli|escript|elixir|beam|mix.exs|new-mix-app.sh --escript|ci.escript.yml:ci.yml|one self-contained executable, via mix escript.build
 cli|ruby-cli|ruby|rb|Gemfile|new-ruby-cli.sh|ci.ruby-cli.yml:ci.yml|a gem-layout CLI on OptionParser, installable with gem install
 cli|bash-cli|bash|sh shell|bin/<name>|new-bash-cli.sh|ci.bash-cli.yml:ci.yml|a dependency-free shell CLI, shellcheck-clean
@@ -174,6 +175,7 @@ is_language_of() { # $1 type, $2 token
 # run first (main does that before anything else).
 needs_droplet() { [ "$(type_droplet "$APP_TYPE")" = yes ]; }
 has_database()  { [ "$(type_database "$APP_TYPE")" = yes ]; }
+framework_is_static() { case "$1" in zola|react) return 0 ;; *) return 1 ;; esac; }
 is_service()    { [ "$APP_TYPE" = service ]; }
 is_cli()        { [ "$APP_TYPE" = cli ]; }
 is_library()    { [ "$APP_TYPE" = library ]; }

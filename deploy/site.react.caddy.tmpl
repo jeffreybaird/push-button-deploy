@@ -1,0 +1,15 @@
+# Static React SPA. Missing assets retain real 404 responses; only page routes
+# fall back to index.html. Revalidate HTML across atomic releases and rollbacks.
+__DOMAIN__ {
+	root * /srv/__SLUG__/current
+	encode zstd gzip
+	@assets path /assets/* *.js *.css *.map *.json *.png *.jpg *.jpeg *.gif *.svg *.ico *.webp *.woff *.woff2 *.txt *.xml
+	handle @assets {
+		file_server
+	}
+	handle {
+		try_files {path} /index.html
+		header Cache-Control "no-cache"
+		file_server
+	}
+}

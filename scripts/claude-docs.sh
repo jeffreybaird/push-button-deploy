@@ -44,6 +44,7 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
     "$CD_ROOT/app-template"|"$CD_LIB_DIR/../app-template") framework=phoenix ;;
     "$CD_ROOT/app-template-ruby"|"$CD_LIB_DIR/../app-template-ruby") framework=sinatra ;;
     "$CD_ROOT/app-template-rails"|"$CD_LIB_DIR/../app-template-rails") framework=rails ;;
+    "$CD_ROOT/app-template-react"|"$CD_LIB_DIR/../app-template-react") framework=react ;;
     "$CD_ROOT/app-template-zola"|"$CD_LIB_DIR/../app-template-zola") framework=zola ;;
   esac
   if [ -n "$framework" ]; then

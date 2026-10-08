@@ -19,7 +19,7 @@ class TemplateEvolution(unittest.TestCase):
         self.app.mkdir()
         self.bundle = self.work / 'bundle'
         self.bundle.mkdir()
-        for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola'):
+        for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola', 'app-template-react'):
             shutil.copytree(ROOT / item, self.bundle / item, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         for item in ROOT.glob('*.sh'):
             shutil.copy2(item, self.bundle / item.name)

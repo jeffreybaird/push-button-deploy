@@ -108,8 +108,8 @@ export SPACES_SECRET_ACCESS_KEY="..."
 
 | Variable | Required? | Purpose |
 |---|---|---|
-| `FRAMEWORK` | no | `phoenix` (default), `sinatra`, `rails` or `zola`. Names the stack — and, being unique across app types, also picks the type. `sinatra` and `rails` are SQLite-only; `zola` is a static site with no database. Chosen once per project. See [Frameworks](frameworks.md). |
-| `LANGUAGE` | no | The language within the app type: service `elixir` (default) / `ruby` / `static`; cli `elixir` (default) / `ruby` / `bash` / `typescript`; library `elixir`. Same choice as `--lang`. |
+| `FRAMEWORK` | no | `phoenix` (default), `sinatra`, `rails`, `zola` or `react`. Names the stack — and, being unique across app types, also picks the type. `sinatra` and `rails` are SQLite-only; `zola` and `react` are static apps with no database. Chosen once per project. See [Frameworks](frameworks.md). |
+| `LANGUAGE` | no | The language within the app type: service `elixir` (default) / `ruby` / `static` / `typescript`; cli `elixir` (default) / `ruby` / `bash` / `typescript`; library `elixir`. Same choice as `--lang`. |
 | `APP_TYPE` | no | `service` (default), `cli`, or `library`. `cli`/`library` provision nothing; better passed per-run as `--cli` / `--no-droplet`. See [App types](app-types.md). |
 | `DATABASE_BACKEND` | no | `sqlite` (default) or `postgres`. Chosen once at first apply; don't flip it. `sinatra` and `rails` force `sqlite`. See [Databases](databases.md). |
 | `PROJECT_NAME` | no | Infra naming (DB, VPC, tag). **Immutable after first apply** — the script guards it. |
@@ -162,3 +162,7 @@ or a guarantee that later Terraform/provider calls will succeed.
 
 Next: the [Quickstart](quickstart.md) walks a service from empty directory to
 live HTTPS.
+
+React scaffolding needs no local Node or npm. For local development, install the
+Node version in the generated `.node-version`, then run `npm ci`. Both CI
+providers install that version and use the committed lock.

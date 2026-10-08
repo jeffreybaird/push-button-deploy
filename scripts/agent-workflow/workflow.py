@@ -47,7 +47,7 @@ def release_metadata():
     digest = hashlib.sha256()
     inputs = list(BASE.glob('*.py')) + [BASE / 'release.json']
     bundle = BASE.parent.parent
-    for name in ('app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola'):
+    for name in ('app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola', 'app-template-react'):
         template = bundle / name
         inputs.extend(p for p in template.rglob('*') if p.is_file() and
                       (p.name in ('CLAUDE.md', 'claude-docs.manifest') or

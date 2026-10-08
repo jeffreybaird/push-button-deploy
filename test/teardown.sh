@@ -107,6 +107,40 @@ run_teardown --yes
 [ "$result" = 0 ]
 assert_not grep -q doctl "$EVENTS"
 
+# React remains a static service when inferred from its app or explicit config.
+for recognition in manifest explicit; do
+  make_host "react-$recognition"
+  rm "$APP/Gemfile"
+  printf '{"dependencies":{"react":"19.2.0","react-dom":"19.2.0"},"devDependencies":{"vite":"7.0.0"}}\n' > "$APP/package.json"
+  printf '{"framework":"react","app_type":"service"}\n' > "$APP/.agent-docs-manifest.json"
+  if [ "$recognition" = explicit ]; then FRAMEWORK=react run_teardown --yes
+  else run_teardown --yes; fi
+  [ "$result" = 0 ] || { cat "$WORK/output"; exit 1; }
+  assert_not grep -q doctl "$EVENTS"
+  grep -q 'infra/app destroy' "$EVENTS"
+done
+
+# Unrecognized package services must fail closed before destructive boundaries.
+for metadata in malformed unrelated; do
+  make_host "react-invalid-$metadata"
+  rm "$APP/Gemfile"
+  printf 'service\n' > "$APP/.app-type"
+  if [ "$metadata" = malformed ]; then printf '{broken' > "$APP/package.json"
+  else printf '{"name":"not-react","dependencies":{}}\n' > "$APP/package.json"; fi
+  run_teardown --yes
+  [ "$result" -ne 0 ]
+  [ ! -s "$EVENTS" ] || { cat "$EVENTS"; exit 1; }
+done
+# An actual Node CLI keeps its repository-only scope even with package metadata.
+make_app node-cli
+rm "$APP/Gemfile"
+printf 'cli\n' > "$APP/.app-type"
+printf '{"name":"node-cli","bin":{"node-cli":"dist/cli.js"}}\n' > "$APP/package.json"
+run_teardown --yes --delete-repo
+[ "$result" = 0 ]
+grep -q 'gh repo delete --yes' "$EVENTS"
+assert_not grep -E 'terraform|doctl|ssh' "$EVENTS"
+
 # Confirmation rejection makes no destructive calls.
 make_host rejected
 run_teardown <<< 'wrong'

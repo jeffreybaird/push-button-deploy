@@ -28,6 +28,14 @@ teardown_read_app_identity() {
     APP_NAME="$(basename "$APP_DIR")"
   elif [ -f "$APP_DIR/config.toml" ]; then
     APP_NAME="$(basename "$APP_DIR")"; STATIC=1
+  elif [ -f "$APP_DIR/package.json" ]; then
+    APP_NAME="$(basename "$APP_DIR")"
+    if [ "$APP_TYPE" = service ]; then
+      command -v python3 >/dev/null || fail "python3 is required to identify a React service safely"
+      python3 "$SCRIPT_DIR/scripts/validate-react-app.py" --identify "$APP_DIR" \
+        || fail "unrecognized package.json service; cannot determine teardown scope"
+      STATIC=1
+    fi
   fi
   if [ -z "${PROJECT_NAME:-}" ]; then
     [ -n "$APP_NAME" ] || fail "PROJECT_NAME not set and no app name can be derived"

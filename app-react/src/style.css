@@ -1,0 +1,25 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #182c3c;
+  background: #f2f6f7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+body { margin: 0; min-width: 320px; }
+main { max-width: 42rem; margin: 12vh auto; padding: 2rem; }
+h1 { font-size: clamp(2.5rem, 8vw, 4.5rem); margin: .5rem 0; }
+p { line-height: 1.6; }
+.eyebrow { color: #30616d; font-weight: 600; }
+button {
+  margin: 1rem 0;
+  padding: .85rem 1.4rem;
+  border: 0;
+  border-radius: .5rem;
+  background: #14576a;
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: #0b4050; }
+button:focus-visible { outline: 3px solid #b75e0a; outline-offset: 4px; }
+.hint { color: #52616b; font-size: .9rem; }

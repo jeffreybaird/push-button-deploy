@@ -47,6 +47,9 @@ retained for history and are not discovered.
 | `rails-runtime.rb` | Rails deploy and rollback workflows for both providers, GitHub staging, migration dispatch, persistent SQLite runtime services and healthcheck policy. |
 | `rails-quality.rb` | Executes workflow and generated `bin/check` commands against boundary doubles: complete gate ordering, first failure propagation, stale coverage removal, test database isolation, and adopted-app fallback only when `bin/check` is absent. |
 | `rails-interactive.sh` | Unique Ruby language choice, explicit Rails/Sinatra selection and SQLite-only interactive policy. |
+| `react.sh` | React registry/static policy, offline scaffold, strict adoption, preserved source, managed docs, and both provider artifact sets. |
+| `react-interactive.sh` | TypeScript service selection with no database or staging prompts. |
+| `react-workflows.rb` | Parsed npm install/test/build ordering; failed tests, failed builds and absent output prevent packaging for both providers. |
 | `agent-workflow.sh` | Imported native guard, audit, installer and registered maintenance contracts. |
 | `agent-docs.sh` | Arbitrary app paths, framework policies, managed updates, preservation, drift rejection, selection changes, relocated bundles and scaffold integration. |
 | `workflow-scripts.sh` | Literal env serialization, private permissions, staging backup omission, remote destinations and shared-edge preservation. |
@@ -98,3 +101,9 @@ compatibility, or Terraform lifecycle isolation. `scripts/verify-isolation.sh`
 is a separate live-state check and is intentionally outside this runner.
 
 `terraform-backend.sh` covers local migration, remote reconnection, stale and malformed caches, tenant keys, custom data directories, preserved state/cache files, and init failure propagation.
+
+The React offline suite checks the generated component test fixture without
+installing npm dependencies. To validate the real scaffold, generate a temporary
+app, use its pinned Node version, and run `npm ci`, `npm test`, `npm run build`,
+and `npm audit`. Browser interaction and real Caddy route/cache checks are
+additional smoke tests; the offline suite does not prove live cloud deployment.

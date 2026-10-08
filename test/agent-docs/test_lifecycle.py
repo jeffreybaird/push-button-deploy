@@ -45,7 +45,7 @@ class Lifecycle(unittest.TestCase):
     def bundle(self):
         dest = self.work / 'relocated tool bundle'
         dest.mkdir()
-        for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola'):
+        for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola', 'app-template-react'):
             shutil.copytree(ROOT / item, dest / item, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         for item in ROOT.glob('*.sh'):
             shutil.copy2(item, dest / item.name)
@@ -61,7 +61,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(before, self.snapshot(mtimes=True))
 
     def test_every_framework_installs_both_native_roles_and_app_owned_guidance(self):
-        for framework, app_type in [('phoenix', 'service'), ('sinatra', 'service'), ('rails', 'service'), ('zola', 'service'),
+        for framework, app_type in [('phoenix', 'service'), ('sinatra', 'service'), ('rails', 'service'), ('zola', 'service'), ('react', 'service'),
                                     ('escript', 'cli'), ('ruby-cli', 'cli'), ('bash-cli', 'cli'),
                                     ('ts-cli', 'cli'), ('mix', 'library')]:
             with self.subTest(framework=framework):
@@ -80,6 +80,22 @@ class Lifecycle(unittest.TestCase):
                 for guide in ('AGENTS.md', 'CLAUDE.md'):
                     self.assertIn('.docs/project-guidance.md', (app / guide).read_text())
                 self.assertFalse((app / '.git').exists())
+                self.assertEqual('current', self.command('check', app=app)['status'])
+
+    def test_infers_react_without_misclassifying_typescript_cli(self):
+        for framework, dependencies in [('react', {'react': '^19.0.0', 'react-dom': '^19.0.0'}),
+                                        ('ts-cli', {})]:
+            with self.subTest(framework=framework):
+                app = self.work / framework
+                app.mkdir()
+                (app / 'package.json').write_text(json.dumps({
+                    'name': framework, 'dependencies': dependencies,
+                    'devDependencies': {'typescript': '^5.0.0'},
+                }))
+                self.command('update', app=app)
+                manifest = json.loads((app / '.agent-docs-manifest.json').read_text())
+                self.assertEqual(framework, manifest['framework'])
+                self.assertEqual('service' if framework == 'react' else 'cli', manifest['app_type'])
                 self.assertEqual('current', self.command('check', app=app)['status'])
 
     def test_rails_guidance_uses_rails_conventions(self):

@@ -1,0 +1,92 @@
+# React static deployment: test and typecheck/build before uploading any release.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  # Redeploy whatever is on main without pushing a commit. Repo variables
+  # (DOMAIN, APP_SLUG, DROPLET_HOST) are not reflected in git, so changing one
+  # otherwise has no way to reach the droplet: a bootstrap re-run that finds
+  # nothing to commit triggers no deploy, and the old value keeps serving.
+  workflow_dispatch:
+
+# One deploy at a time; queue rather than cancel so a publish is never
+# interrupted half-way.
+concurrency:
+  group: deploy-${{ gitea.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HOST: ${{ vars.DROPLET_HOST }}
+      APP_SLUG: ${{ vars.APP_SLUG }}
+      STACK_DIR: /root/apps/${{ vars.APP_SLUG }}
+      RELEASE: ${{ gitea.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Test application
+        run: npm test
+      - name: Build static application
+        run: |
+          rm -rf dist
+          npm run build
+          test -s dist/index.html || { echo "::error::build produced no dist/index.html"; exit 1; }
+
+      # Ship one file, not a directory tree: a tarball is a single scp and it
+      # extracts atomically enough that a half-uploaded release can't be
+      # published (publish.sh runs only after extraction succeeds).
+      - name: Package release
+        run: tar -czf site.tgz -C dist .
+
+      # No firewall hole-punch here (see file header) — the runner's IP is
+      # already allow-listed for SSH, statically, in infra-app/firewall.tf.
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          bash deploy/ci/configure-ssh.sh
+
+      - name: Create stack directories
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "mkdir -p /root/caddy/sites '$STACK_DIR/releases/$RELEASE'"
+
+      # /root/caddy is the SHARED edge proxy — one per droplet, host-owned. Every
+      # app ships these files so that ANY app's deploy can stand the proxy up,
+      # including the first one on a fresh droplet.
+      - name: Copy shared edge files to droplet
+        run: |
+          bash deploy/ci/remote.sh upload-edge
+
+      - name: Upload release
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            deploy/publish.sh site.tgz \
+            root@"$HOST":"$STACK_DIR"/
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "cd '$STACK_DIR' && tar -xzf site.tgz -C 'releases/$RELEASE' && rm -f site.tgz"
+
+      # Shared network + shared Caddy + this site's route. Runs BEFORE the
+      # publish so that on a first deploy the route exists the moment there is
+      # something to serve. (On a droplet still running the old single-stack
+      # layout this also performs the one-time migration — see deploy/edge.sh.)
+      - name: Prepare shared edge (network, Caddy, route)
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+        run: |
+          bash deploy/ci/remote.sh prepare-edge production
+
+      # The deploy itself: one atomic symlink move. Old releases are kept for
+      # rollback (KEEP_RELEASES in publish.sh).
+      - name: Publish release
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@"$HOST" \
+            "bash '$STACK_DIR'/publish.sh '$RELEASE'"

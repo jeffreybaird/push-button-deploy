@@ -57,14 +57,14 @@
 # adds a DNS record pointing at the host's IP, gets its own stack directory,
 # compose project and volumes on the droplet, and contributes one site file to
 # the droplet's shared Caddy. A tenant must be a SQLite app or a static site
-# (FRAMEWORK=zola): a SQLite tenant keeps its own file on its own volume with its
+# (FRAMEWORK=zola or react): a SQLite tenant keeps its own file on its own volume with its
 # own Litestream prefix, and a static tenant stores nothing at all.
 #
 # The host is named by its APP DIRECTORY because that is where its Terraform
 # roots live: the tenant reads the host's state for the droplet IP, firewall ID
 # and state bucket, so a recreated droplet is picked up automatically.
 #
-# PR STAGING: every app with a server-side runtime (i.e. not FRAMEWORK=zola)
+# PR STAGING: every app with a server-side runtime (i.e. not a static Zola or React app)
 # also gets a staging name, <record>-stg.<zone>, pointed at the same droplet.
 # Opening a pull request against main stands a complete environment up behind it
 # — its own compose project, volumes, database and Caddy route — and closing the
@@ -81,13 +81,13 @@
 #                     the flags above make, for a .env. See scripts/app-types.sh.
 #   LANGUAGE          the language within the app type — the same choice --lang
 #                     and `--cli <lang>` make. service: 'elixir' (default),
-#                     'ruby' or 'static'. cli: 'elixir' (default), 'ruby',
+#                     'ruby', 'static' or 'typescript'. cli: 'elixir' (default), 'ruby',
 #                     'bash' or 'typescript'. library: 'elixir'.
 #   FRAMEWORK         the stack within the app type, by its own name rather than
 #                     its language; unique across types, so naming one alone also
-#                     picks the type. service: 'phoenix' (default), 'sinatra' or
-#                     'zola'. 'sinatra' is SQLite-only and forces
-#                     DATABASE_BACKEND=sqlite; 'zola' is a STATIC site with no
+#                     picks the type. service: 'phoenix' (default), 'sinatra',
+#                     'rails', 'zola' or 'react'. Sinatra/Rails force SQLite and
+#                     DATABASE_BACKEND=sqlite; 'zola' and 'react' are STATIC apps with no
 #                     database at all (DATABASE_BACKEND=none) and no container
 #                     image. cli: 'escript' (default), 'ruby-cli', 'bash-cli' or
 #                     'ts-cli'. library: 'mix'. Everything outside 'service' is
@@ -513,13 +513,13 @@ interactive() {
     # Database: only where the type may have one AND the framework does not force
     # it (sinatra is SQLite-only, zola has none). Matches resolve_app_config's
     # coercions, so nothing offered here gets silently overridden later.
-    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != rails ] && [ "$fw" != zola ]; then
+    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != rails ] && ! framework_is_static "$fw"; then
       ask_menu "Database backend?" "${DATABASE_BACKEND:-sqlite}" \
         < <(printf 'sqlite|a file on the droplet, streamed to Spaces by Litestream (~$0)\npostgres|DigitalOcean Managed Postgres, private-VPC (~$15/mo)\n')
       DATABASE_BACKEND="$REPLY_VALUE"; export DATABASE_BACKEND
     fi
     # PR staging: GitHub only (no Gitea workflow yet) and never for a static site.
-    if [ "$GIT_PROVIDER" = github ] && [ "$fw" != zola ]; then
+    if [ "$GIT_PROVIDER" = github ] && ! framework_is_static "$fw"; then
       local stg_default=y; [ "${ENABLE_STAGING:-true}" = false ] && stg_default=n
       ask_yesno "Give every PR a staging environment at <app>-stg.<zone>?" "$stg_default"
       ENABLE_STAGING="$REPLY_VALUE"; export ENABLE_STAGING
@@ -555,10 +555,10 @@ interactive() {
   printf '    directory   %s\n' "$(abs_dir "$INTERACTIVE_APP_DIR")" >&2
   printf '    code host   %s\n' "$GIT_PROVIDER" >&2
   if [ "$(type_droplet "$type")" = yes ]; then
-    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != rails ] && [ "$fw" != zola ]; then
+    if [ "$(type_database "$type")" = yes ] && [ "$fw" != sinatra ] && [ "$fw" != rails ] && ! framework_is_static "$fw"; then
       printf '    database    %s\n' "${DATABASE_BACKEND:-sqlite}" >&2
     fi
-    [ "$GIT_PROVIDER" = github ] && [ "$fw" != zola ] \
+    [ "$GIT_PROVIDER" = github ] && ! framework_is_static "$fw" \
       && printf '    staging     %s\n' "${ENABLE_STAGING:-true}" >&2
     [ -n "${HOST_APP_DIR:-}" ] && printf '    host app    %s  (tenant)\n' "$HOST_APP_DIR" >&2
   fi

@@ -7,7 +7,7 @@ A shared staging slot per app at `<app>-stg.<zone>`, updated by eligible pull re
 Opening a pull request against `main` stands a **complete copy of the app** up on
 the same droplet and serves it at `<app>-stg.<zone>`; closing the PR destroys it.
 Pushing to an open PR redeploys it. This is on by default on GitHub for apps with a server-side
-runtime — Phoenix, Sinatra and Rails, host apps and tenants alike. **Static (`zola`)
+runtime — Phoenix, Sinatra and Rails, host apps and tenants alike. **Static (`zola` and `react`)
 sites are excluded**: they have no environment to build, only files a symlink
 points at.
 

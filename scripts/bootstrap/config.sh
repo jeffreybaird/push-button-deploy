@@ -7,7 +7,8 @@ is_sinatra() { [ "$FRAMEWORK" = sinatra ]; }
 is_rails() { [ "$FRAMEWORK" = rails ]; }
 is_phoenix() { [ "$FRAMEWORK" = phoenix ]; }
 is_zola() { [ "$FRAMEWORK" = zola ]; }
-is_static() { is_zola; }
+is_react() { [ "$FRAMEWORK" = react ]; }
+is_static() { framework_is_static "$FRAMEWORK"; }
 is_tenant() { [ -n "${HOST_APP_DIR:-}" ]; }
 wants_staging() { [ "${ENABLE_STAGING:-true}" = true ] && needs_droplet && ! is_static && is_github; }
 staging_enabled() { [ -n "${STAGING_DOMAIN:-}" ]; }
@@ -23,7 +24,7 @@ resolve_database_backend() {
   # silent: say so when the incoming value actually differed.
   local requested_backend="${DATABASE_BACKEND}"
   if is_sinatra || is_rails;      then DATABASE_BACKEND="sqlite"; fi
-  if is_zola;         then DATABASE_BACKEND="none"; fi
+  if is_static;         then DATABASE_BACKEND="none"; fi
   if ! has_database;  then DATABASE_BACKEND="none"; fi
   # Only 'postgres' is worth a warning: it is the one request whose silent
   # downgrade would change what gets provisioned, billed and backed up. Ignoring
@@ -64,8 +65,8 @@ validate_app_config() {
     # 'none' is never selectable by hand: it is what FRAMEWORK=zola and every
     # droplet-free type imply, and the coercion in resolve_database_backend is the only
     # thing that sets it.
-    none) is_zola || ! has_database \
-        || fail "DATABASE_BACKEND=none is only valid for FRAMEWORK=zola" ;;
+    none) is_static || ! has_database \
+        || fail "DATABASE_BACKEND=none is only valid for a static framework (zola or react)" ;;
     *) fail "DATABASE_BACKEND must be 'postgres' or 'sqlite' (got '$DATABASE_BACKEND')" ;;
   esac
 

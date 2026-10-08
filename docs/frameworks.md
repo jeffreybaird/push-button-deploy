@@ -2,7 +2,7 @@
 
 [← Docs index](index.md) · push-button-deploy
 
-The four `service` stacks — Phoenix, Sinatra, Rails and Zola — and how each is
+The five `service` stacks — Phoenix, Sinatra, Rails, Zola and React — and how each is
 generated, tested, built and released.
 
 ## At a glance
@@ -10,19 +10,19 @@ generated, tested, built and released.
 `FRAMEWORK` picks the service stack the bootstrap generates and deploys. Set it
 once, before the first `./bootstrap.sh`, in `.env` or the environment.
 
-| | `phoenix` (default) | `sinatra` | `rails` | `zola` |
-|---|---|---|---|---|
-| Kind | dynamic app | dynamic app | dynamic app | **static site** |
-| Language | Elixir | Ruby 3.3+ | Ruby 3.3+ | Markdown + Tera |
-| App | `mix phx.new` (Phoenix 1.8) | `scripts/new-sinatra-app.sh` | `scripts/new-rails-app.sh` | `scripts/new-zola-site.sh` |
-| Server | `mix release` (OTP) | Puma (Rack) | Puma (Rails) | none — Caddy serves files |
-| Skill docs | `app-template/` | `app-template-ruby/` | `app-template-rails/` | `app-template-zola/` |
-| Database | `postgres` or `sqlite` | `sqlite` only (forced) | `sqlite` only (forced) | none (forced) |
-| Additional framework tools | `mix` (+ `phx_new` to generate) | `openssl`; no local Ruby | `openssl`; no local Ruby | no local Zola |
-| CI gate | `mix test` | `bundle exec rspec` | `bin/check` (RSpec, Cucumber, coverage, RuboCop, audit) | `zola build` |
-| Migrations | `Release.migrate()` | `rake db:migrate` | `rails db:prepare` | n/a |
-| Container image | built + pushed to DOCR | built + pushed to DOCR | built + pushed to DOCR | **none** |
-| Release | blue/green swap | blue/green swap | blue/green swap | symlink flip |
+| | `phoenix` (default) | `sinatra` | `rails` | `zola` | `react` |
+|---|---|---|---|---| --- |
+| Kind | dynamic app | dynamic app | dynamic app | **static site** | **static SPA** |
+| Language | Elixir | Ruby 3.3+ | Ruby 3.3+ | Markdown + Tera | TypeScript + React |
+| App | `mix phx.new` (Phoenix 1.8) | `scripts/new-sinatra-app.sh` | `scripts/new-rails-app.sh` | `scripts/new-zola-site.sh` | `scripts/new-react-app.sh` |
+| Server | `mix release` (OTP) | Puma (Rack) | Puma (Rails) | none — Caddy serves files | none — Caddy serves files |
+| Skill docs | `app-template/` | `app-template-ruby/` | `app-template-rails/` | `app-template-zola/` | `app-template-react/` |
+| Database | `postgres` or `sqlite` | `sqlite` only (forced) | `sqlite` only (forced) | none (forced) | none (forced) |
+| Additional framework tools | `mix` (+ `phx_new` to generate) | `openssl`; no local Ruby | `openssl`; no local Ruby | no local Zola | no local Node to scaffold |
+| CI gate | `mix test` | `bundle exec rspec` | `bin/check` (RSpec, Cucumber, coverage, RuboCop, audit) | `zola build` | `npm test` + `npm run build` |
+| Migrations | `Release.migrate()` | `rake db:migrate` | `rails db:prepare` | n/a | n/a |
+| Container image | built + pushed to DOCR | built + pushed to DOCR | built + pushed to DOCR | **none** | **none** |
+| Release | blue/green swap | blue/green swap | blue/green swap | symlink flip | symlink flip |
 
 The three dynamic frameworks share the same infra, TLS, blue/green swap, registry
 and rollback path — only the app-runtime pieces differ. All stacks need the
@@ -177,3 +177,49 @@ Install an existing Zola site's agent docs with
   (`app-template*/`) each framework injects into the generated app.
 - [App types](app-types.md) — the broader `service` / `cli` / `library` choice
   these frameworks live under.
+
+## React
+
+**Language:** TypeScript. A generic React + Vite single-page application, served
+as static files. Select it with `FRAMEWORK=react` or `--service typescript`
+(`ts` also works). TypeScript CLIs continue to use `--cli typescript`.
+
+```bash
+FRAMEWORK=react ./bootstrap.sh ~/src/my-frontend
+GIT_PROVIDER=gitea FRAMEWORK=react ./bootstrap.sh ~/src/my-frontend
+# Generate locally without infrastructure or cloud credentials:
+./scripts/new-react-app.sh ~/src/my-frontend
+cd ~/src/my-frontend
+npm ci
+npm run dev
+```
+
+The scaffold includes React, TypeScript, Vite, a meaningful Vitest component test,
+a committed npm lock, and a `.node-version` pin. Scaffolding requires no local
+Node installation or network; development needs the pinned Node version. Use
+`npm test` and `npm run build` (TypeScript checking followed by Vite) before
+shipping changes. Edit `src/App.tsx` to build the desired UI; the starter makes
+no assumptions about application-specific models, screens, or persistence.
+
+Both providers run `npm ci`, tests, and the production build before packaging
+`dist/`. A missing `dist/index.html` fails deployment. Publication and rollback
+reuse the atomic static release symlink; there is no container image, registry,
+server runtime, database, or PR staging. Host and tenant deployments both work.
+Caddy falls back to `index.html` for client-side routes, retains 404 for missing
+assets, and sends `Cache-Control: no-cache` for page responses. Zola keeps its
+own static 404 behavior.
+
+Existing apps must declare React, React DOM and Vite; supply nonempty `dev`,
+`test`, and `build` npm scripts; and commit `index.html`, `.node-version`, and a
+version-2-or-newer `package-lock.json` matching root dependency declarations.
+Bootstrap checks these before writing docs or deployment files, preserving app
+source. CI additionally checks the actual install, test, build and output. Keep
+Vite's root base `/`, `dist` output and hashed assets under `assets/`; custom
+build configurations must honor those deployment conventions. SSR frameworks,
+Node APIs and arbitrary npm applications are not adopted as React static apps.
+
+All browser code and `VITE_*` configuration is public. Use browser storage for
+explicitly local persistence, or a separately operated API for shared data and
+server-side authorization. No secret or managed data service is generated.
+Manage the app's React guidance using `agent-docs.sh configure <dir> --framework
+react`; later use `check`, `diff`, and `update` normally.

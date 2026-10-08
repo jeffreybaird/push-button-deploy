@@ -15,11 +15,11 @@ shape. Each stack also has a **framework** name — `sinatra`,
 | | `--service` (default) | `--cli` | `--no-droplet` (alias `--library`) |
 |---|---|---|---|
 | What it is | a web app served over HTTPS | a command-line program | a reusable package |
-| Languages | `elixir`, `ruby`, `static` | `elixir`, `ruby`, `bash`, `typescript` | `elixir` |
-| Frameworks | `phoenix`, `sinatra`, `rails`, `zola` | `escript`, `ruby-cli`, `bash-cli`, `ts-cli` | `mix` |
+| Languages | `elixir`, `ruby`, `static`, `typescript` | `elixir`, `ruby`, `bash`, `typescript` | `elixir` |
+| Frameworks | `phoenix`, `sinatra`, `rails`, `zola`, `react` | `escript`, `ruby-cli`, `bash-cli`, `ts-cli` | `mix` |
 | Droplet, DNS, TLS | yes | **none** | **none** |
 | Database | `postgres` / `sqlite` / none | **none** | **none** |
-| Container registry | yes (except `zola`) | **none** | **none** |
+| Container registry | yes (except `zola` and `react`) | **none** | **none** |
 | PR staging | GitHub dynamic services only; one shared slot per app | **none** | **none** |
 | Credentials needed | DO + DNSimple + Spaces + SSH | **code host only** | **code host only** |
 | Local tools | service tools in [Prerequisites](prerequisites.md), plus `mix` for Phoenix | `git`, `curl`, Python 3.11+, `gh` or `jq` | same as CLI |

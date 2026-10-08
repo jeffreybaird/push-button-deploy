@@ -7,13 +7,14 @@ cd_camelize() {
 
 # ---- framework <-> template (only the roots that exist today) -------------------
 
-cd_frameworks() { printf 'phoenix sinatra rails zola\n'; }
+cd_frameworks() { printf 'phoenix sinatra rails zola react\n'; }
 
 cd_template_dir() { # $1 framework -> template root path (empty if unknown)
   case "$1" in
     phoenix) printf '%s\n' "$CD_ROOT/app-template" ;;
     sinatra) printf '%s\n' "$CD_ROOT/app-template-ruby" ;;
     rails)   printf '%s\n' "$CD_ROOT/app-template-rails" ;;
+    react)   printf '%s\n' "$CD_ROOT/app-template-react" ;;
     zola)    printf '%s\n' "$CD_ROOT/app-template-zola" ;;
   esac
 }
@@ -24,6 +25,9 @@ cd_infer_framework() { # $1 dir -> framework or empty
   [ -f "$1/config/application.rb" ] && { printf 'rails\n'; return; }
   [ -f "$1/Gemfile" ]     && { printf 'sinatra\n'; return; }
   [ -f "$1/config.toml" ] && { printf 'zola\n';    return; }
+  if [ -f "$1/package.json" ] && python3 "$CD_ROOT/scripts/validate-react-app.py" --identify "$1" 2>/dev/null; then
+    printf 'react\n'; return
+  fi
   return 0
 }
 
@@ -45,7 +49,7 @@ cd_values_for() { # $1 framework, $2 app_dir
     sinatra|rails)
       name="$(printf '%s' "$base" | tr '-' '_')"
       printf '%s|%s\n' "$(cd_camelize "$name")" "$name" ;;
-    zola)
+    zola|react)
       title="$(printf '%s' "$base" | tr '_-' '  ' | awk '{for(i=1;i<=NF;i++){$i=toupper(substr($i,1,1)) substr($i,2)}; print}')"
       printf '%s|%s\n' "$title" "$base" ;;
     *) fail "claude-docs: no value derivation for framework '$fw'" ;;
