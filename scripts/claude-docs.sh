@@ -63,7 +63,7 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
   fi
   [ -n "$tdir" ] && [ -n "$adir" ] || fail "cd_inject: template_dir and app_dir required"
   [ -f "$tdir/CLAUDE.md" ] || fail "no CLAUDE.md in $tdir"
-  [ -d "$tdir/.claude" ] || fail "no .claude/ in $tdir"
+  [ -d "$tdir/.docs" ] || [ -d "$tdir/.claude" ] || fail "no .docs/ or .claude/ in $tdir"
 
   local toks modtok apptok rel layout
   toks="$(cd_placeholders "$tdir")"
@@ -72,6 +72,11 @@ cd_inject() { # template_dir, app_dir, module_value, app_value
   cd_validate_hook "$tdir"
   for rel in project-guidance.md agent-workflow.md; do
     [ ! -f "$tdir/.claude/$rel" ] || fail "reserved shared guidance path: .docs/$rel"
+    [ ! -f "$tdir/.docs/$rel" ] || fail "reserved shared guidance path: .docs/$rel"
+  done
+  for module in "$tdir"/.docs/*.md; do
+    [ -f "$module" ] || continue
+    [ ! -f "$tdir/.claude/${module##*/}" ] || fail "ambiguous shared guidance source: ${module##*/}"
   done
 
   # Validate every destination before the first write. Never follow a link

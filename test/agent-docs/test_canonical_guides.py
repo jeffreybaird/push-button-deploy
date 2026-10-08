@@ -43,7 +43,7 @@ class CanonicalGuides(unittest.TestCase):
         return app
 
     def assert_canonical(self, app, framework):
-        modules = [p.name for p in (ROOT / TEMPLATES[framework] / '.claude').glob('*.md')]
+        modules = [p.name for directory in ('.claude', '.docs') for p in (ROOT / TEMPLATES[framework] / directory).glob('*.md')]
         manifest = json.loads((app / '.agent-docs-manifest.json').read_text())
         for module in modules:
             with self.subTest(module=module):
@@ -112,7 +112,7 @@ class CanonicalGuides(unittest.TestCase):
                         current_manifest = json.loads((app / name).read_text())
                         self.assertEqual(set(old_manifest), set(current_manifest))
                         self.assertEqual(old_manifest['version'], current_manifest['version'])
-                        self.assertEqual(old_manifest['installer']['version'], current_manifest['installer']['version'])
+                        self.assertEqual(json.loads((ROOT / 'scripts/agent-workflow/release.json').read_text())['installer_version'], current_manifest['installer']['version'])
                         self.assertRegex(current_manifest['installer']['source_commit'], r'^[0-9a-f]{40,64}$')
                         self.assertEqual(set(old_manifest['sha256']) - {'.claude/testing.md'},
                                          set(current_manifest['sha256']))
@@ -123,7 +123,7 @@ class CanonicalGuides(unittest.TestCase):
                         expected = contents
                         if name.endswith(".md"):
                             expected = expected.replace(b"`.claude/` detail docs", b"`.docs/` detail docs")
-                            for module in (ROOT / TEMPLATES[framework] / ".claude").glob("*.md"):
+                            for module in [p for directory in ('.claude', '.docs') for p in (ROOT / TEMPLATES[framework] / directory).glob('*.md')]:
                                 expected = expected.replace((".claude/" + module.name).encode(), (".docs/" + module.name).encode())
                                 expected = expected.replace(("doc/" + module.name).encode(), (".docs/" + module.name).encode())
                         self.assertEqual(expected, (app / name).read_bytes(), name)
@@ -148,7 +148,7 @@ class CanonicalGuides(unittest.TestCase):
             with self.subTest(framework=framework):
                 app = self.work / framework
                 (app / '.docs').mkdir(parents=True)
-                module = next((ROOT / TEMPLATES[framework] / '.claude').glob('*.md')).name
+                module = next(p for directory in ('.claude', '.docs') for p in (ROOT / TEMPLATES[framework] / directory).glob('*.md')).name
                 (app / '.docs' / module).write_text('Local app-owned supporting rules.\n')
                 before = self.snapshot(app)
                 self.cli(app, 'update', '--framework', framework, expected=2)

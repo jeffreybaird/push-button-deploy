@@ -12,7 +12,7 @@ cd_validate_hook() {
 cd_selected_files() { # template root -> relative destination paths, one per line
   local tdir="$1" src base
   printf 'CLAUDE.md\nAGENTS.md\n'
-  for src in "$tdir"/.claude/*.md; do
+  for src in "$tdir"/.docs/*.md "$tdir"/.claude/*.md; do
     [ -f "$src" ] || continue
     base="${src##*/}"
     cd_in_list "$base" "${CD_SKIP_MODULES:-}" && continue
@@ -43,7 +43,12 @@ cd_source_file() { # template root, relative destination -> selected source
       else
         printf '%s/.claude/settings.json\n' "$1"
       fi ;;
-    .docs/*) printf '%s/.claude/%s\n' "$1" "${2#.docs/}" ;;
+    .docs/*)
+      if [ -f "$1/$2" ]; then
+        printf '%s/%s\n' "$1" "$2"
+      else
+        printf '%s/.claude/%s\n' "$1" "${2#.docs/}"
+      fi ;;
     .claude/*) printf '%s/%s\n' "$1" "$2" ;;
     doc/*) printf '%s/.claude/%s\n' "$1" "${2#doc/}" ;;
     *) fail "unknown docs destination '$2'" ;;

@@ -131,6 +131,12 @@ lifecycle ownership record and does not remove older guide copies. The migration
 and drift checks above apply to bundled framework installations managed through
 `agent-docs.sh` and its compatible frontends.
 
+Supporting template sources may live in `.docs/` or the legacy `.claude/`
+directory. React uses one source, `app-template-react/.docs/react.md`, and both
+generated entry points link to `.docs/react.md`. A basename present in both
+source directories is rejected as ambiguous. Templates cannot replace
+`project-guidance.md` or `agent-workflow.md`; those paths remain reserved.
+
 ## Resolve drift
 
 If `check` reports drift, use `diff` and your app's Git history to identify the
