@@ -43,8 +43,9 @@ retained for history and are not discovered.
 | `teardown.sh` | Host/tenant/repository-only plans, static registry exclusion, confirmation, failure ordering and override restoration. |
 | `swap.sh` | Both colors, first deployment, no supporting services, SQLite support services, failed candidates/configuration/support startup and missing containers. |
 | `bootstrap-app.sh` | Deployment artifacts and managed agent documentation across 20 stack/backend/provider combinations. |
-| `rails.sh` | Offline Rails scaffold syntax, strict existing-app adoption, application source preservation, generated health test and explicit SQLite WAL configuration. |
+| `rails.sh` | Offline Rails scaffold syntax, strict existing-app adoption, application source preservation, generated RSpec/Cucumber and coverage fixtures, quality-tool dependencies and explicit SQLite WAL configuration. |
 | `rails-runtime.rb` | Rails deploy and rollback workflows for both providers, GitHub staging, migration dispatch, persistent SQLite runtime services and healthcheck policy. |
+| `rails-quality.rb` | Executes workflow and generated `bin/check` commands against boundary doubles: complete gate ordering, first failure propagation, stale coverage removal, test database isolation, and adopted-app fallback only when `bin/check` is absent. |
 | `rails-interactive.sh` | Unique Ruby language choice, explicit Rails/Sinatra selection and SQLite-only interactive policy. |
 | `agent-workflow.sh` | Imported native guard, audit, installer and registered maintenance contracts. |
 | `agent-docs.sh` | Arbitrary app paths, framework policies, managed updates, preservation, drift rejection, selection changes, relocated bundles and scaffold integration. |
@@ -66,11 +67,32 @@ For an expected negative match, source `test/helpers/assertions.sh` and call
 and does not reliably fail a test when the match unexpectedly exists. Likewise,
 use separate assertions instead of joining them with `&&`.
 
-The Rails scaffold suite checks the generated application test fixture without
-installing Rails gems. Running the generated application's `bin/rails test`
-requires its Ruby dependencies and is a separate runtime check.
+The Rails scaffold suite checks generated test fixtures without installing gems.
+It syntax-checks generated Ruby only when the host Ruby is at least the version
+pinned by the scaffold. Older system Rubies print an explicit skip; the fixture,
+adoption, dependency and configuration checks still run. Generated application
+syntax and execution must also pass in the pinned runtime.
+For actual generated-application verification, install its dependencies and run
+`bin/check`. It prepares the test database, runs RuboCop, RSpec and strict
+Cucumber, collates fresh coverage from both suites, and runs the dependency audit.
+Coverage requires 100% of lines and branches across all Ruby files under `app/`
+and `lib/`, including files the suites never load. The generated examples cover
+Notes creation, validation, listing, pagination, archiving, atomic audit records,
+committed notifications, health requests and parameter privacy.
 
-These are offline contract/regression checks, not end-to-end deployment tests.
+The separate runtime harness requires those same installed dependencies:
+
+```bash
+bash /path/to/push-button-deploy/test/rails-runtime/negative-gates.sh /path/to/generated_app
+```
+
+It works in a temporary application copy and verifies that failing RSpec examples,
+undefined or pending Cucumber steps, lint offenses, missing coverage resultsets,
+and unexecuted source all fail their gates. It is intentionally outside the
+offline runner's automatic suite discovery.
+
+The default repository suites are offline contract/regression checks, not
+end-to-end deployment tests.
 They do not establish real Compose health/network behavior, cloud provider API
 compatibility, or Terraform lifecycle isolation. `scripts/verify-isolation.sh`
 is a separate live-state check and is intentionally outside this runner.

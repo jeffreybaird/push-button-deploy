@@ -27,3 +27,8 @@ config/master.key
 config/credentials/*.key
 storage/*.sqlite3*
 db/*.db*
+
+/features
+/coverage
+/support
+/script/coverage.rb

@@ -164,9 +164,11 @@ def policy_for(framework):
         source += ['bin/*', 'config.ru', 'Dockerfile', 'config/*.yml', 'config/**/*.yml']
     if framework == 'ts-cli':
         source += ['package.json', 'tsconfig.json']
-    return {'schema_version': 2, 'source_globs': source,
-            'test_globs': ['test/**', 'tests/**', 'spec/**', '**/*_test.py', '**/*_test.exs',
-                           '**/*_spec.rb', '**/*.test.ts', '**/*.spec.ts', '**/*.test.js']}
+    tests = ['test/**', 'tests/**', 'spec/**', '**/*_test.py', '**/*_test.exs',
+             '**/*_spec.rb', '**/*.test.ts', '**/*.spec.ts', '**/*.test.js']
+    if framework == 'rails':
+        tests += ['features/**', 'support/coverage.rb', 'script/coverage.rb']
+    return {'schema_version': 2, 'source_globs': source, 'test_globs': tests}
 
 
 def hook_entries(data):

@@ -55,10 +55,15 @@ jobs:
           bundler-cache: true
 
       # Prepare the isolated test database before the Rails suite gates deployment.
-      - name: Run tests
+      - name: Run quality gate
         run: |
-          bundle exec rails db:prepare
-          bundle exec rails test
+          if [ -f bin/check ]; then
+            ./bin/check
+          else
+            echo "Existing Rails app has no bin/check; running its legacy Rails test gate."
+            bundle exec rails db:prepare
+            bundle exec rails test
+          fi
 
   build:
     needs: test
