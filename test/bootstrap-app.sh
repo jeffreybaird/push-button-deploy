@@ -11,6 +11,7 @@ fail() { printf '%s\n' "$*" >&2; exit 1; }
 . "$SCRIPT_DIR/scripts/provider.sh"
 . "$SCRIPT_DIR/scripts/bootstrap/app.sh"
 is_phoenix() { [ "$FRAMEWORK" = phoenix ]; }
+is_rails() { [ "$FRAMEWORK" = rails ]; }
 is_sinatra() { [ "$FRAMEWORK" = sinatra ]; }
 is_static() { [ "$FRAMEWORK" = zola ]; }
 wants_staging() { needs_droplet && ! is_static && is_github; }
@@ -20,7 +21,7 @@ mix() { if [ "$1" = phx.gen.release ]; then mkdir -p rel; fi; }
 
 for provider in github gitea; do
   for spec in 'service phoenix sqlite' 'service phoenix postgres' \
-              'service sinatra sqlite' 'service zola none' \
+              'service sinatra sqlite' 'service rails sqlite' 'service zola none' \
               'cli escript none' 'cli ruby-cli none' 'cli bash-cli none' \
               'cli ts-cli none' 'library mix none'; do
     read -r app_type framework backend <<< "$spec"
@@ -32,6 +33,12 @@ defmodule Example.MixProject do
 end
 EOF
     printf 'import Config\nconfig :example, Example.Repo, url: "unused"\n' > "$app_dir/config/runtime.exs"
+    if [ "$framework" = rails ]; then
+      printf 'class Application < Rails::Application; end\n' > "$app_dir/config/application.rb"
+      for path in Gemfile config/database.yml config/environment.rb config/puma.rb config.ru; do
+        printf '# existing Rails application fixture\n' > "$app_dir/$path"
+      done
+    fi
     printf '3.4.1\n' > "$app_dir/.ruby-version"
     # Explicit inputs must not leak their temporary context into callers.
     APP_DIR=caller-directory; FRAMEWORK=caller-framework
@@ -63,7 +70,8 @@ EOF
       [ -f "$app_dir/Dockerfile" ]
       [ -f "$app_dir/deploy/swap.sh" ]
       [ -f "$app_dir/deploy/ci/runtime-env.sh" ]
-      if [ "$framework" = sinatra ]; then expected=compose.sinatra.yaml
+      if [ "$framework" = rails ]; then expected=compose.rails.yaml
+      elif [ "$framework" = sinatra ]; then expected=compose.sinatra.yaml
       elif [ "$backend" = sqlite ]; then expected=compose.sqlite.yaml
       else expected=compose.yaml; fi
       cmp "$SCRIPT_DIR/deploy/$expected" "$app_dir/deploy/compose.yaml"
@@ -91,4 +99,4 @@ derive_infrastructure_names shop_api
 [ "$APP_SLUG" = shop-api ]
 [ "$DNS_RECORD" = shop-api ]
 [ "$REGION" = nyc3 ]
-echo 'bootstrap app checks passed (18 stack/provider combinations)'
+echo 'bootstrap app checks passed (20 stack/provider combinations)'

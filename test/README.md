@@ -40,7 +40,10 @@ retained for history and are not discovered.
 | `provider-runs.sh` | GitHub query identity and empty results; Gitea response envelopes, commit filtering, ordering, status normalization and malformed responses. |
 | `teardown.sh` | Host/tenant/repository-only plans, static registry exclusion, confirmation, failure ordering and override restoration. |
 | `swap.sh` | Both colors, first deployment, no supporting services, SQLite support services, failed candidates/configuration/support startup and missing containers. |
-| `bootstrap-app.sh` | Deployment artifacts and managed agent documentation across 18 stack/backend/provider combinations. |
+| `bootstrap-app.sh` | Deployment artifacts and managed agent documentation across 20 stack/backend/provider combinations. |
+| `rails.sh` | Offline Rails scaffold syntax, strict existing-app adoption, application source preservation, generated health test and explicit SQLite WAL configuration. |
+| `rails-runtime.rb` | Rails deploy and rollback workflows for both providers, GitHub staging, migration dispatch, persistent SQLite runtime services and healthcheck policy. |
+| `rails-interactive.sh` | Unique Ruby language choice, explicit Rails/Sinatra selection and SQLite-only interactive policy. |
 | `agent-workflow.sh` | Imported native guard, audit, installer and registered maintenance contracts. |
 | `agent-docs.sh` | Arbitrary app paths, framework policies, managed updates, preservation, drift rejection, selection changes, relocated bundles and scaffold integration. |
 | `workflow-scripts.sh` | Literal env serialization, private permissions, staging backup omission, remote destinations and shared-edge preservation. |
@@ -60,6 +63,10 @@ For an expected negative match, source `test/helpers/assertions.sh` and call
 `assert_not grep ...`. A standalone `! grep ...` is exempt from Bash's errexit
 and does not reliably fail a test when the match unexpectedly exists. Likewise,
 use separate assertions instead of joining them with `&&`.
+
+The Rails scaffold suite checks the generated application test fixture without
+installing Rails gems. Running the generated application's `bin/rails test`
+requires its Ruby dependencies and is a separate runtime check.
 
 These are offline contract/regression checks, not end-to-end deployment tests.
 They do not establish real Compose health/network behavior, cloud provider API

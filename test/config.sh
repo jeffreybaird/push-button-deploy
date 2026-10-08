@@ -50,7 +50,7 @@ fail() { printf '%s\n' "$*" >&2; exit 1; }
 . "$ROOT/scripts/bootstrap/config.sh"
 contains() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
 for provider in github gitea; do
-  for spec in 'service phoenix elixir' 'service sinatra ruby' 'service zola static' \
+  for spec in 'service phoenix elixir' 'service sinatra ruby' 'service rails ruby' 'service zola static' \
               'cli escript elixir' 'cli ruby-cli ruby' 'cli bash-cli bash' \
               'cli ts-cli typescript' 'library mix elixir'; do
     (
@@ -69,7 +69,7 @@ for provider in github gitea; do
         contains "$REQUIRED_BINS" terraform
         contains "$REQUIRED_ENV" DIGITALOCEAN_ACCESS_TOKEN
         if [ "$FRAMEWORK" = phoenix ]; then [ "$DATABASE_BACKEND" = postgres ]
-        elif [ "$FRAMEWORK" = sinatra ]; then [ "$DATABASE_BACKEND" = sqlite ]
+        elif [ "$FRAMEWORK" = sinatra ] || [ "$FRAMEWORK" = rails ]; then [ "$DATABASE_BACKEND" = sqlite ]
         else [ "$DATABASE_BACKEND" = none ]; fi
       fi
       if [ "$provider" = github ]; then
@@ -94,6 +94,20 @@ fi
   resolve_app_config
   [ "$FRAMEWORK" = ruby-cli ]
   [ "$CI_WORKFLOW" = ci.yml ]
+)
+# A second Ruby service must preserve language defaults and explicit selection.
+(
+  unset APP_TYPE FRAMEWORK LANGUAGE DATABASE_BACKEND ENABLE_STAGING
+  APP_TYPE_FLAG=service; LANGUAGE_FLAG=ruby
+  resolve_app_config
+  [ "$FRAMEWORK" = sinatra ]
+)
+(
+  unset APP_TYPE LANGUAGE DATABASE_BACKEND ENABLE_STAGING
+  APP_TYPE_FLAG=""; LANGUAGE_FLAG=""; FRAMEWORK=rails; LANGUAGE=ruby
+  resolve_app_config
+  [ "$APP_TYPE/$FRAMEWORK/$LANGUAGE/$DATABASE_BACKEND" = service/rails/ruby/sqlite ]
+  contains "$REQUIRED_BINS" openssl
 )
 # Exercise the real entry point without the developer's .env or live accounts.
 mkdir -p "$WORK/tool" "$WORK/bin"

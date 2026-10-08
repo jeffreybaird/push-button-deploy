@@ -43,12 +43,13 @@ existing app, or change its selections, use `configure`:
 ```
 
 Framework values follow the app generators. Web templates are available for
-`phoenix`, `sinatra`, and `zola`; CLI frameworks are `escript`, `ruby-cli`,
+`phoenix`, `sinatra`, `rails`, and `zola`; CLI frameworks are `escript`, `ruby-cli`,
 `bash-cli`, and `ts-cli`, and the library framework is `mix`. CLI and library
 apps receive generic project
 entry points and the shared workflow with language-appropriate ownership policy.
 Use explicit `escript`, `mix`, or `ruby-cli` for those apps: inference treats
-`mix.exs` as Phoenix and `Gemfile` as Sinatra. `package.json` infers `ts-cli`;
+`config/application.rb` as Rails before checking `Gemfile` as Sinatra;
+`mix.exs` identifies Phoenix. `package.json` infers `ts-cli`;
 an empty directory or Bash CLI needs an explicit framework.
 
 The command accepts `--skip-module` and `--skip-agent` repeatedly. Each supplied

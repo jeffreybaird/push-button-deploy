@@ -25,7 +25,7 @@ there if you just want the pitch and a three-command quickstart.
 | Install the tools and set my credentials | [Prerequisites](prerequisites.md) |
 | Stand up my first app, step by step | [Quickstart](quickstart.md) |
 | Build a CLI or a library instead of a web app | [App types](app-types.md) |
-| Choose Phoenix vs Sinatra vs Zola | [Frameworks](frameworks.md) |
+| Choose Phoenix vs Sinatra vs Rails vs Zola | [Frameworks](frameworks.md) |
 | Choose SQLite vs Postgres | [Databases](databases.md) |
 | Get a staging environment on every pull request | [Staging](staging.md) |
 | Put a second app on a droplet I already have | [Tenancy](tenancy.md) |
@@ -43,7 +43,7 @@ there if you just want the pitch and a three-command quickstart.
 | [Prerequisites](prerequisites.md) | Required tools, accounts and credentials, the full `.env` reference, `--check` |
 | [Quickstart](quickstart.md) | A single service from empty directory to live HTTPS, step by step — plus a droplet-free quickstart |
 | [App types](app-types.md) | `service` / `cli` / `library`, the language↔framework table, and interactive selection |
-| [Frameworks](frameworks.md) | Phoenix, Sinatra and Zola specifics — generation, CI gate, migrations, image/release |
+| [Frameworks](frameworks.md) | Phoenix, Sinatra, Rails and Zola specifics — generation, CI gate, migrations, image/release |
 | [Databases](databases.md) | SQLite (Litestream) vs managed Postgres — tradeoffs and conversion caveats |
 | [Staging](staging.md) | Per-PR staging environments — how they work and how to turn them off |
 | [Tenancy](tenancy.md) | Several apps on one droplet — host apps and tenants |

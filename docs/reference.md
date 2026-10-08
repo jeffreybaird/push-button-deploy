@@ -73,7 +73,7 @@ nothing. `app_dir` defaults to `.`. Full guide: [Agent docs](claude-docs.md).
 
 | Option | Meaning |
 |---|---|
-| `--framework`, `-f <name>` | `phoenix` / `sinatra` / `zola`; inferred from the marker file when omitted |
+| `--framework`, `-f <name>` | `phoenix` / `sinatra` / `rails` / `zola`; inferred from the marker file when omitted |
 | `--all` | non-interactive; include everything initially, retain installed choices on reruns |
 | `--help`, `-h` | usage |
 
@@ -123,7 +123,7 @@ guide: [Gitea](gitea.md).
 | `agent-workflow/lifecycle.py` | app-local docs rendering, selections, drift detection, and update planning behind `agent-docs.sh` |
 | `agent-workflow/workflow.py` | registered-repository `check` / `diff` / `apply` compatibility CLI |
 | `inject-skill-docs.sh` | Phoenix: inject deps + Claude docs (runnable) |
-| `new-sinatra-app.sh` / `new-zola-site.sh` | scaffold + inject docs for those frameworks |
+| `new-sinatra-app.sh` / `new-rails-app.sh` / `new-zola-site.sh` | scaffold + inject docs for those frameworks |
 | `new-mix-app.sh` / `new-ruby-cli.sh` / `new-bash-cli.sh` / `new-ts-cli.sh` | CLI / library scaffolds |
 | `sync-infra.sh` | re-seed an app's `infra/` from the templates |
 | `ensure-db-tls.sh` / `ensure-release-task.sh` | Phoenix release prep helpers |

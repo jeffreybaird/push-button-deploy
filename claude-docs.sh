@@ -42,7 +42,7 @@ claude-docs.sh — guided creation of an app's agent docs (CLAUDE.md + .claude/ 
   ./claude-docs.sh [options] [app_dir]      app_dir defaults to .
 
 Options:
-  --framework, -f <name>   phoenix, sinatra or zola. Inferred from the app's
+  --framework, -f <name>   phoenix, sinatra, rails or zola. Inferred from the app's
                            marker file (mix.exs / Gemfile / config.toml) when
                            omitted; you are prompted if it can't be inferred
   --all                    include everything without prompting (needs no TTY)

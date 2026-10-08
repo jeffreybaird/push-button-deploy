@@ -4,6 +4,7 @@
 
 is_sqlite() { [ "$DATABASE_BACKEND" = sqlite ]; }
 is_sinatra() { [ "$FRAMEWORK" = sinatra ]; }
+is_rails() { [ "$FRAMEWORK" = rails ]; }
 is_phoenix() { [ "$FRAMEWORK" = phoenix ]; }
 is_zola() { [ "$FRAMEWORK" = zola ]; }
 is_static() { is_zola; }
@@ -21,7 +22,7 @@ resolve_database_backend() {
   # obstructive. But an override that changes what gets provisioned is never
   # silent: say so when the incoming value actually differed.
   local requested_backend="${DATABASE_BACKEND}"
-  if is_sinatra;      then DATABASE_BACKEND="sqlite"; fi
+  if is_sinatra || is_rails;      then DATABASE_BACKEND="sqlite"; fi
   if is_zola;         then DATABASE_BACKEND="none"; fi
   if ! has_database;  then DATABASE_BACKEND="none"; fi
   # Only 'postgres' is worth a warning: it is the one request whose silent
@@ -87,7 +88,7 @@ required_binaries() { # $1 type, $2 framework, $3 provider
   # secret) — the Ruby build itself happens in Docker/CI, not locally. Zola and
   # the droplet-free frameworks add nothing: their scaffolds are written by hand
   # and their builds run in CI.
-  if is_sinatra; then bins="$bins openssl"
+  if is_sinatra || is_rails; then bins="$bins openssl"
   elif is_phoenix; then bins="$bins mix"; fi
   # gh drives the GitHub path end to end; the Gitea path talks REST over curl
   # (already required) and leans on jq for safe JSON bodies + run-status parsing.

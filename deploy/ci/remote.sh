@@ -73,6 +73,7 @@ pull_runtime_image() { remote_stack_exec docker compose pull; }
 run_migrations() { # $1 framework, $2 release app (Phoenix), $3 release module (Phoenix)
   case "$1" in
     phoenix) remote_stack_exec docker compose run --rm migrate "bin/${2:?app required}" eval "${3:?module required}.Release.migrate()" ;;
+    rails) remote_stack_exec docker compose run --rm migrate bundle exec rails db:prepare ;;
     sinatra) remote_stack_exec docker compose run --rm migrate bundle exec rake db:migrate ;;
     *) echo "unknown migration framework: $1" >&2; return 1 ;;
   esac

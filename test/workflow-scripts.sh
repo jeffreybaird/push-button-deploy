@@ -85,9 +85,11 @@ cmp deploy/litestream.staging.yml "$WORK/host/apps/example-stg/litestream.yml"
 SIMULATE=0
 prepare_remote_edge staging
 run_migrations phoenix example Example
+run_migrations rails
 swap_release
 grep -Fq SITE_TMPL=site.example-stg.tmpl "$WORK/calls"
 grep -Fq 'docker compose run --rm migrate bin/example eval' "$WORK/calls"
+grep -Fq 'docker compose run --rm migrate bundle exec rails db:prepare' "$WORK/calls"
 grep -Fq '/root/apps/example-stg/swap.sh' "$WORK/calls"
 # Quoting remains correct when a path contains spaces or shell punctuation.
 quoted="$(shell_words 'two words' 'literal;$value')"

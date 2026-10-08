@@ -45,7 +45,7 @@ class Lifecycle(unittest.TestCase):
     def bundle(self):
         dest = self.work / 'relocated tool bundle'
         dest.mkdir()
-        for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-zola'):
+        for item in ('scripts', 'app-template', 'app-template-ruby', 'app-template-rails', 'app-template-zola'):
             shutil.copytree(ROOT / item, dest / item, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         for item in ROOT.glob('*.sh'):
             shutil.copy2(item, dest / item.name)
@@ -61,7 +61,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(before, self.snapshot(mtimes=True))
 
     def test_every_framework_installs_both_native_roles_and_app_owned_guidance(self):
-        for framework, app_type in [('phoenix', 'service'), ('sinatra', 'service'), ('zola', 'service'),
+        for framework, app_type in [('phoenix', 'service'), ('sinatra', 'service'), ('rails', 'service'), ('zola', 'service'),
                                     ('escript', 'cli'), ('ruby-cli', 'cli'), ('bash-cli', 'cli'),
                                     ('ts-cli', 'cli'), ('mix', 'library')]:
             with self.subTest(framework=framework):
@@ -81,6 +81,21 @@ class Lifecycle(unittest.TestCase):
                     self.assertIn('.docs/project-guidance.md', (app / guide).read_text())
                 self.assertFalse((app / '.git').exists())
                 self.assertEqual('current', self.command('check', app=app)['status'])
+
+    def test_rails_guidance_uses_rails_conventions(self):
+        self.install('rails')
+        for entrypoint in ('AGENTS.md', 'CLAUDE.md'):
+            with self.subTest(entrypoint=entrypoint):
+                guide = (self.app / entrypoint).read_text()
+                self.assertIn('Rails', guide)
+                self.assertIn('Active Record', guide)
+                self.assertIn('bin/rails test', guide)
+                self.assertNotIn('Sinatra', guide)
+                self.assertNotIn('Sequel', guide)
+        before = self.snapshot()
+        self.assertEqual('current', self.command('check')['status'])
+        self.command('update')
+        self.assertEqual(before, self.snapshot())
 
     def test_preserves_custom_guidance_settings_and_user_added_hooks(self):
         (self.app / '.docs').mkdir()
@@ -300,6 +315,7 @@ ensure_app
     def test_framework_policies_classify_source_tests_and_leave_guidance_unscoped(self):
         examples = {'phoenix': ('lib/app.ex', 'test/app_test.exs'),
                     'sinatra': ('app.rb', 'test/app_test.rb'),
+                    'rails': ('app/controllers/health_controller.rb', 'test/integration/health_test.rb'),
                     'zola': ('templates/index.html', 'test/render_test.py'),
                     'escript': ('lib/tool.ex', 'test/tool_test.exs'),
                     'ruby-cli': ('lib/tool.rb', 'test/tool_test.rb'),
