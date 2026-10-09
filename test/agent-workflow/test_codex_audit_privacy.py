@@ -37,12 +37,14 @@ class AuditMarkerPrivacy(unittest.TestCase):
         folder = Path(self.fixture.git('rev-parse', '--absolute-git-dir')) / 'agent-audit'
         return folder / ('done/private-call.json' if done else 'private-call.json')
 
-    def test_default_claude_pending_marker_has_no_command_or_identity(self):
+    def test_default_claude_pending_marker_has_minimal_identity_without_command(self):
         self.hook('claude', self.event('PreToolUse'))
         raw = self.marker().read_text()
         marker = json.loads(raw)
-        self.assertEqual({'tool_use_id', 'tool', 'started', 'head', 'files'}, set(marker))
-        for private in ('sensitive-value', 'private-agent', 'private-session', 'workflow_implementer'):
+        self.assertEqual({'tool_use_id', 'tool', 'started', 'head', 'files', 'context'}, set(marker))
+        self.assertEqual({'agent_id': 'private-agent', 'session_id': 'private-session',
+                          'agent_type': 'workflow_implementer'}, marker['context'])
+        for private in ('sensitive-value', 'unneeded-secret', 'private_env'):
             self.assertNotIn(private, raw)
 
     def test_completed_codex_marker_keeps_only_timing_after_omitted_post_context(self):
@@ -89,13 +91,17 @@ class AuditMarkerPrivacy(unittest.TestCase):
         self.assertNotIn('runtime-private-model', completed)
         self.assertEqual([], self.fixture.entries())
 
-    def test_claude_pending_model_does_not_add_context(self):
+    def test_claude_pending_model_adds_only_minimal_runtime_context(self):
         pre = self.event('PreToolUse')
         pre['model'] = 'runtime-private-model'
         self.hook('claude', pre)
         pending = self.marker().read_text()
-        self.assertEqual({'tool_use_id', 'tool', 'started', 'head', 'files'}, set(json.loads(pending)))
-        self.assertNotIn('runtime-private-model', pending)
+        marker = json.loads(pending)
+        self.assertEqual({'tool_use_id', 'tool', 'started', 'head', 'files', 'context'}, set(marker))
+        self.assertEqual({'agent_id', 'agent_type', 'session_id', 'model'}, set(marker['context']))
+        self.assertEqual('runtime-private-model', marker['context']['model'])
+        self.assertNotIn('sensitive-value', pending)
+        self.assertNotIn('unneeded-secret', pending)
 
 
 if __name__ == '__main__':

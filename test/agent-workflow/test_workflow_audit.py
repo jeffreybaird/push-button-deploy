@@ -223,14 +223,19 @@ class AuditHook(unittest.TestCase):
         (self.root / 'src/app.py').write_text('value = 15\n')
         self.hook(self.edit_event('PostToolUse', 'toolu_edit'))
         self.hook(self.event('PostToolUse', 'toolu_bash', 'sleep 1', 'workflow-runner'))
-        entry = self.only_entry()
+        entries = self.entries()
+        self.assertEqual(2, len(entries))
+        [entry] = [e for e in entries if e['tool_use_id'] == 'toolu_bash']
         self.assertEqual((['toolu_edit'], ['src/app.py']), (entry['overlapping_tool_use_ids'], entry['violations']))
 
-    def test_edit_tool_call_alone_is_never_logged(self):
+    def test_edit_tool_call_alone_logs_declared_source_mutation(self):
         self.hook(self.edit_event('PreToolUse', 'toolu_edit'))
         (self.root / 'src/app.py').write_text('value = 16\n')
         self.hook(self.edit_event('PostToolUse', 'toolu_edit'))
-        self.assertEqual([], self.entries())
+        entry = self.only_entry()
+        self.assertEqual(('Edit', 'toolu_edit'), (entry['tool_name'], entry['tool_use_id']))
+        self.assertEqual(['src/app.py'], [change['path'] for change in entry['changes']])
+        self.assertEqual([], entry['violations'])
 
     def test_edit_that_never_reports_back_expires(self):
         self.hook(self.edit_event('PreToolUse', 'toolu_denied'))

@@ -1,11 +1,14 @@
-"""Audit log for Bash: record source and test changes observed during each call. Never blocks or grants."""
+"""Audit source/test mutations from Bash and native direct edits. Never blocks or grants."""
 import argparse
 from datetime import datetime, timezone
 import difflib
+import errno
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -59,18 +62,74 @@ def dirty_paths(root):
 
 def stored_blobs(root, paths):
     """Write current contents to the object store; absent files map to None."""
-    present = sorted(p for p in paths if (root / p).is_file())
-    blobs = dict.fromkeys(paths)
-    if present:
-        output = git(root, 'hash-object', '-w', '--stdin-paths', stdin='\n'.join(present).encode()).stdout.decode()
-        blobs.update(zip(present, output.split()))
+    blobs = {}
+    for path in sorted(paths):
+        contents = file_bytes(root, path)
+        blobs[path] = (git(root, 'hash-object', '-w', '--stdin', stdin=contents).stdout.decode().strip()
+                       if contents is not None else None)
     return blobs
 
 
-def current_blob(root, path):
-    if not (root / path).is_file():
+def file_bytes(root, path):
+    """Read a regular file beneath the root without following any symlink."""
+    parts = Path(path).parts
+    if not parts or Path(path).is_absolute() or '..' in parts:
         return None
-    return git(root, 'hash-object', '--', path).stdout.decode().strip()
+    descriptors = []
+    try:
+        directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(directory)
+        for part in parts[:-1]:
+            directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            descriptors.append(directory)
+        descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            return None
+        with os.fdopen(descriptor, 'rb') as handle:
+            return handle.read()
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            return None
+        raise
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def declared_paths(root, event, policy, platform):
+    """Only valid, scoped, non-ignored native edit operands become snapshots."""
+    payload = event.get('tool_input')
+    cwd_raw = event.get('cwd', str(root))
+    if not isinstance(payload, dict) or not isinstance(cwd_raw, str) or not Path(cwd_raw).is_absolute():
+        return set()
+    if platform == 'codex':
+        try:
+            paths = guard.patch_paths(payload.get('command'))
+        except (ValueError, TypeError, AttributeError):
+            return set()
+    else:
+        paths = [payload.get('notebook_path' if event['tool_name'] == 'NotebookEdit' else 'file_path')]
+    found = set()
+    for raw in paths:
+        if not isinstance(raw, str) or not raw or '\\' in raw or any(ord(c) < 32 for c in raw):
+            continue
+        named = Path(raw) if Path(raw).is_absolute() else Path(cwd_raw) / raw
+        path = Path(os.path.abspath(named))
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if relative.startswith(EXCLUDED_PREFIX) or not guard.classification(path, root, policy):
+            continue
+        # Reject existing symlink operands and parents before snapshotting, including
+        # aliases within the checkout. file_bytes independently protects every read.
+        if any(parent.is_symlink() for parent in (path, *path.parents)):
+            continue
+        if git(root, 'check-ignore', '--quiet', '--no-index', '--', relative, check=False).returncode == 0:
+            continue
+        found.add(relative)
+    return found
 
 
 def blob_at(root, commit, path):
@@ -108,18 +167,19 @@ def discard_stale_snapshots(folder):
 
 
 def record_start(root, event, policy, platform='claude'):
-    """Mark a call as running; Bash calls also snapshot dirty source and test files."""
+    """Snapshot dirty Bash paths or only declared direct edit operands."""
     folder = pending_dir(root)
     discard_stale_snapshots(folder)
     marker = {'tool_use_id': event['tool_use_id'], 'tool': event['tool_name'], 'started': time.time()}
-    if event['tool_name'] == 'Bash':
-        marker.update(head=head_of(root), files=stored_blobs(root, scoped(root, dirty_paths(root), policy)))
-        if platform == 'codex':
-            marker['context'] = {key: event[key] for key in
-                                 ('agent_id', 'agent_type', 'session_id', 'model') if key in event}
-            tool_input = event.get('tool_input')
-            if isinstance(tool_input, dict) and 'command' in tool_input:
-                marker['context']['tool_input'] = {'command': tool_input['command']}
+    paths = (scoped(root, dirty_paths(root), policy) if event['tool_name'] == 'Bash'
+             else declared_paths(root, event, policy, platform))
+    marker.update(head=head_of(root), files=stored_blobs(root, paths))
+    marker['context'] = {key: event[key] for key in
+                         ('agent_id', 'agent_type', 'session_id', 'model') if key in event}
+    if platform == 'codex' and event['tool_name'] == 'Bash':
+        tool_input = event.get('tool_input')
+        if isinstance(tool_input, dict) and 'command' in tool_input:
+            marker['context']['tool_input'] = {'command': tool_input['command']}
     (folder / pending_name(event['tool_use_id'])).write_text(json.dumps(marker))
 
 
@@ -143,8 +203,7 @@ def overlapping_calls(folder, own_id, started):
 
 
 def record_finish(folder, snapshot_path, marker, platform='claude'):
-    if platform == 'codex':
-        marker = {key: marker[key] for key in ('tool_use_id', 'tool', 'started')}
+    marker = {key: marker[key] for key in ('tool_use_id', 'tool', 'started')}
     (folder / 'done' / snapshot_path.name).write_text(json.dumps({**marker, 'ended': time.time()}))
     snapshot_path.unlink(missing_ok=True)
 
@@ -153,13 +212,9 @@ def text_of_blob(root, blob):
     return '' if blob is None else git(root, 'cat-file', 'blob', blob).stdout.decode('utf-8')
 
 
-def text_of_file(root, path):
-    return (root / path).read_bytes().decode('utf-8') if (root / path).is_file() else ''
-
-
-def describe_diff(root, path, before, change):
+def describe_diff(root, path, before, change, contents):
     try:
-        old, new = text_of_blob(root, before), text_of_file(root, path)
+        old, new = text_of_blob(root, before), contents.decode('utf-8') if contents is not None else ''
     except UnicodeDecodeError:
         return {'binary': True}
     lines = list(difflib.unified_diff(old.splitlines(), new.splitlines(),
@@ -174,17 +229,23 @@ def owner_accepts(category, role):
 
 def file_changes(root, snapshot, policy, role):
     head_after = head_of(root)
-    candidates = set(snapshot['files']) | dirty_paths(root) | paths_changed_between(root, snapshot['head'], head_after)
+    candidates = set(snapshot['files'])
+    if snapshot['tool'] == 'Bash':
+        candidates |= dirty_paths(root) | paths_changed_between(root, snapshot['head'], head_after)
     changes = []
     for path in sorted(scoped(root, candidates, policy)):
         before = snapshot['files'][path] if path in snapshot['files'] else blob_at(root, snapshot['head'], path)
-        after = current_blob(root, path)
+        if git(root, 'check-ignore', '--quiet', '--no-index', '--', path, check=False).returncode == 0:
+            continue
+        contents = file_bytes(root, path)
+        after = (git(root, 'hash-object', '--stdin', stdin=contents).stdout.decode().strip()
+                 if contents is not None else None)
         if before == after:
             continue
         change = 'added' if before is None else 'deleted' if after is None else 'modified'
         category = guard.classification(root / path, root, policy)
         record = {'path': path, 'change': change, 'class': category, 'owner_ok': owner_accepts(category, role)}
-        record.update(describe_diff(root, path, before, change))
+        record.update(describe_diff(root, path, before, change, contents))
         changes.append(record)
     return head_after, changes
 
@@ -219,9 +280,6 @@ def record_outcome(root, event, policy, platform='claude'):
     if not snapshot_path.exists():
         return
     snapshot = json.loads(snapshot_path.read_text())
-    if snapshot.get('tool') != 'Bash':
-        record_finish(folder, snapshot_path, snapshot, platform)
-        return
     event = {**snapshot.get('context', {}), **event}
     role = role_label(event, platform)
     head_after, changes = file_changes(root, snapshot, policy, role)
@@ -233,12 +291,18 @@ def record_outcome(root, event, policy, platform='claude'):
              'session_id': event.get('session_id'), 'tool_use_id': event['tool_use_id'],
              'agent_id': event.get('agent_id'), 'agent_type': event.get('agent_type'), 'role': role,
              'model': event.get('model'),
-             'command': (event.get('tool_input') or {}).get('command'),
+             'tool_name': snapshot['tool'],
+             'command': ((event.get('tool_input') or {}).get('command') if snapshot['tool'] == 'Bash' else None),
              'outcome': outcome_of(event, platform),
              'head_before': snapshot['head'], 'head_after': head_after,
              'overlapping_tool_use_ids': overlapping,
              'attribution': 'ambiguous' if overlapping else 'exclusive', 'changes': changes,
              'violations': [c['path'] for c in changes if not c['owner_ok']]}
+    counts = {kind: sum(change['change'] == kind for change in changes)
+              for kind in ('added', 'modified', 'deleted')}
+    entry['note'] = (f"Changed {len(changes)} paths ({counts['added']} added, "
+                     f"{counts['modified']} modified, {counts['deleted']} deleted): "
+                     + ', '.join(change['path'] for change in changes))
     if platform == 'codex':
         entry['platform'] = platform
     log = root / LOG

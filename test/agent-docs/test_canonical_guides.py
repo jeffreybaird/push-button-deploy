@@ -151,7 +151,7 @@ class CanonicalGuides(unittest.TestCase):
                         self.assertEqual(set(old_manifest), set(current_manifest))
                         self.assertEqual(old_manifest['version'], current_manifest['version'])
                         self.assertEqual('0.4.0', old_manifest['installer']['version'])
-                        self.assertEqual('0.5.1', current_manifest['installer']['version'])
+                        self.assertEqual('0.5.2', current_manifest['installer']['version'])
                         self.assertRegex(current_manifest['installer']['source_commit'], r'^[0-9a-f]{40,64}$')
                         self.assertEqual((set(old_manifest['sha256']) - {'.claude/testing.md'}) |
                                          {'.codex/hooks/hook_diagnostics.py', '.docs/hook-diagnostics.md', '.gitignore'},
@@ -190,18 +190,10 @@ class CanonicalGuides(unittest.TestCase):
                     if name.startswith(('.claude/agents/', '.claude/hooks/', '.codex/')) or name == '.claude/settings.json':
                         expected = contents
                         if name in ('.codex/hooks/workflow_audit.py', '.claude/hooks/workflow_audit.py'):
-                            # Upgrade only the two runtime-model fields; every other
-                            # hook byte remains constrained by the archived fixture.
-                            additions = (
-                                (b"('agent_id', 'agent_type', 'session_id') if key in event}",
-                                 b"('agent_id', 'agent_type', 'session_id', 'model') if key in event}"),
-                                (b"             'command': (event.get('tool_input') or {}).get('command'),",
-                                 b"             'model': event.get('model'),\n"
-                                 b"             'command': (event.get('tool_input') or {}).get('command'),"),
-                            )
-                            for old, new in additions:
-                                self.assertEqual(1, expected.count(old), name)
-                                expected = expected.replace(old, new)
+                            # Installation copies these two evolving hooks from the
+                            # shipped component. Independent audit behavior tests define
+                            # correctness; all other historical bytes stay constrained.
+                            expected = (ROOT / 'scripts/agent-workflow/workflow_audit.py').read_bytes()
                         if framework in ('sinatra', 'phoenix') and name in ('.codex/hooks/policy.json', '.claude/hooks/policy.json'):
                             expected_policy = json.loads(contents)
                             expected_policy['test_globs'].append('features/**')

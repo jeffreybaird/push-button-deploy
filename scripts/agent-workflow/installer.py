@@ -562,22 +562,32 @@ diffs and accepted-test hashes, including changes made by formatters, Git hooks,
 snapshot updates and other commands. Accidental native hook failure is an
 explicitly accepted limitation. There is no separate Git delivery prohibition.
 
-## Bash audit log
+## Native mutation audit log
 
-Claude and Codex Bash calls are audited, not blocked. Only source and test files, as the
-policy classifies them, are examined. Before each call the audit hook snapshots
-dirty source and test files; afterwards it compares. When a source or test file
-changed, it appends one JSON line to `.agent-audit/bash.jsonl` with the command,
-session, agent id, agent type, runtime model (`null` when unavailable),
-role (`main` for the parent session), outcome,
-HEAD before and after, each changed source or test path with a unified diff
-capped at 200 lines, and `violations` for changes the role does not own. Other
-files are never read, stored or listed, and calls that change only them are not
-logged. Ignored files are not audited. Codex entries include `platform: codex`;
-existing Claude entries retain their format. Codex before-call context preserves
-the command, agent identity, and runtime model when a completion event omits
-those fields. A supplied completion model takes precedence. The model comes
-only from native event metadata, never from configured model settings.
+Claude and Codex Bash calls, Codex apply_patch, and Claude Write, Edit and
+NotebookEdit are audited without changing their native permissions. Only source
+and test files, as the policy classifies them, are examined. Bash snapshots dirty
+source and test files and compares all scoped changes observed during the call.
+Direct edits snapshot only declared scoped operands, including add, update,
+delete and move paths, using their exact current contents even when already dirty.
+Unrelated dirty paths are not attributed to a direct edit. Ignored, unscoped,
+outside-checkout and symlink operands are excluded; reads never follow symlinks.
+
+An actual mutation appends one JSON line to `.agent-audit/bash.jsonl` with
+`tool_name`, a deterministic `note` listing sorted paths and added/modified/deleted
+counts, session, agent id, agent type, runtime model (`null` when unavailable),
+role (`main` for the parent session), outcome, HEAD before and after, each changed
+source or test path with a unified diff capped at 200 lines, and `violations` for
+changes the role does not own. Direct entries have `command: null`; raw patches,
+file contents and other edit payload fields are never retained as tool input.
+Only scoped diff excerpts can appear in the log. Calls that mutate only excluded
+files or change nothing produce no row. Failed calls that mutate scoped files
+still produce a row. Codex entries include `platform: codex`.
+
+Before-call context preserves agent identity and runtime model when completion
+omits those fields. Codex Bash also preserves its command. Supplied completion
+metadata, including explicit `null`, takes precedence. Models come only from
+native event metadata, never from configured settings.
 
 Claude uses PreToolUse, PostToolUse and PostToolUseFailure. Codex uses only
 PreToolUse and PostToolUse; a reported integer exit status determines success
@@ -585,31 +595,33 @@ or failure, otherwise outcome is `unknown`. No completion event means no
 completed audit entry. Audit hooks run synchronously and return an empty object;
 they never approve, deny or alter a call, and audit failures do not stop work.
 
-The command is recorded verbatim, so a secret typed into a command that also
-changes a source or test file enters the log. Keep secrets out of commands.
-Snapshots write the contents of dirty source and test files to the local Git
+Bash command privacy: The command is recorded verbatim, so a secret typed into
+a command that also changes a source or test file enters the log. Keep secrets
+out of commands.
+Snapshots write the contents of scoped source and test files to the local Git
 object store as unreferenced blobs; `git gc` prunes them and they are never
 pushed. Pending markers live under `.git/agent-audit/`.
-Codex pending markers temporarily store raw commands, agent identity, and runtime
-model metadata even for
-calls that change only noncode files or no files. They do not store other tool
-arguments. Completion replaces them with timing-only markers; interrupted calls
-can leave command context behind. Stale markers are removed only when a later
-tracked call starts after they are 24 hours old, not by a background timer.
-Claude pending markers do not add command or identity storage.
+Pending markers store only timing, snapshot references and minimal identity/model
+metadata. Codex Bash additionally stores its raw command, even for calls that
+change only noncode files or no files. Claude Bash and all direct edits never
+store raw commands or edit payloads in pending markers. Completion replaces
+markers with timing-only records on both platforms; interrupted calls can leave
+pending context behind. Stale markers are removed only when a later tracked call
+starts after they are 24 hours old, not by a background timer.
 
-An entry records changes observed while the command ran, not proof of who made
-them. Claude Write, Edit and NotebookEdit and Codex apply_patch calls are tracked
-for timing only. Every tracked call that ran at any moment during the command,
-finished or not, is listed in
+An entry records changes observed during a call, not proof of who made them.
+Every other tracked call that ran at any moment during the call, finished or not,
+is listed in
 `overlapping_tool_use_ids`, and `attribution` is `ambiguous` when that list is
 not empty, otherwise `exclusive`. An edit that never reports back, such as one
 the guard denied, stops counting after 60 seconds. Treat ambiguous violations
-as leads to check against the other calls, not findings.
+as leads to check against the other calls, not findings. Overlapping Bash and
+direct calls can both record the same observed mutation; a later unchanged Bash
+call produces no duplicate row.
 
 Commit the log with the work. `.gitattributes` uses union merge for it. Reviewers
-check `violations` before accepting. These registrations cover native Bash
-events, not arbitrary MCP commands or external processes. CLI and desktop audit
+check `violations` before accepting. These registrations cover the native tools
+listed above, not arbitrary MCP commands or external processes. CLI and desktop audit
 activation must each be validated separately; installed files are not evidence
 that hooks are trusted or running.
 
