@@ -92,6 +92,15 @@ class AuditHook(unittest.TestCase):
         self.assertTrue(self.change(entry, 'src/app.py')['owner_ok'])
         self.assertEqual([], entry['violations'])
 
+    def test_completion_runtime_model_is_recorded_for_claude(self):
+        self.run_bash("echo 'value = 2' > src/app.py", agent_type='workflow-implementer',
+                      model='runtime-claude-model')
+        self.assertEqual('runtime-claude-model', self.only_entry()['model'])
+
+    def test_absent_claude_runtime_model_is_null(self):
+        self.run_bash("echo 'value = 2' > src/app.py", agent_type='workflow-implementer')
+        self.assertIsNone(self.only_entry()['model'])
+
     def test_command_without_changes_is_not_logged(self):
         self.run_bash('ls && cat README.md', agent_type='workflow-runner')
         self.assertEqual([], self.entries())

@@ -116,7 +116,7 @@ def record_start(root, event, policy, platform='claude'):
         marker.update(head=head_of(root), files=stored_blobs(root, scoped(root, dirty_paths(root), policy)))
         if platform == 'codex':
             marker['context'] = {key: event[key] for key in
-                                 ('agent_id', 'agent_type', 'session_id') if key in event}
+                                 ('agent_id', 'agent_type', 'session_id', 'model') if key in event}
             tool_input = event.get('tool_input')
             if isinstance(tool_input, dict) and 'command' in tool_input:
                 marker['context']['tool_input'] = {'command': tool_input['command']}
@@ -232,6 +232,7 @@ def record_outcome(root, event, policy, platform='claude'):
     entry = {'timestamp': datetime.now(timezone.utc).isoformat(timespec='seconds'),
              'session_id': event.get('session_id'), 'tool_use_id': event['tool_use_id'],
              'agent_id': event.get('agent_id'), 'agent_type': event.get('agent_type'), 'role': role,
+             'model': event.get('model'),
              'command': (event.get('tool_input') or {}).get('command'),
              'outcome': outcome_of(event, platform),
              'head_before': snapshot['head'], 'head_after': head_after,

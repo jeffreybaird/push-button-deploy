@@ -71,6 +71,32 @@ class AuditMarkerPrivacy(unittest.TestCase):
         self.assertNotIn('unneeded-secret', raw)
         self.assertNotIn('private_env', raw)
 
+    def test_model_context_is_removed_after_noncode_completion(self):
+        pre = self.event('PreToolUse')
+        pre['model'] = 'runtime-private-model'
+        self.hook('codex', pre)
+        context = json.loads(self.marker().read_text())['context']
+        self.assertEqual('runtime-private-model', context['model'])
+        self.assertEqual({'agent_id', 'agent_type', 'session_id', 'tool_input', 'model'}, set(context))
+        (self.root / 'notes.txt').write_text('sensitive-value\n')
+        post = self.event('PostToolUse')
+        for key in ('agent_id', 'agent_type', 'tool_input', 'session_id'):
+            del post[key]
+        self.hook('codex', post)
+        self.assertFalse(self.marker().exists())
+        completed = self.marker(done=True).read_text()
+        self.assertEqual({'tool_use_id', 'tool', 'started', 'ended'}, set(json.loads(completed)))
+        self.assertNotIn('runtime-private-model', completed)
+        self.assertEqual([], self.fixture.entries())
+
+    def test_claude_pending_model_does_not_add_context(self):
+        pre = self.event('PreToolUse')
+        pre['model'] = 'runtime-private-model'
+        self.hook('claude', pre)
+        pending = self.marker().read_text()
+        self.assertEqual({'tool_use_id', 'tool', 'started', 'head', 'files'}, set(json.loads(pending)))
+        self.assertNotIn('runtime-private-model', pending)
+
 
 if __name__ == '__main__':
     unittest.main()

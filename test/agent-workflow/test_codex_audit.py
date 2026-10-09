@@ -39,7 +39,7 @@ class CodexAuditContract(unittest.TestCase):
                               capture_output=True, text=True, check=True).stdout.strip()
 
     def hook(self, name, identity='shell-1', role='workflow_implementer', tool='Bash', response=None,
-             omit_post_context=False):
+             omit_post_context=False, model=None):
         event = {'hook_event_name': name, 'tool_name': tool, 'tool_use_id': identity,
                  'session_id': 'codex-session', 'agent_id': 'codex-agent',
                  'tool_input': {'command': 'fixture command'}, 'cwd': str(self.root)}
@@ -47,6 +47,8 @@ class CodexAuditContract(unittest.TestCase):
             event['agent_type'] = role
         if response is not None:
             event['tool_response'] = response
+        if model is not None:
+            event['model'] = model
         if omit_post_context:
             for key in ('agent_id', 'agent_type', 'tool_input'):
                 event.pop(key, None)
@@ -77,6 +79,42 @@ class CodexAuditContract(unittest.TestCase):
         self.assertEqual([], entry['violations'])
         self.assertIn('-value = 1', entry['changes'][0]['diff'])
         self.assertIn('+value = 2', entry['changes'][0]['diff'])
+
+    def test_completion_model_is_recorded_with_source_change(self):
+        self.hook('PreToolUse')
+        (self.root / 'src/app.py').write_text('value = 2\n')
+        self.hook('PostToolUse', response={'exit_code': 0}, model='runtime-completion-model')
+        entry = self.entry()
+        self.assertEqual('runtime-completion-model', entry['model'])
+        self.assertEqual('src/app.py', entry['changes'][0]['path'])
+
+    def test_pre_model_survives_completion_without_context(self):
+        self.hook('PreToolUse', model='runtime-pre-model')
+        (self.root / 'src/app.py').write_text('value = 2\n')
+        self.hook('PostToolUse', response={'exit_code': 0}, omit_post_context=True)
+        entry = self.entry()
+        self.assertEqual('runtime-pre-model', entry['model'])
+        self.assertEqual(('codex-agent', 'fixture command'), (entry['agent_id'], entry['command']))
+
+    def test_completion_model_overrides_pre_model(self):
+        self.hook('PreToolUse', model='runtime-pre-model')
+        (self.root / 'src/app.py').write_text('value = 2\n')
+        self.hook('PostToolUse', response={'exit_code': 0}, model='runtime-completion-model')
+        self.assertEqual('runtime-completion-model', self.entry()['model'])
+
+    def test_absent_runtime_model_is_null_despite_project_model_settings(self):
+        configured = self.root / '.codex/config.toml'
+        configured.parent.mkdir()
+        configured.write_text('model = "configured-main-model"\n')
+        profile = self.root / '.docs/agent-models.json'
+        profile.parent.mkdir()
+        profile.write_text(json.dumps({'schema_version': 1, 'codex': {
+            'model': 'profile-main-model', 'roles': {
+                'implementer': {'model': 'profile-role-model'}}}}))
+        self.hook('PreToolUse')
+        (self.root / 'src/app.py').write_text('value = 2\n')
+        self.hook('PostToolUse', response={'exit_code': 0})
+        self.assertIsNone(self.entry()['model'])
 
     def test_underscore_spec_writer_add_delete_and_violation(self):
         self.hook('PreToolUse', role='workflow_spec_writer')

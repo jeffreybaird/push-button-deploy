@@ -323,7 +323,7 @@ class InstallerProvenance(MaintenanceFixture):
     # Reuse fixture helpers; only provenance cases are collected in this class.
     def test_release_and_manifest_identify_installer_component_content(self):
         release = json.loads((self.source / 'release.json').read_text())
-        self.assertEqual('0.5.0', release['installer_version'])
+        self.assertEqual('0.5.1', release['installer_version'])
         root = self.installed()
         manifest = json.loads((root / '.codex/hooks/workflow-manifest.json').read_text())
         self.assertEqual(release['installer_version'], manifest['installer']['version'])

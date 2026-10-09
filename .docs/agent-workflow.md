@@ -295,13 +295,16 @@ Claude and Codex Bash calls are audited, not blocked. Only source and test files
 policy classifies them, are examined. Before each call the audit hook snapshots
 dirty source and test files; afterwards it compares. When a source or test file
 changed, it appends one JSON line to `.agent-audit/bash.jsonl` with the command,
-session, agent id, agent type, role (`main` for the parent session), outcome,
+session, agent id, agent type, runtime model (`null` when unavailable),
+role (`main` for the parent session), outcome,
 HEAD before and after, each changed source or test path with a unified diff
 capped at 200 lines, and `violations` for changes the role does not own. Other
 files are never read, stored or listed, and calls that change only them are not
 logged. Ignored files are not audited. Codex entries include `platform: codex`;
 existing Claude entries retain their format. Codex before-call context preserves
-the command and agent identity when a completion event omits those fields.
+the command, agent identity, and runtime model when a completion event omits
+those fields. A supplied completion model takes precedence. The model comes
+only from native event metadata, never from configured model settings.
 
 Claude uses PreToolUse, PostToolUse and PostToolUseFailure. Codex uses only
 PreToolUse and PostToolUse; a reported integer exit status determines success
@@ -314,7 +317,8 @@ changes a source or test file enters the log. Keep secrets out of commands.
 Snapshots write the contents of dirty source and test files to the local Git
 object store as unreferenced blobs; `git gc` prunes them and they are never
 pushed. Pending markers live under `.git/agent-audit/`.
-Codex pending markers temporarily store raw commands and agent identity even for
+Codex pending markers temporarily store raw commands, agent identity, and runtime
+model metadata even for
 calls that change only noncode files or no files. They do not store other tool
 arguments. Completion replaces them with timing-only markers; interrupted calls
 can leave command context behind. Stale markers are removed only when a later
